@@ -1,0 +1,276 @@
+================================================================================
+                         Aunion AI - 실행 방법
+================================================================================
+
+[사전 준비]
+- Node.js 18+ 설치: https://nodejs.org
+- Python 3.11+ 설치: https://python.org
+- Git 설치: https://git-scm.com
+
+================================================================================
+1. 프론트엔드 실행
+================================================================================
+
+1-1. 프로젝트 폴더로 이동
+    cd C:\SSAFY\AunionAI\frontend
+
+1-2. 패키지 설치 (최초 1회)
+    npm install
+
+1-3. 환경 변수 설정
+    copy .env.example .env
+
+    .env 파일 내용:
+    VITE_API_URL=http://localhost:8000
+    VITE_WS_URL=ws://localhost:8000/ws/pipeline
+
+1-4. 개발 서버 실행
+    npm run dev
+
+1-5. 브라우저에서 확인
+    http://localhost:3000
+
+
+================================================================================
+2. 백엔드 실행 (새 버전)
+================================================================================
+
+2-1. 프로젝트 폴더로 이동
+    cd C:\SSAFY\AunionAI\backend
+
+2-2. 가상환경 생성 (최초 1회)
+    python -m venv venv
+
+2-3. 가상환경 활성화
+    Windows: venv\Scripts\activate
+    Mac/Linux: source venv/bin/activate
+
+2-4. 패키지 설치 (최초 1회)
+    pip install -r requirements.txt
+
+2-5. 환경 변수 설정 (GPU 사용 시)
+    Windows: set USE_GPU=true
+    Mac/Linux: export USE_GPU=true
+
+    GPU 모델 사용 시 HuggingFace 토큰 필요:
+    Windows: set HF_TOKEN=hf_xxxxxxxxxxxxx
+    Mac/Linux: export HF_TOKEN=hf_xxxxxxxxxxxxx
+    토큰 발급: https://huggingface.co/settings/tokens
+
+    [Gated 모델 접근 신청 필요]
+    GPU 모드 사용 시 아래 모델 접근 신청 필요 (HuggingFace 로그인 후):
+    - https://huggingface.co/CohereLabs/cohere-transcribe-03-2026
+
+2-6. 서버 실행
+    uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+2-7. 모델 로딩 대기
+    서버 시작 시 AI 모델 다운로드 및 로딩 (최초 1회, 약 10-20분 소요)
+
+    정상 로딩 시 출력:
+    ==================================================
+    Aunion AI Backend 시작
+    ==================================================
+    모델 로딩 중...
+    [ASR] ... 로드 완료
+    [NMT] ... 로드 완료
+    [TTS] Piper TTS 로드 완료
+    [OCR] RapidOCR 로드 완료
+    ==================================================
+    모든 모델 로드 완료!
+    ==================================================
+
+    위 메시지가 나오면 로딩 완료!
+
+2-8. API 문서 확인
+    http://localhost:8000/docs
+
+[참고: 모델 용량]
+    - ASR (Cohere 2B): ~4GB 다운로드, ~4GB VRAM
+    - NMT (HY-MT 1.8B): ~3.5GB 다운로드, ~3.5GB VRAM
+    - TTS (Piper): ~100MB (CPU 사용)
+    - OCR (RapidOCR): ~50MB (CPU 사용)
+    - 총 디스크: ~8GB
+    - 총 VRAM: ~7.5GB (GPU 8GB면 빠듯함)
+
+
+================================================================================
+3. 백엔드 실행 (기존 GPU 버전)
+================================================================================
+
+3-1. 프로젝트 폴더로 이동
+    cd C:\SSAFY\AunionAI\Aunion_Saffy_Code-main\gpu
+
+2-2. 가상환경 생성 (최초 1회)
+    python -m venv venv
+
+2-3. 가상환경 활성화
+    Windows: venv\Scripts\activate
+    Mac/Linux: source venv/bin/activate
+
+2-4. 패키지 설치 (최초 1회)
+    pip install -r requirements.txt
+
+2-5. 환경 변수 설정
+    copy .env.example .env
+
+    .env 파일에 HuggingFace 토큰 입력:
+    HF_TOKEN=hf_xxxxxxxxxxxxx
+
+    토큰 발급: https://huggingface.co/settings/tokens
+
+2-6. 서버 실행
+    uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+2-7. API 문서 확인
+    http://localhost:8000/docs
+
+
+================================================================================
+3. 백엔드 실행 (CPU 버전)
+================================================================================
+
+3-1. 프로젝트 폴더로 이동
+    cd C:\SSAFY\AunionAI\Aunion_Saffy_Code-main\cpu
+
+3-2. 가상환경 생성 (최초 1회)
+    python -m venv venv
+
+3-3. 가상환경 활성화
+    Windows: venv\Scripts\activate
+    Mac/Linux: source venv/bin/activate
+
+3-4. 패키지 설치 (최초 1회)
+    pip install -r requirements.txt
+
+3-5. 서버 실행
+    uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+
+================================================================================
+4. Docker로 실행 (권장)
+================================================================================
+
+4-1. Docker Desktop 설치
+    https://www.docker.com/products/docker-desktop
+
+4-2. GPU 버전 실행
+    cd C:\SSAFY\AunionAI\Aunion_Saffy_Code-main\gpu
+
+    .env 파일 생성 후 HF_TOKEN 입력
+
+    docker compose up -d
+    docker compose logs -f
+
+4-3. CPU 버전 실행
+    cd C:\SSAFY\AunionAI\Aunion_Saffy_Code-main\cpu
+
+    docker compose up -d
+    docker compose logs -f
+
+
+================================================================================
+5. 로컬 테스트 (혼자서 테스트하기)
+================================================================================
+
+브라우저 탭 2개로 강의자/수강자 역할을 동시에 테스트할 수 있습니다.
+
+[준비]
+- 터미널 2개 필요 (백엔드용, 프론트엔드용)
+- 브라우저 탭 2개 필요 (강의자용, 수강자용)
+
+[터미널 1: 백엔드]
+    cd C:\SSAFY\AunionAI\backend
+    venv\Scripts\activate
+    set USE_GPU=true
+    set HF_TOKEN=hf_xxxxxxxxxxxxx
+    uvicorn app.main:app --reload --port 8000
+
+[터미널 2: 프론트엔드]
+    cd C:\SSAFY\AunionAI\frontend
+    npm run dev
+
+5-1. 백엔드 실행 확인
+    - http://localhost:8000/health 접속
+    - {"status": "ok"} 응답 확인
+
+5-2. 프론트엔드 실행 확인
+    - http://localhost:3000 접속
+    - 메인 화면 표시 확인
+
+5-3. 브라우저 탭 2개 열기
+    - 탭 1 (강의자): http://localhost:3000
+    - 탭 2 (수강자): http://localhost:3000
+
+5-4. 강의자 모드 테스트 (탭 1)
+    - "강의자로 시작" 클릭
+    - PDF 업로드 (테스트용 PDF 파일)
+    - 마이크 ON 클릭 → 브라우저 권한 허용
+    - 화면 공유 클릭 → 공유할 화면/창 선택
+    - 한국어로 말하기
+
+5-5. 수강자 모드 테스트 (탭 2)
+    - "수강자로 참여" 클릭
+    - WebSocket 연결 확인 (연결 상태 표시)
+    - 강의자가 말하면:
+      → 번역된 영어 자막 표시
+      → 번역된 영어 음성 재생
+
+5-6. 테스트 체크리스트
+    [ ] 백엔드 /health 응답 확인
+    [ ] 프론트엔드 메인 화면 표시
+    [ ] 강의자 WebSocket 연결 성공
+    [ ] 수강자 WebSocket 연결 성공
+    [ ] PDF 업로드 및 처리 완료
+    [ ] 마이크 권한 허용 및 녹음
+    [ ] 화면 공유 권한 허용
+    [ ] 한국어 음성 → 영어 자막 변환
+    [ ] 영어 TTS 음성 재생
+
+
+================================================================================
+6. 문제 해결
+================================================================================
+
+[포트 충돌]
+- 8000 포트 사용 중: 다른 프로세스 종료 또는 포트 변경
+- 3000 포트 사용 중: vite.config.ts에서 포트 변경
+
+[마이크/화면 공유 안됨]
+- HTTPS가 아닌 localhost에서만 동작
+- 브라우저 권한 설정 확인
+
+[모델 로딩 실패]
+- HuggingFace 토큰 확인
+- 인터넷 연결 확인
+- 디스크 공간 확인 (모델 캐시용 10GB 이상 필요)
+
+[CUDA 오류 (GPU 버전)]
+- NVIDIA 드라이버 업데이트
+- CUDA Toolkit 설치 확인
+- GPU 메모리 확인 (16GB 이상 권장)
+
+
+================================================================================
+7. AWS 배포 시
+================================================================================
+
+7-1. EC2 인스턴스 접속
+    ssh -i "key.pem" ubuntu@<EC2_IP>
+
+7-2. 프로젝트 클론
+    git clone <repo_url>
+    cd aunion-ai
+
+7-3. 환경 변수 설정
+    echo "HF_TOKEN=hf_xxx" > .env
+
+7-4. Docker 실행
+    docker compose up -d
+
+7-5. 프론트엔드 .env 수정
+    VITE_API_URL=http://<EC2_IP>:8000
+    VITE_WS_URL=ws://<EC2_IP>:8000/ws/pipeline
+
+
+================================================================================

@@ -1,0 +1,23 @@
+# 가상환경
+venv/
+.venv/
+
+# 캐시
+cache/
+__pycache__/
+*.pyc
+
+# 모델 파일
+*.onnx
+*.bin
+*.safetensors
+
+# 업로드 파일
+uploads/
+
+# 환경변수
+.env
+
+# IDE
+.vscode/
+.idea/

@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+.cache/
+*.egg-info/
+models/*.onnx
+models/*.json
+*.wav
+*.mp3
+.env
+server.log
+cache/
