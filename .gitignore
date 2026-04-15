@@ -10,3 +10,6 @@ models/*.json
 .env
 server.log
 cache/
+
+# Claude
+.claude/
