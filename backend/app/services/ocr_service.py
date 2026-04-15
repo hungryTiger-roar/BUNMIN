@@ -20,6 +20,7 @@ class OCRService:
 
     def __init__(self):
         self.ocr = None
+        self.mode = "rapidocr"
         self._load_model()
 
     def _load_model(self):

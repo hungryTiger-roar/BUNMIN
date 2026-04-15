@@ -4,14 +4,16 @@ WebSocket 라우터
 """
 import asyncio
 import base64
+import hashlib
 from typing import Optional
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, WebSocketState
 
 router = APIRouter(prefix="/ws", tags=["WebSocket"])
 
 # 서비스 인스턴스 (main.py에서 주입)
 _asr_service = None
-_nmt_service = None
+_asr_nmt_service = None   # ASR 전용 NMT (음성 번역)
+_ocr_nmt_service = None   # OCR 전용 NMT (화면 번역)
 _tts_service = None
 _ocr_service = None
 
@@ -21,9 +23,14 @@ def set_asr_service(service):
     _asr_service = service
 
 
-def set_nmt_service(service):
-    global _nmt_service
-    _nmt_service = service
+def set_asr_nmt_service(service):
+    global _asr_nmt_service
+    _asr_nmt_service = service
+
+
+def set_ocr_nmt_service(service):
+    global _ocr_nmt_service
+    _ocr_nmt_service = service
 
 
 def set_tts_service(service):
@@ -44,6 +51,7 @@ class ConnectionManager:
         self.students: list[WebSocket] = []
         self.current_slide_id: Optional[str] = None
         self.current_page: int = 0
+        self.last_screen_hash: Optional[str] = None
 
     async def connect_lecturer(self, websocket: WebSocket):
         await websocket.accept()
@@ -80,6 +88,37 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+PING_INTERVAL = 20  # 서버 → 클라이언트 ping 주기 (초)
+PING_TIMEOUT  = 10  # pong 미응답 허용 시간 (초)
+
+
+async def heartbeat(websocket: WebSocket):
+    """서버 → 클라이언트 주기적 ping 전송"""
+    while websocket.client_state == WebSocketState.CONNECTED:
+        await asyncio.sleep(PING_INTERVAL)
+        try:
+            await websocket.send_json({"type": "ping"})
+        except Exception:
+            break
+
+
+async def run_with_heartbeat(handler, websocket: WebSocket):
+    """핸들러 종료 시 heartbeat도 함께 취소"""
+    handler_task   = asyncio.ensure_future(handler)
+    heartbeat_task = asyncio.ensure_future(heartbeat(websocket))
+
+    done, pending = await asyncio.wait(
+        [handler_task, heartbeat_task],
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+
+    for task in pending:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
 
 @router.websocket("/pipeline")
 async def websocket_pipeline(websocket: WebSocket):
@@ -109,13 +148,20 @@ async def websocket_pipeline(websocket: WebSocket):
             manager.lecturer = websocket
             print("[WS] 강의자 연결됨")
             await websocket.send_json({"type": "registered", "role": "lecturer"})
-            await handle_lecturer(websocket)
+            await run_with_heartbeat(handle_lecturer(websocket), websocket)
 
         elif role == "student":
             manager.students.append(websocket)
             print(f"[WS] 수강자 연결됨 (총 {len(manager.students)}명)")
             await websocket.send_json({"type": "registered", "role": "student"})
-            await handle_student(websocket)
+            # 현재 슬라이드 상태 즉시 전송
+            if manager.current_slide_id:
+                await websocket.send_json({
+                    "type": "slide_state",
+                    "slide_id": manager.current_slide_id,
+                    "page": manager.current_page,
+                })
+            await run_with_heartbeat(handle_student(websocket), websocket)
 
         else:
             await websocket.close(code=4001, reason="올바른 역할이 아닙니다")
@@ -136,7 +182,13 @@ async def handle_lecturer(websocket: WebSocket):
 
             print(f"[WS] 강의자 메시지: {msg_type}")
 
-            if msg_type == "audio":
+            if msg_type == "ping":
+                await websocket.send_json({"type": "pong"})
+
+            elif msg_type == "pong":
+                pass  # heartbeat 응답 확인
+
+            elif msg_type == "audio":
                 await process_audio(message)
 
             elif msg_type == "screen":
@@ -147,6 +199,20 @@ async def handle_lecturer(websocket: WebSocket):
                 manager.current_slide_id = message.get("slide_id")
                 manager.current_page = 0
                 print(f"[WS] 슬라이드 선택: {manager.current_slide_id}")
+                await manager.broadcast_to_students({
+                    "type": "slide_state",
+                    "slide_id": manager.current_slide_id,
+                    "page": manager.current_page,
+                })
+
+            elif msg_type == "page_change":
+                manager.current_page = message.get("page", 0)
+                print(f"[WS] 페이지 변경: {manager.current_page}")
+                await manager.broadcast_to_students({
+                    "type": "slide_state",
+                    "slide_id": manager.current_slide_id,
+                    "page": manager.current_page,
+                })
 
     except WebSocketDisconnect:
         manager.disconnect_lecturer()
@@ -156,12 +222,14 @@ async def handle_student(websocket: WebSocket):
     """수강자 메시지 처리 (주로 수신만 함)"""
     try:
         while True:
-            # 수강자는 주로 수신만 하지만, ping/pong 등을 위해 대기
             message = await websocket.receive_json()
             msg_type = message.get("type")
 
             if msg_type == "ping":
                 await websocket.send_json({"type": "pong"})
+
+            elif msg_type == "pong":
+                pass  # heartbeat 응답 확인
 
     except WebSocketDisconnect:
         manager.disconnect_student(websocket)
@@ -172,7 +240,7 @@ async def process_audio(message: dict):
     오디오 처리 파이프라인
     오디오 → ASR → NMT → TTS → 수강자 전송
     """
-    if not all([_asr_service, _nmt_service, _tts_service]):
+    if not all([_asr_service, _asr_nmt_service, _tts_service]):
         print("[WS] 서비스가 초기화되지 않았습니다")
         return
 
@@ -194,9 +262,9 @@ async def process_audio(message: dict):
 
         print(f"[ASR] {korean_text}")
 
-        # NMT: 한국어 → 영어
+        # NMT: 한국어 → 영어 (ASR 전용 인스턴스)
         english_text = await asyncio.to_thread(
-            _nmt_service.translate, korean_text
+            _asr_nmt_service.translate, korean_text
         )
         print(f"[NMT] {english_text}")
 
@@ -221,13 +289,13 @@ async def process_audio(message: dict):
 async def process_screen(message: dict):
     """
     화면 캡처 처리
-    슬라이드 유무와 관계없이 화면을 수강자에게 전달
-    오버레이 데이터도 함께 전송
+    - 화면을 수강자에게 전달
+    - 슬라이드 모드: 사전 처리된 overlay 전송
+    - 순수 화면 공유 모드: 실시간 OCR + 번역 후 overlay 전송
+    - 화면이 바뀌지 않으면 OCR 재실행 생략
     """
     try:
-        # 화면 이미지 (Base64)
         screen_b64 = message.get("data", "")
-
         if not screen_b64:
             return
 
@@ -239,7 +307,7 @@ async def process_screen(message: dict):
             "page": manager.current_page,
         })
 
-        # 슬라이드가 선택된 경우 오버레이 데이터도 전송
+        # 슬라이드 모드: 사전 처리된 overlay 사용
         if manager.current_slide_id:
             from app.routers.slides import get_page_overlay
             overlay_items = get_page_overlay(
@@ -251,6 +319,58 @@ async def process_screen(message: dict):
                     "type": "overlay",
                     "items": overlay_items,
                 })
+            return
+
+        # 순수 화면 공유 모드: 실시간 OCR
+        if not _ocr_service or not _ocr_nmt_service:
+            return
+
+        image_bytes = base64.b64decode(screen_b64)
+        screen_hash = hashlib.md5(image_bytes).hexdigest()[:16]
+
+        # 화면이 바뀌지 않았으면 OCR 생략
+        if screen_hash == manager.last_screen_hash:
+            return
+        manager.last_screen_hash = screen_hash
+
+        # OCR + 번역 (블로킹 작업이므로 thread에서 실행)
+        ocr_results = await asyncio.to_thread(
+            _ocr_service.extract_with_positions, image_bytes
+        )
+
+        if not ocr_results:
+            return
+
+        overlay_items = []
+        texts = [item["text"] for item in ocr_results if item["text"].strip()]
+
+        if texts:
+            # NMT 배치 번역 (OCR 전용 인스턴스 — ASR과 독립 실행)
+            translated_list = await asyncio.to_thread(
+                _ocr_nmt_service.translate_batch, texts
+            )
+            text_idx = 0
+            for item in ocr_results:
+                if not item["text"].strip():
+                    continue
+                raw_bbox = item["bbox"]
+                bbox = (
+                    [raw_bbox[0][0], raw_bbox[0][1], raw_bbox[2][0], raw_bbox[2][1]]
+                    if len(raw_bbox) == 4 else raw_bbox
+                )
+                overlay_items.append({
+                    "original": item["text"],
+                    "translated": translated_list[text_idx],
+                    "bbox": bbox,
+                    "confidence": item["confidence"],
+                })
+                text_idx += 1
+
+        if overlay_items:
+            await manager.broadcast_to_students({
+                "type": "overlay",
+                "items": overlay_items,
+            })
 
     except Exception as e:
         print(f"[WS] 화면 처리 오류: {e}")

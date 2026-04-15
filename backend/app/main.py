@@ -23,15 +23,20 @@ async def lifespan(app: FastAPI):
     ws.set_asr_service(asr_service)
     print(f"[ASR] {ModelConfig.ASR_MODEL} 로드 완료")
 
-    # NMT 서비스 초기화
+    # NMT 서비스 초기화 (ASR 전용 / OCR 전용 분리)
     from app.services.nmt_service import NMTService
-    nmt_service = NMTService(
+    asr_nmt_service = NMTService(
         model_name=ModelConfig.NMT_MODEL,
         device=ModelConfig.NMT_DEVICE
     )
-    ws.set_nmt_service(nmt_service)
-    slides.set_nmt_service(nmt_service)
-    print(f"[NMT] {ModelConfig.NMT_MODEL} 로드 완료")
+    ocr_nmt_service = NMTService(
+        model_name=ModelConfig.NMT_MODEL,
+        device=ModelConfig.NMT_DEVICE
+    )
+    ws.set_asr_nmt_service(asr_nmt_service)
+    ws.set_ocr_nmt_service(ocr_nmt_service)
+    slides.set_nmt_service(ocr_nmt_service)
+    print(f"[NMT] {ModelConfig.NMT_MODEL} x2 로드 완료 (ASR 전용 / OCR 전용)")
 
     # TTS 서비스 초기화
     from app.services.tts_service import TTSService
