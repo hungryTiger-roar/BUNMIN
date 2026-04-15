@@ -22,7 +22,9 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
+BACKEND_DIR = ROOT / "backend"
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(BACKEND_DIR))
 
 from evaluation.evaluators import eval_asr, eval_nmt, eval_tts, eval_ocr, eval_realtime_pipeline, eval_ocr_nmt
 

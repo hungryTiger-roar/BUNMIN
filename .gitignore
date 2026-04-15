@@ -3,13 +3,16 @@ __pycache__/
 .venv/
 .cache/
 *.egg-info/
-models/*.onnx
-models/*.json
-*.wav
-*.mp3
 .env
 server.log
-cache/
+
+# 빌드 산출물
+setup/
+
+# 평가
+evaluation/datasets/
+evaluation/results/latest.json
+evaluation/results/history/
 
 # Claude
 .claude/

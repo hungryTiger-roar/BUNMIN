@@ -2,6 +2,10 @@
 venv/
 .venv/
 
+# PyInstaller 빌드
+build/
+dist/
+
 # 캐시
 cache/
 __pycache__/
@@ -17,10 +21,6 @@ uploads/
 
 # 환경변수
 .env
-
-# 평가 결과
-evaluation/results/latest.json
-evaluation/results/history/
 
 # IDE
 .vscode/

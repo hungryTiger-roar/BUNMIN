@@ -31,7 +31,7 @@ def eval_asr() -> dict:
         print("[ASR] ground_truth.json 의 file 필드와 파일명이 일치해야 합니다.")
         return {"skipped": True, "reason": "no_audio_files"}
 
-    service = ASRService(model_name=ModelConfig.ASR_MODEL, device=ModelConfig.ASR_DEVICE)
+    service = ASRService(model_name=ModelConfig.ASR_MODEL, device=ModelConfig.ASR_DEVICE, dtype=ModelConfig.ASR_DTYPE)
 
     wer_pairs = []
     latencies_ms = []

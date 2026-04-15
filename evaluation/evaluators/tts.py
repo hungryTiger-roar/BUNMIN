@@ -23,7 +23,7 @@ def eval_tts() -> dict:
     with open(texts_path, encoding="utf-8") as f:
         texts = json.load(f)
 
-    service = TTSService(model_dir=str(ModelConfig.TTS_MODEL_DIR))
+    service = TTSService(model_name=ModelConfig.TTS_MODEL, device=ModelConfig.TTS_DEVICE)
 
     latencies_ms = []
     rtf_list = []
@@ -52,7 +52,7 @@ def eval_tts() -> dict:
     avg_rtf = sum(rtf_list) / len(rtf_list)
 
     result = {
-        "model": "piper-tts",
+        "model": ModelConfig.TTS_MODEL,
         "quality": {
             "note": "TTS 품질은 MOS(Mean Opinion Score)로 측정 (주관적 청취 평가 필요)"
         },
