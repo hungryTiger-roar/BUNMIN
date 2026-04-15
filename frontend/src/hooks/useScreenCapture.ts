@@ -25,9 +25,7 @@ export function useScreenCapture({
 
       // 화면 공유 권한 요청
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          cursor: 'always',
-        },
+        video: true,
         audio: false,
       })
 

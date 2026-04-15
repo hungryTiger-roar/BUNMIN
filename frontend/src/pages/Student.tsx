@@ -7,7 +7,8 @@ import ConnectionStatus from '@/components/common/ConnectionStatus'
 import ScreenOverlay from '@/components/student/ScreenOverlay'
 import ViewToggle from '@/components/student/ViewToggle'
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws/pipeline'
+const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+const WS_URL = `${wsProtocol}//${window.location.host}/ws/pipeline`
 
 function Student() {
   const navigate = useNavigate()

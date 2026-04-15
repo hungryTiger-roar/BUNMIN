@@ -1,8 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { useLectureStore } from '@/stores/lectureStore'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-
 function SlideUpload() {
   const inputRef = useRef<HTMLInputElement>(null)
   const [uploadProgress, setUploadProgress] = useState(0)
@@ -30,7 +28,7 @@ function SlideUpload() {
       const formData = new FormData()
       formData.append('file', file)
 
-      const response = await fetch(`${API_URL}/slides/upload`, {
+      const response = await fetch(`/slides/upload`, {
         method: 'POST',
         body: formData,
       })
@@ -59,7 +57,7 @@ function SlideUpload() {
 
     const checkStatus = async () => {
       try {
-        const response = await fetch(`${API_URL}/slides/status/${slideId}`)
+        const response = await fetch(`/slides/status/${slideId}`)
         const data = await response.json()
 
         if (data.status === 'completed') {

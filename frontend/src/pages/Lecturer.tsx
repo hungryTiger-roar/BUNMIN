@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
@@ -8,11 +8,20 @@ import SubtitleDisplay from '@/components/common/SubtitleDisplay'
 import SlideUpload from '@/components/lecturer/SlideUpload'
 import ConnectionStatus from '@/components/common/ConnectionStatus'
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws/pipeline'
+const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+const WS_URL = `${wsProtocol}//${window.location.host}/ws/pipeline`
 
 function Lecturer() {
   const navigate = useNavigate()
   const previewRef = useRef<HTMLVideoElement>(null)
+  const [linkCopied, setLinkCopied] = useState(false)
+
+  const copyStudentLink = useCallback(async () => {
+    const studentUrl = `${window.location.protocol}//${window.location.host}/student`
+    await navigator.clipboard.writeText(studentUrl)
+    setLinkCopied(true)
+    setTimeout(() => setLinkCopied(false), 2000)
+  }, [])
 
   const {
     isMicOn,
@@ -41,7 +50,6 @@ function Lecturer() {
   }, [send, slideId])
 
   const {
-    isCapturing: isAudioCapturing,
     startCapture: startAudioCapture,
     stopCapture: stopAudioCapture,
   } = useAudioCapture({ onAudioData: handleAudioData })
@@ -173,6 +181,35 @@ function Lecturer() {
         <div className="space-y-4">
           {/* 슬라이드 업로드 */}
           <SlideUpload />
+
+          {/* 수강생 초대 */}
+          <div className="bg-white rounded-xl p-4 shadow-sm">
+            <h3 className="text-sm font-medium text-slate-500 mb-3">수강생 초대</h3>
+            <button
+              onClick={copyStudentLink}
+              className={`w-full py-3 px-4 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 ${
+                linkCopied
+                  ? 'bg-green-500 text-white'
+                  : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+              }`}
+            >
+              {linkCopied ? (
+                <>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  링크 복사됨!
+                </>
+              ) : (
+                <>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                  수강생 링크 복사
+                </>
+              )}
+            </button>
+          </div>
 
           {/* 컨트롤 버튼 */}
           <div className="bg-white rounded-xl p-4 shadow-sm space-y-3">

@@ -1,10 +1,17 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  readonly VITE_API_URL: string
-  readonly VITE_WS_URL: string
+  readonly BACKEND_URL: string
 }
 
 interface ImportMeta {
   readonly env: ImportMetaEnv
+}
+
+interface Window {
+  electron?: {
+    notifyReady: () => void
+    onBackendReady: (callback: (ready: boolean) => void) => void
+    onBackendLog: (callback: (log: string) => void) => void
+  }
 }
