@@ -1,32 +1,50 @@
+import sys
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# PyInstaller 번들 여부 감지
+_FROZEN = getattr(sys, 'frozen', False)
+
+if _FROZEN:
+    # 배포판: AppData\Local\Aunion AI\ 에 영구 저장
+    APP_DATA_DIR = Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'Aunion AI'
+    # .env는 exe 옆에 있을 수도 있음
+    load_dotenv(Path(sys.executable).parent / ".env")
+else:
+    # 개발 환경: 프로젝트 루트 기준
+    APP_DATA_DIR = Path(__file__).parent.parent
+    load_dotenv(APP_DATA_DIR / ".env")
 
 # 기본 경로
-BASE_DIR = Path(__file__).parent.parent
-CACHE_DIR = BASE_DIR / "cache"
-SLIDES_DIR = BASE_DIR / "slides"
+CACHE_DIR = APP_DATA_DIR / "cache"
+SLIDES_DIR = APP_DATA_DIR / "slides"
 
 # 디렉토리 생성
-CACHE_DIR.mkdir(exist_ok=True)
-SLIDES_DIR.mkdir(exist_ok=True)
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+SLIDES_DIR.mkdir(parents=True, exist_ok=True)
 
 # HuggingFace 설정
 os.environ.setdefault("HF_HOME", str(CACHE_DIR / "huggingface"))
 
 # 모델 설정
 class ModelConfig:
-    # ASR
-    ASR_MODEL = "seastar105/whisper-small-komixv2"  # CPU용
+    # ASR - GPU 실행 (faster-whisper)
+    ASR_MODEL = "large-v3-turbo"
     ASR_DEVICE = "cpu"
+    ASR_DTYPE = "float32"  # GPU: float16, CPU: float32
 
-    # NMT
-    NMT_MODEL = "Helsinki-NLP/opus-mt-ko-en"  # 가벼운 모델
+    # NMT - CPU 실행
+    NMT_MODEL = "Helsinki-NLP/opus-mt-ko-en"
     NMT_DEVICE = "cpu"
+    NMT_DTYPE = "float32"
 
-    # TTS
-    TTS_MODEL_DIR = BASE_DIR / "app" / "models"
+    # TTS - CPU 실행 (Supertonic-2 ONNX)
+    TTS_MODEL = "onnx-community/Supertonic-TTS-2-ONNX"
+    TTS_DEVICE = "cpu"
 
-    # OCR - RapidOCR 사용
+    # OCR - CPU 실행
+    OCR_DEVICE = "cpu"
 
 
 # 서버 설정
@@ -40,8 +58,5 @@ class ServerConfig:
 USE_GPU = os.environ.get("USE_GPU", "false").lower() == "true"
 
 if USE_GPU:
-    ModelConfig.ASR_MODEL = "CohereLabs/cohere-transcribe-03-2026"
-    ModelConfig.ASR_DEVICE = "cuda:0"
-    # NLLB: 다국어 번역 모델 (Seq2Seq 호환)
-    ModelConfig.NMT_MODEL = "facebook/nllb-200-distilled-600M"
-    ModelConfig.NMT_DEVICE = "cuda:0"
+    ModelConfig.ASR_DEVICE = "cuda"
+    ModelConfig.ASR_DTYPE = "float16"

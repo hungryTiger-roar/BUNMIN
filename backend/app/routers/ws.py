@@ -6,14 +6,14 @@ import asyncio
 import base64
 import hashlib
 from typing import Optional
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, WebSocketState
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 
 router = APIRouter(prefix="/ws", tags=["WebSocket"])
 
 # 서비스 인스턴스 (main.py에서 주입)
 _asr_service = None
-_asr_nmt_service = None   # ASR 전용 NMT (음성 번역)
-_ocr_nmt_service = None   # OCR 전용 NMT (화면 번역)
+_nmt_service = None
 _tts_service = None
 _ocr_service = None
 
@@ -23,14 +23,9 @@ def set_asr_service(service):
     _asr_service = service
 
 
-def set_asr_nmt_service(service):
-    global _asr_nmt_service
-    _asr_nmt_service = service
-
-
-def set_ocr_nmt_service(service):
-    global _ocr_nmt_service
-    _ocr_nmt_service = service
+def set_nmt_service(service):
+    global _nmt_service
+    _nmt_service = service
 
 
 def set_tts_service(service):
@@ -240,7 +235,7 @@ async def process_audio(message: dict):
     오디오 처리 파이프라인
     오디오 → ASR → NMT → TTS → 수강자 전송
     """
-    if not all([_asr_service, _asr_nmt_service, _tts_service]):
+    if not all([_asr_service, _nmt_service, _tts_service]):
         print("[WS] 서비스가 초기화되지 않았습니다")
         return
 
@@ -262,9 +257,9 @@ async def process_audio(message: dict):
 
         print(f"[ASR] {korean_text}")
 
-        # NMT: 한국어 → 영어 (ASR 전용 인스턴스)
+        # NMT: 한국어 → 영어
         english_text = await asyncio.to_thread(
-            _asr_nmt_service.translate, korean_text
+            _nmt_service.translate, korean_text
         )
         print(f"[NMT] {english_text}")
 
@@ -322,7 +317,7 @@ async def process_screen(message: dict):
             return
 
         # 순수 화면 공유 모드: 실시간 OCR
-        if not _ocr_service or not _ocr_nmt_service:
+        if not _ocr_service or not _nmt_service:
             return
 
         image_bytes = base64.b64decode(screen_b64)
@@ -345,9 +340,9 @@ async def process_screen(message: dict):
         texts = [item["text"] for item in ocr_results if item["text"].strip()]
 
         if texts:
-            # NMT 배치 번역 (OCR 전용 인스턴스 — ASR과 독립 실행)
+            # NMT 배치 번역
             translated_list = await asyncio.to_thread(
-                _ocr_nmt_service.translate_batch, texts
+                _nmt_service.translate_batch, texts
             )
             text_idx = 0
             for item in ocr_results:
