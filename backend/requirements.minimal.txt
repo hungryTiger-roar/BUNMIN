@@ -1,0 +1,6 @@
+# 슬라이드 동기화 테스트용 최소 의존성
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.6
+websockets>=12.0
+pymupdf>=1.23.0
