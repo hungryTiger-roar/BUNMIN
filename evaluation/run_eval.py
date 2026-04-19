@@ -14,6 +14,16 @@ import json
 import argparse
 import importlib
 
+# conda aunion 환경 검사 — 잘못된 Python으로 실행 시 자동 재실행
+_AUNION_PYTHON = r"C:\Users\SSAFY\miniforge3\envs\aunion\python.exe"
+if os.path.isfile(_AUNION_PYTHON) and _AUNION_PYTHON.lower() not in sys.executable.lower():
+    import subprocess
+    # -E: PYTHON* 환경변수 무시, -s: user site-packages 제외 → Windows Store Python 격리
+    clean_env = {k: v for k, v in os.environ.items()
+                 if not k.startswith("PYTHON")}
+    result = subprocess.run([_AUNION_PYTHON, "-s"] + sys.argv, env=clean_env)
+    sys.exit(result.returncode)
+
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if hasattr(sys.stderr, "reconfigure"):

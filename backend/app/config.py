@@ -86,7 +86,7 @@ class ModelConfig:
     NMT_DEVICE = _resolve_device("NMT_DEVICE", "nmt")
     NMT_DTYPE  = _dtype(NMT_DEVICE)
 
-    TTS_MODEL  = os.environ.get("TTS_MODEL",  "onnx-community/Supertonic-TTS-2-ONNX")
+    TTS_MODEL  = os.environ.get("TTS_MODEL",  "facebook/mms-tts-eng")
     TTS_DEVICE = _resolve_device("TTS_DEVICE", "tts")
 
     OCR_DEVICE = _resolve_device("OCR_DEVICE", "ocr")

@@ -29,7 +29,7 @@ _model_status = {
     "models": {
         "asr": {"status": "pending", "progress": 0, "label": "ASR (음성인식)", "desc": "faster-whisper large-v3-turbo-korean"},
         "nmt": {"status": "pending", "progress": 0, "label": "NMT (번역)", "desc": "OPUS-MT"},
-        "tts": {"status": "pending", "progress": 0, "label": "TTS (음성합성)", "desc": "Supertonic-2"},
+        "tts": {"status": "pending", "progress": 0, "label": "TTS (음성합성)", "desc": "MMS-TTS (facebook/mms-tts-eng)"},
         "ocr": {"status": "pending", "progress": 0, "label": "OCR (문자인식)", "desc": "RapidOCR"},
     },
 }
@@ -244,7 +244,7 @@ def _load_models_sync():
     # TTS
     _model_status["models"]["tts"]["status"] = "loading"
     _emit_status()
-    _set_status(f"TTS 초기화 중... (3/4) - Supertonic-2 ONNX", progress=70)
+    _set_status(f"TTS 초기화 중... (3/4) - {ModelConfig.TTS_MODEL}", progress=70)
     try:
         from app.services.tts_service import TTSService
         tts_service = TTSService(
@@ -255,7 +255,7 @@ def _load_models_sync():
         _model_status["models"]["tts"]["status"] = "done"
         _model_status["models"]["tts"]["progress"] = 100
         _set_status("TTS 완료 ✓ (3/4)", progress=85)
-        print("[TTS] Supertonic-2 ONNX 초기화 완료", flush=True)
+        print(f"[TTS] {ModelConfig.TTS_MODEL} 초기화 완료", flush=True)
     except Exception as e:
         tb = traceback.format_exc()
         print(f"[TTS ERROR] {e}\n{tb}", flush=True)

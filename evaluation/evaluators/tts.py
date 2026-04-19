@@ -1,3 +1,7 @@
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 """
 TTS (Text-to-Speech) 평가
 속도 중심: RTF, 지연시간
@@ -28,7 +32,10 @@ def eval_tts() -> dict:
     latencies_ms = []
     rtf_list = []
 
-    for text in texts:
+    output_dir = DATASETS_DIR / "tts_samples" / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, text in enumerate(texts):
         estimated_duration = len(text.split()) / 2.5
 
         with timer() as t:
@@ -45,6 +52,10 @@ def eval_tts() -> dict:
 
         rtf = compute_rtf(t["elapsed"], actual_duration)
         rtf_list.append(rtf)
+
+        # 생성된 오디오 저장
+        out_path = output_dir / f"sample_{i+1:02d}.wav"
+        out_path.write_bytes(audio_bytes)
 
         print(f"  [{elapsed_ms:.1f}ms | RTF={rtf:.3f}] {text[:40]}...")
 

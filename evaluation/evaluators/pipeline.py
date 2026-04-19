@@ -1,3 +1,7 @@
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 """
 파이프라인 평가
 - eval_realtime_pipeline: ASR → NMT → TTS (실시간 강의 통역)

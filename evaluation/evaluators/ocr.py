@@ -1,3 +1,7 @@
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 """
 OCR (Optical Character Recognition) 평가
 품질: CER (Character Error Rate)
