@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 router = APIRouter(prefix="/slides", tags=["Slides"])
@@ -32,6 +33,10 @@ def set_ocr_service(service):
 UPLOAD_DIR = Path("uploads/slides")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+# 이미지 저장 경로
+IMAGES_DIR = Path("uploads/images")
+IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
 # 처리 상태 저장 (메모리, 실제 서비스에서는 Redis 사용 권장)
 slide_status: dict[str, dict] = {}
 slide_data: dict[str, list[dict]] = {}
@@ -53,9 +58,9 @@ class OverlayItem(BaseModel):
 
 
 class PageData(BaseModel):
-    page_number: int
-    image_hash: str
-    overlay_items: list[OverlayItem]
+    pageNumber: int
+    imageUrl: str
+    ocrText: Optional[str] = None
 
 
 def get_page_overlay(slide_id: str, page_number: int) -> list[dict]:
@@ -121,19 +126,52 @@ async def get_status(slide_id: str) -> SlideStatus:
 
 
 @router.get("/pages/{slide_id}")
-async def get_pages(slide_id: str) -> list[PageData]:
+async def get_pages(slide_id: str):
     """처리된 페이지 데이터 조회"""
     if slide_id not in slide_data:
         raise HTTPException(404, "슬라이드를 찾을 수 없습니다")
 
-    return [
+    pages = [
         PageData(
-            page_number=page["page_number"],
-            image_hash=page["image_hash"],
-            overlay_items=page.get("overlay_items", []),
+            pageNumber=page["page_number"] + 1,  # 1-indexed for frontend
+            imageUrl=f"/slides/image/{slide_id}/{page['page_number']}",
+            ocrText=page.get("ocr_text"),
         )
         for page in slide_data[slide_id]
     ]
+    return {"pages": pages}
+
+
+@router.get("/image/{slide_id}/{page_number}")
+async def get_image(slide_id: str, page_number: int):
+    """슬라이드 이미지 반환"""
+    image_path = IMAGES_DIR / f"{slide_id}_{page_number}.png"
+    if not image_path.exists():
+        raise HTTPException(404, "이미지를 찾을 수 없습니다")
+    return FileResponse(image_path, media_type="image/png")
+
+
+@router.get("/download/{slide_id}")
+async def download_slide(slide_id: str, type: str = "original"):
+    """
+    슬라이드 PDF 다운로드
+    - type=original: 원본 PDF
+    - type=translated: 번역본 PDF (TODO)
+    """
+    if type == "original":
+        pdf_path = UPLOAD_DIR / f"{slide_id}.pdf"
+        if not pdf_path.exists():
+            raise HTTPException(404, "PDF 파일을 찾을 수 없습니다")
+        return FileResponse(
+            pdf_path,
+            media_type="application/pdf",
+            filename=f"강의자료_{slide_id}.pdf"
+        )
+    elif type == "translated":
+        # TODO: 번역본 PDF 생성 기능 추가 필요
+        raise HTTPException(501, "번역본 다운로드는 아직 준비 중입니다")
+    else:
+        raise HTTPException(400, "type은 'original' 또는 'translated'여야 합니다")
 
 
 @router.get("/page/{slide_id}/{page_number}")
@@ -148,16 +186,16 @@ async def get_page(slide_id: str, page_number: int) -> PageData:
 
     page = pages[page_number]
     return PageData(
-        page_number=page["page_number"],
-        image_hash=page["image_hash"],
-        overlay_items=page.get("overlay_items", []),
+        pageNumber=page["page_number"] + 1,
+        imageUrl=f"/slides/image/{slide_id}/{page['page_number']}",
+        ocrText=page.get("ocr_text"),
     )
 
 
 async def process_slide(slide_id: str, pdf_path: Path):
     """
     슬라이드 전처리 (백그라운드)
-    PDF → 이미지 → OCR → 번역
+    PDF → 이미지 저장 (OCR/번역은 AI 서비스가 있을 때만)
     """
     try:
         slide_status[slide_id]["status"] = "processing"
@@ -169,47 +207,63 @@ async def process_slide(slide_id: str, pdf_path: Path):
 
         slide_data[slide_id] = []
 
-        for i, image in enumerate(images):
+        for i, image_bytes in enumerate(images):
+            # 이미지 파일로 저장
+            image_path = IMAGES_DIR / f"{slide_id}_{i}.png"
+            with open(image_path, "wb") as f:
+                f.write(image_bytes)
+
             # 이미지 해시 (페이지 매칭용)
-            image_hash = compute_image_hash(image)
+            image_hash = compute_image_hash(image_bytes)
 
-            # OCR로 텍스트와 위치 정보 추출
-            ocr_results = await asyncio.to_thread(
-                _ocr_service.extract_with_positions, image
-            )
-
-            # 번역 및 오버레이 데이터 생성
+            # OCR + 번역 (서비스가 있을 때만)
+            ocr_text = None
             overlay_items = []
-            for item in ocr_results:
-                text = item["text"]
-                if text.strip():
-                    translated = await asyncio.to_thread(
-                        _nmt_service.translate, text
-                    )
-                    # bbox 형식 변환: [[x1,y1],[x2,y2],[x3,y3],[x4,y4]] -> [x1, y1, x3, y3]
-                    raw_bbox = item["bbox"]
-                    if len(raw_bbox) == 4:
-                        # 4 꼭짓점에서 좌상단(0), 우하단(2) 추출
-                        bbox = [
-                            raw_bbox[0][0],  # x1
-                            raw_bbox[0][1],  # y1
-                            raw_bbox[2][0],  # x2
-                            raw_bbox[2][1],  # y2
-                        ]
-                    else:
-                        bbox = raw_bbox
 
-                    overlay_items.append({
-                        "original": text,
-                        "translated": translated,
-                        "bbox": bbox,
-                        "confidence": item["confidence"],
-                    })
+            if _ocr_service and _nmt_service:
+                try:
+                    ocr_results = await asyncio.to_thread(
+                        _ocr_service.extract_with_positions, image_bytes
+                    )
+
+                    texts = []
+                    for item in ocr_results:
+                        text = item["text"]
+                        if text.strip():
+                            texts.append(text)
+
+                    ocr_text = "\n".join(texts)
+
+                    # 번역
+                    for item in ocr_results:
+                        text = item["text"]
+                        if text.strip():
+                            translated = await asyncio.to_thread(
+                                _nmt_service.translate, text
+                            )
+                            raw_bbox = item["bbox"]
+                            if len(raw_bbox) == 4:
+                                bbox = [
+                                    raw_bbox[0][0], raw_bbox[0][1],
+                                    raw_bbox[2][0], raw_bbox[2][1],
+                                ]
+                            else:
+                                bbox = raw_bbox
+
+                            overlay_items.append({
+                                "original": text,
+                                "translated": translated,
+                                "bbox": bbox,
+                                "confidence": item["confidence"],
+                            })
+                except Exception as e:
+                    print(f"[Slides] OCR/번역 실패 (무시): {e}")
 
             # 저장
             slide_data[slide_id].append({
                 "page_number": i,
                 "image_hash": image_hash,
+                "ocr_text": ocr_text,
                 "overlay_items": overlay_items,
             })
 
