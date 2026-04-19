@@ -161,47 +161,6 @@ export function useWebSocket(url: string, role: Role = 'student') {
     }
   }, [])
 
-  const handleMessage = useCallback((data: WebSocketMessage) => {
-    switch (data.type) {
-      case 'transcription':
-        addSubtitle({
-          original: data.original as string,
-          translated: data.translated as string,
-          timestamp: Date.now(),
-        })
-        if (data.audio && isAudioUnlockedRef.current) {
-          playAudio(data.audio as string)
-        }
-        break
-
-      case 'screen':
-        setCurrentScreen(data.data as string)
-        break
-
-      case 'overlay':
-        setOverlayItems(data.items as never[])
-        break
-
-      case 'ping':
-        send({ type: 'pong' })
-        break
-
-      case 'slide_state':
-        console.log('[WebSocket] 슬라이드 상태:', data.slide_id, 'page:', data.page)
-        break
-
-      case 'pong':
-        break
-
-      case 'registered':
-        console.log('[WebSocket] 역할 등록 완료:', data.role)
-        break
-
-      default:
-        console.log('[WebSocket] 알 수 없는 메시지:', data.type)
-    }
-  }, [addSubtitle, setOverlayItems, setCurrentScreen, send])
-
   const connect = useCallback(() => {
     if (socketRef.current?.readyState === WebSocket.OPEN ||
         socketRef.current?.readyState === WebSocket.CONNECTING) {

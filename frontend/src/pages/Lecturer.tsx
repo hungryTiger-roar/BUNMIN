@@ -91,15 +91,6 @@ function Lecturer() {
     }
   }
 
-  // 화면공유 토글
-  const toggleScreenShare = async () => {
-    if (isScreenSharing) {
-      stopScreenCapture()
-    } else {
-      await startScreenCapture()
-    }
-  }
-
   // 강의 시작
   const startLecture = () => {
     if (presentationMode === 'slide' && slideStatus !== 'ready') {
