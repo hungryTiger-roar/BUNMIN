@@ -23,10 +23,17 @@
 사전 준비: miniforge / conda 설치
 
     cd backend
-    conda create -n aunion python=3.12
+    conda create -n aunion python=3.11
     conda activate aunion
     pip install -r requirements.txt
     python run.py
+
+[백엔드 - AI 없이 테스트용]
+사전 준비: Python 3.11
+
+    cd backend
+    pip install -r requirements.minimal.txt
+    uvicorn app.main:app --reload --port 8000
 
 [프론트엔드]
 사전 준비: Node.js 18 이상

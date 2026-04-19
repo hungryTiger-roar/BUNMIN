@@ -45,7 +45,10 @@ class ConnectionManager:
         self.lecturer: Optional[WebSocket] = None
         self.students: list[WebSocket] = []
         self.current_slide_id: Optional[str] = None
-        self.current_page: int = 0
+        self.current_page: int = 1
+        self.is_lecture_started: bool = False
+        self.is_paused: bool = False
+        self.presentation_mode: str = "slide"  # 'slide' or 'screen'
         self.last_screen_hash: Optional[str] = None
 
     async def connect_lecturer(self, websocket: WebSocket):
@@ -149,13 +152,26 @@ async def websocket_pipeline(websocket: WebSocket):
             manager.students.append(websocket)
             print(f"[WS] 수강자 연결됨 (총 {len(manager.students)}명)")
             await websocket.send_json({"type": "registered", "role": "student"})
-            # 현재 슬라이드 상태 즉시 전송
-            if manager.current_slide_id:
+            # 현재 강의 상태 즉시 전송
+            if manager.is_lecture_started:
                 await websocket.send_json({
-                    "type": "slide_state",
+                    "type": "lecture_start",
                     "slide_id": manager.current_slide_id,
-                    "page": manager.current_page,
                 })
+                await websocket.send_json({
+                    "type": "presentation_mode",
+                    "mode": manager.presentation_mode,
+                })
+                if manager.current_slide_id:
+                    await websocket.send_json({
+                        "type": "page_change",
+                        "slide_id": manager.current_slide_id,
+                        "page": manager.current_page,
+                    })
+                if manager.is_paused:
+                    await websocket.send_json({
+                        "type": "lecture_pause",
+                    })
             await run_with_heartbeat(handle_student(websocket), websocket)
 
         else:
@@ -192,21 +208,65 @@ async def handle_lecturer(websocket: WebSocket):
 
             elif msg_type == "slide_select":
                 manager.current_slide_id = message.get("slide_id")
-                manager.current_page = 0
+                manager.current_page = 1
                 print(f"[WS] 슬라이드 선택: {manager.current_slide_id}")
                 await manager.broadcast_to_students({
-                    "type": "slide_state",
+                    "type": "slide_select",
+                    "slide_id": manager.current_slide_id,
+                })
+
+            elif msg_type == "page_change":
+                manager.current_page = message.get("page", 1)
+                print(f"[WS] 페이지 변경: {manager.current_page}")
+                await manager.broadcast_to_students({
+                    "type": "page_change",
                     "slide_id": manager.current_slide_id,
                     "page": manager.current_page,
                 })
 
-            elif msg_type == "page_change":
-                manager.current_page = message.get("page", 0)
-                print(f"[WS] 페이지 변경: {manager.current_page}")
+            elif msg_type == "lecture_start":
+                manager.is_lecture_started = True
+                manager.current_slide_id = message.get("slide_id")
+                manager.presentation_mode = message.get("mode", "slide")
+                print(f"[WS] 강의 시작: {manager.current_slide_id}, 모드: {manager.presentation_mode}")
                 await manager.broadcast_to_students({
-                    "type": "slide_state",
+                    "type": "lecture_start",
                     "slide_id": manager.current_slide_id,
-                    "page": manager.current_page,
+                })
+                # 발표 모드도 함께 전송
+                await manager.broadcast_to_students({
+                    "type": "presentation_mode",
+                    "mode": manager.presentation_mode,
+                })
+
+            elif msg_type == "lecture_end":
+                manager.is_lecture_started = False
+                manager.is_paused = False
+                print("[WS] 강의 종료")
+                await manager.broadcast_to_students({
+                    "type": "lecture_end",
+                })
+
+            elif msg_type == "lecture_pause":
+                manager.is_paused = True
+                print("[WS] 강의 일시정지")
+                await manager.broadcast_to_students({
+                    "type": "lecture_pause",
+                })
+
+            elif msg_type == "lecture_resume":
+                manager.is_paused = False
+                print("[WS] 강의 재개")
+                await manager.broadcast_to_students({
+                    "type": "lecture_resume",
+                })
+
+            elif msg_type == "presentation_mode":
+                manager.presentation_mode = message.get("mode", "slide")
+                print(f"[WS] 발표 모드 변경: {manager.presentation_mode}")
+                await manager.broadcast_to_students({
+                    "type": "presentation_mode",
+                    "mode": manager.presentation_mode,
                 })
 
     except WebSocketDisconnect:
@@ -297,7 +357,7 @@ async def process_screen(message: dict):
         # 화면 데이터를 수강자에게 전달
         await manager.broadcast_to_students({
             "type": "screen",
-            "data": screen_b64,
+            "image": screen_b64,
             "slide_id": manager.current_slide_id,
             "page": manager.current_page,
         })
