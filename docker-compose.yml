@@ -14,8 +14,16 @@ services:
       - ./backend/uploads:/app/uploads
       - ./backend/models:/app/models
       - hf_cache:/root/.cache/huggingface
+      - pip_cache:/root/.cache/pip
     environment:
-      - USE_GPU=false
+      - ASR_MODEL=${ASR_MODEL:-ghost613/faster-whisper-large-v3-turbo-korean}
+      - NMT_MODEL=${NMT_MODEL:-Helsinki-NLP/opus-mt-ko-en}
+      - TTS_MODEL=${TTS_MODEL:-onnx-community/Supertonic-TTS-2-ONNX}
+      - ASR_DEVICE=${ASR_DEVICE:-cpu}
+      - NMT_DEVICE=${NMT_DEVICE:-cpu}
+      - TTS_DEVICE=${TTS_DEVICE:-cpu}
+      - OCR_DEVICE=${OCR_DEVICE:-cpu}
+      - HF_TOKEN=${HF_TOKEN}
     restart: unless-stopped
 
   frontend:
@@ -30,5 +38,29 @@ services:
       - backend
     restart: unless-stopped
 
+  eval:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    volumes:
+      - ./evaluation:/app/evaluation
+      - ./backend/cache:/root/.cache/huggingface
+      - pip_cache:/root/.cache/pip
+    environment:
+      - ASR_MODEL=${ASR_MODEL:-ghost613/faster-whisper-large-v3-turbo-korean}
+      - NMT_MODEL=${NMT_MODEL:-Helsinki-NLP/opus-mt-ko-en}
+      - TTS_MODEL=${TTS_MODEL:-onnx-community/Supertonic-TTS-2-ONNX}
+      - ASR_DEVICE=${ASR_DEVICE:-cpu}
+      - NMT_DEVICE=${NMT_DEVICE:-cpu}
+      - TTS_DEVICE=${TTS_DEVICE:-cpu}
+      - OCR_DEVICE=${OCR_DEVICE:-cpu}
+      - HF_TOKEN=${HF_TOKEN}
+    stdin_open: true
+    tty: true
+    profiles:
+      - eval
+    command: python evaluation/run_eval.py
+
 volumes:
   hf_cache:
+  pip_cache:

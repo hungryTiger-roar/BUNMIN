@@ -37,7 +37,7 @@ def eval_realtime_pipeline() -> dict:
 
     asr_service = ASRService(model_name=ModelConfig.ASR_MODEL, device=ModelConfig.ASR_DEVICE)
     nmt_service = NMTService(model_name=ModelConfig.NMT_MODEL, device=ModelConfig.NMT_DEVICE)
-    tts_service = TTSService(model_dir=str(ModelConfig.TTS_MODEL_DIR))
+    tts_service = TTSService(model_name=ModelConfig.TTS_MODEL, device=ModelConfig.TTS_DEVICE)
 
     wer_pairs = []
     asr_latencies_ms = []
@@ -69,8 +69,7 @@ def eval_realtime_pipeline() -> dict:
     nmt_latencies_ms = [nmt_per_ms] * len(korean_texts)
 
     gt_texts = [s["text"] for s in wav_samples]
-    with timer() as t_ref:
-        ref_translations = nmt_service.translate_batch(gt_texts)
+    ref_translations = nmt_service.translate_batch(gt_texts)
     hyp_translations = english_texts
 
     # 3단계: TTS 전체 순차 실행
@@ -195,8 +194,7 @@ def eval_ocr_nmt() -> dict:
     nmt_latencies_ms = [nmt_per_ms] * len(image_samples)
 
     gt_texts = [s["text"] if s["text"].strip() else " " for s in image_samples]
-    with timer() as t_ref:
-        ref_translations = nmt_service.translate_batch(gt_texts)
+    ref_translations = nmt_service.translate_batch(gt_texts)
 
     pipeline_latencies_ms = [ocr_ms + nmt_per_ms for ocr_ms in ocr_latencies_ms]
 

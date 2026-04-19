@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y \
 
 # Python 의존성 설치
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install -r requirements.txt
 
 # 소스 코드 복사
 COPY app/ ./app/
@@ -26,7 +26,6 @@ RUN mkdir -p models/piper
 
 # 환경 변수
 ENV PYTHONUNBUFFERED=1
-ENV USE_GPU=false
 
 # 포트 노출
 EXPOSE 8000
