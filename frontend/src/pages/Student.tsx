@@ -1,25 +1,32 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import SubtitleDisplay from '@/components/common/SubtitleDisplay'
 import ConnectionStatus from '@/components/common/ConnectionStatus'
-import ScreenOverlay from '@/components/student/ScreenOverlay'
 import ViewToggle from '@/components/student/ViewToggle'
-import { WS_BASE } from '@/lib/api'
+import { WS_BASE, API_BASE } from '@/lib/api'
 
 const WS_URL = `${WS_BASE}/ws/pipeline`
+const API_URL = API_BASE
 
 function Student() {
   const navigate = useNavigate()
+  const [toast, setToast] = useState<string | null>(null)
 
   const {
-    viewMode,
+    slideId,
+    slideStatus,
+    currentPage,
+    totalPages,
+    slidePages,
+    isLectureStarted,
+    isPaused,
+    presentationMode,
+    currentScreen,
     isAudioOn,
     isSubtitleOn,
     subtitles,
-    overlayItems,
-    currentScreen,
     setAudioOn,
     setSubtitleOn,
   } = useLectureStore()
@@ -31,22 +38,107 @@ function Student() {
     connect()
   }, [connect])
 
+  // 토스트 자동 숨김
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => setToast(null), 2000)
+      return () => clearTimeout(timer)
+    }
+  }, [toast])
+
   // 나가기
   const handleExit = () => {
     navigate('/')
   }
 
+  // PDF 다운로드
+  const handleDownload = (type: 'original' | 'translated') => {
+    if (type === 'translated') {
+      setToast('번역본 PDF는 준비 중입니다')
+      return
+    }
+    if (!slideId) return
+    const url = `${API_URL}/slides/download/${slideId}?type=${type}`
+    window.open(url, '_blank')
+  }
+
+  // 현재 슬라이드 이미지 URL
+  const currentSlideImage = slidePages[currentPage - 1]?.imageUrl
+
   return (
     <div className="min-h-screen bg-slate-900 text-white">
+      {/* 토스트 알림 */}
+      {toast && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[100] animate-fade-in">
+          <div className="px-4 py-2 bg-slate-700 text-white rounded-lg shadow-lg text-sm">
+            {toast}
+          </div>
+        </div>
+      )}
+
       {/* 헤더 */}
       <header className="flex items-center justify-between p-4 bg-slate-800/50 backdrop-blur-sm fixed top-0 left-0 right-0 z-50">
+        {/* 왼쪽: 로고, 연결상태, LIVE */}
         <div className="flex items-center gap-4">
           <h1 className="text-lg font-medium">Aunion AI</h1>
           <ConnectionStatus isConnected={isConnected} />
+          {isLectureStarted && (
+            <div className="flex items-center gap-2">
+              <span className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white text-sm font-semibold rounded-lg shadow-lg shadow-red-500/30">
+                <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
+                LIVE
+              </span>
+              {isPaused && (
+                <span className="px-3 py-1.5 bg-yellow-600 text-white text-sm font-semibold rounded-lg">
+                  일시정지
+                </span>
+              )}
+              {presentationMode === 'screen' && (
+                <span className="px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg">
+                  화면공유
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
+        {/* 가운데: 페이지 번호 */}
+        {slideStatus === 'ready' && totalPages > 0 && (
+          <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-1.5 bg-slate-700 rounded-full">
+            <span className="text-white font-medium">{currentPage}</span>
+            <span className="text-slate-400">/</span>
+            <span className="text-slate-400">{totalPages}</span>
+          </div>
+        )}
+
+        {/* 오른쪽: 버튼들 */}
         <div className="flex items-center gap-3">
+          {/* 원본/번역 토글 */}
           <ViewToggle />
+
+          {/* PDF 다운로드 버튼 */}
+          {slideStatus === 'ready' && (
+            <>
+              <button
+                onClick={() => handleDownload('original')}
+                className="flex items-center gap-2 px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors text-sm"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                원본 PDF
+              </button>
+              <button
+                onClick={() => handleDownload('translated')}
+                className="flex items-center gap-2 px-3 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg transition-colors text-sm"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                번역본 PDF
+              </button>
+            </>
+          )}
           <button
             onClick={handleExit}
             className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors text-sm"
@@ -59,30 +151,74 @@ function Student() {
       {/* 메인 컨텐츠 */}
       <main className="pt-16 pb-32 min-h-screen flex items-center justify-center">
         <div className="w-full max-w-6xl mx-auto px-4">
-          {/* 화면 표시 영역 */}
+          {/* 슬라이드/화면공유 표시 영역 */}
           <div className="relative bg-black rounded-xl overflow-hidden aspect-video">
-            {currentScreen ? (
+            {/* 일시정지 오버레이 */}
+            {isPaused && isLectureStarted && (
+              <div className="absolute inset-0 bg-slate-900/90 flex items-center justify-center z-20">
+                <div className="text-center">
+                  <svg className="w-16 h-16 mx-auto mb-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <p className="text-xl font-medium text-white">잠시 후 계속됩니다</p>
+                  <p className="text-sm mt-2 text-slate-400">강의자가 강의를 일시정지했습니다</p>
+                </div>
+              </div>
+            )}
+
+            {/* 화면공유 모드 */}
+            {presentationMode === 'screen' && currentScreen ? (
+              <img
+                src={`data:image/jpeg;base64,${currentScreen}`}
+                alt="화면 공유"
+                className="w-full h-full object-contain"
+              />
+            ) : slideStatus === 'ready' && currentSlideImage ? (
               <>
-                {/* 원본 화면 */}
+                {/* 슬라이드 이미지 */}
                 <img
-                  src={`data:image/jpeg;base64,${currentScreen}`}
-                  alt="강의 화면"
+                  src={`${API_URL}${currentSlideImage}`}
+                  alt={`슬라이드 ${currentPage}`}
                   className="w-full h-full object-contain"
                 />
 
-                {/* 번역 오버레이 (번역 모드일 때만) */}
-                {viewMode === 'translated' && (
-                  <ScreenOverlay items={overlayItems} />
-                )}
               </>
             ) : (
               <div className="absolute inset-0 flex items-center justify-center text-slate-500">
                 <div className="text-center">
-                  <svg className="w-20 h-20 mx-auto mb-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
-                  <p className="text-lg">강의 시작 대기 중...</p>
-                  <p className="text-sm mt-2 opacity-60">강의자가 화면을 공유하면 표시됩니다</p>
+                  {!isConnected ? (
+                    <>
+                      <svg className="w-20 h-20 mx-auto mb-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18.364 5.636a9 9 0 010 12.728m0 0l-2.829-2.829m2.829 2.829L21 21M15.536 8.464a5 5 0 010 7.072m0 0l-2.829-2.829m-4.243 2.829a4.978 4.978 0 01-1.414-2.83m-1.414 5.658a9 9 0 01-2.167-9.238m7.824 2.167a1 1 0 111.414 1.414m-1.414-1.414L3 3m8.293 8.293l1.414 1.414" />
+                      </svg>
+                      <p className="text-lg">서버 연결 중...</p>
+                      <p className="text-sm mt-2 opacity-60">잠시만 기다려주세요</p>
+                    </>
+                  ) : !isLectureStarted ? (
+                    <>
+                      <svg className="w-20 h-20 mx-auto mb-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <p className="text-lg">강의 시작 대기 중...</p>
+                      <p className="text-sm mt-2 opacity-60">강의자가 강의를 시작하면 표시됩니다</p>
+                    </>
+                  ) : presentationMode === 'screen' ? (
+                    <>
+                      <svg className="w-20 h-20 mx-auto mb-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                      </svg>
+                      <p className="text-lg">화면 공유 대기 중...</p>
+                      <p className="text-sm mt-2 opacity-60">강의자가 화면을 공유하면 표시됩니다</p>
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-20 h-20 mx-auto mb-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      <p className="text-lg">강의자료 로딩 중...</p>
+                      <p className="text-sm mt-2 opacity-60">강의 자료를 불러오고 있습니다</p>
+                    </>
+                  )}
                 </div>
               </div>
             )}

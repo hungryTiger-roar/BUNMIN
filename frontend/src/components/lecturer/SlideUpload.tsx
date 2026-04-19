@@ -16,9 +16,9 @@ function SlideUpload() {
       return
     }
 
-    // 파일 크기 검증 (50MB)
-    if (file.size > 50 * 1024 * 1024) {
-      setError('파일 크기는 50MB 이하여야 합니다.')
+    // 파일 크기 검증 (200MB)
+    if (file.size > 200 * 1024 * 1024) {
+      setError('파일 크기는 200MB 이하여야 합니다.')
       return
     }
 
@@ -67,7 +67,7 @@ function SlideUpload() {
         }
 
         if (data.status === 'failed') {
-          setError('슬라이드 처리에 실패했습니다.')
+          setError('강의자료 처리에 실패했습니다.')
           setSlideStatus('none')
           return
         }
@@ -117,7 +117,7 @@ function SlideUpload() {
 
   return (
     <div className="bg-white rounded-xl p-4 shadow-sm">
-      <h3 className="text-sm font-medium text-slate-500 mb-3">슬라이드 업로드</h3>
+      <h3 className="text-sm font-medium text-slate-500 mb-3">강의자료 업로드</h3>
 
       <input
         ref={inputRef}
@@ -138,7 +138,7 @@ function SlideUpload() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
           </svg>
           <p className="text-sm text-slate-500">PDF 파일을 드래그하거나 클릭하세요</p>
-          <p className="text-xs text-slate-400 mt-1">최대 50MB</p>
+          <p className="text-xs text-slate-400 mt-1">PDF 파일</p>
         </div>
       ) : slideStatus === 'uploading' || slideStatus === 'processing' ? (
         <div className="text-center py-6">
