@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLectureStore } from '@/stores/lectureStore'
 
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
 interface WebSocketMessage {
   type: string
   [key: string]: unknown
@@ -15,7 +17,140 @@ export function useWebSocket(url: string, role: Role = 'student') {
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
   const audioContextRef = useRef<AudioContext | null>(null)
 
-  const { addSubtitle, setOverlayItems, setCurrentScreen, setConnected } = useLectureStore()
+  const {
+    addSubtitle,
+    setConnected,
+    setSlideId,
+    setSlideStatus,
+    setSlidePages,
+    setCurrentPage,
+    setLectureStarted,
+    setPaused,
+    setPresentationMode,
+    setCurrentScreen,
+  } = useLectureStore()
+
+  // 슬라이드 페이지 로드
+  const loadSlidePages = useCallback(async (slideId: string) => {
+    try {
+      const response = await fetch(`${API_URL}/slides/pages/${slideId}`)
+      if (!response.ok) throw new Error('Failed to load slides')
+
+      const data = await response.json()
+      setSlidePages(data.pages)
+      setSlideStatus('ready')
+    } catch (err) {
+      console.error('[WebSocket] 슬라이드 로드 실패:', err)
+    }
+  }, [setSlidePages, setSlideStatus])
+
+  const handleMessage = useCallback((data: WebSocketMessage) => {
+    switch (data.type) {
+      case 'transcription':
+        // 번역 결과 수신
+        addSubtitle({
+          original: data.original as string,
+          translated: data.translated as string,
+          timestamp: Date.now(),
+        })
+
+        // 오디오 재생 (잠금 해제된 경우에만)
+        if (data.audio && isAudioUnlocked) {
+          playAudio(data.audio as string)
+        }
+        break
+
+      case 'slide_select':
+        // 강의자가 슬라이드 선택
+        if (role === 'student') {
+          const slideId = data.slide_id as string
+          setSlideId(slideId)
+          setSlideStatus('processing')
+          loadSlidePages(slideId)
+        }
+        break
+
+      case 'page_change':
+        // 페이지 변경 동기화
+        if (role === 'student') {
+          const page = data.page as number
+          setCurrentPage(page)
+        }
+        break
+
+      case 'lecture_start':
+        // 강의 시작
+        setLectureStarted(true)
+        if (role === 'student' && data.slide_id) {
+          const slideId = data.slide_id as string
+          setSlideId(slideId)
+          setSlideStatus('processing')
+          loadSlidePages(slideId)
+        }
+        console.log('[WebSocket] 강의 시작')
+        break
+
+      case 'lecture_end':
+        // 강의 종료
+        setLectureStarted(false)
+        setPaused(false)
+        setCurrentScreen(null)
+        console.log('[WebSocket] 강의 종료')
+        break
+
+      case 'lecture_pause':
+        // 강의 일시정지
+        setPaused(true)
+        console.log('[WebSocket] 강의 일시정지')
+        break
+
+      case 'lecture_resume':
+        // 강의 재개
+        setPaused(false)
+        console.log('[WebSocket] 강의 재개')
+        break
+
+      case 'presentation_mode':
+        // 발표 모드 변경
+        if (role === 'student') {
+          const mode = data.mode as 'slide' | 'screen'
+          setPresentationMode(mode)
+          if (mode === 'slide') {
+            setCurrentScreen(null)
+          }
+          console.log('[WebSocket] 발표 모드 변경:', mode)
+        }
+        break
+
+      case 'screen':
+        // 화면 공유 프레임 수신
+        if (role === 'student') {
+          const imageData = data.image as string
+          setCurrentScreen(imageData)
+          setPresentationMode('screen')
+        }
+        break
+
+      case 'ping':
+        // 서버 핑 → 퐁 응답
+        if (socketRef.current?.readyState === WebSocket.OPEN) {
+          socketRef.current.send(JSON.stringify({ type: 'pong' }))
+        }
+        break
+
+      case 'pong':
+        // 핑퐁 응답
+        break
+
+      case 'registered':
+        // 역할 등록 확인
+        console.log('[WebSocket] 역할 등록 완료:', data.role)
+        break
+
+      default:
+        console.log('[WebSocket] 알 수 없는 메시지:', data.type)
+    }
+  }, [role, addSubtitle, isAudioUnlocked, setSlideId, setSlideStatus, setCurrentPage, setLectureStarted, setPaused, setPresentationMode, setCurrentScreen, loadSlidePages])
 
   const connect = useCallback(() => {
     // 이미 연결 중이거나 연결된 경우 무시
@@ -67,47 +202,7 @@ export function useWebSocket(url: string, role: Role = 'student') {
     }
 
     socketRef.current = socket
-  }, [url, role, setConnected])
-
-  const handleMessage = (data: WebSocketMessage) => {
-    switch (data.type) {
-      case 'transcription':
-        // 번역 결과 수신
-        addSubtitle({
-          original: data.original as string,
-          translated: data.translated as string,
-          timestamp: Date.now(),
-        })
-
-        // 오디오 재생 (잠금 해제된 경우에만)
-        if (data.audio && isAudioUnlocked) {
-          playAudio(data.audio as string)
-        }
-        break
-
-      case 'screen':
-        // 화면 공유 데이터 수신
-        setCurrentScreen(data.data as string)
-        break
-
-      case 'overlay':
-        // 화면 오버레이 데이터
-        setOverlayItems(data.items as never[])
-        break
-
-      case 'pong':
-        // 핑퐁 응답
-        break
-
-      case 'registered':
-        // 역할 등록 확인
-        console.log('[WebSocket] 역할 등록 완료:', data.role)
-        break
-
-      default:
-        console.log('[WebSocket] 알 수 없는 메시지:', data.type)
-    }
-  }
+  }, [url, role, setConnected, handleMessage])
 
   const playAudio = (base64Audio: string) => {
     const audioData = atob(base64Audio)
