@@ -59,12 +59,20 @@ def _start_health_thread(port: int = 18765):
 
 
 def _is_cached(model_name: str) -> bool:
-    """HuggingFace 캐시에 모델이 있는지 확인"""
+    """HuggingFace 캐시에 모델이 완전히 있는지 확인.
+    incomplete 파일이 있거나 모델 가중치(10MB 이상 파일)가 없으면 False."""
     try:
         from huggingface_hub import scan_cache_dir
+        from pathlib import Path
         cache_info = scan_cache_dir()
         for repo in cache_info.repos:
             if repo.repo_id == model_name:
+                blobs_dir = Path(repo.repo_path) / "blobs"
+                if list(blobs_dir.glob("*.incomplete")):
+                    return False
+                large_files = [f for f in blobs_dir.iterdir() if f.stat().st_size > 10 * 1024 * 1024]
+                if not large_files:
+                    return False
                 return True
         return False
     except Exception:

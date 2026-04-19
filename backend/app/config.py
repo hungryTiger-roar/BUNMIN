@@ -37,7 +37,7 @@ def _cuda_available() -> bool:
 
 _CUDA_AVAILABLE = _cuda_available()
 
-_CPU_ONLY_MODELS = {"tts", "ocr"}  # GPU 미지원 모델
+_CPU_ONLY_MODELS: set[str] = set()  # GPU 미지원 모델 (현재 없음)
 _GPU_ONLY_MODELS: set[str] = set()  # CPU 미지원 모델 (현재 없음, 확장 대비)
 
 

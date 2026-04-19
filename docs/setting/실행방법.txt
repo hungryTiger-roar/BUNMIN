@@ -8,7 +8,7 @@
 ================================================================================
 
 1-1. 설치 파일 실행
-    frontend/dist-electron/Aunion AI Setup 0.1.0.exe 실행
+    setup/Aunion AI Setup 0.1.0.exe 실행
 
 1-2. 설치 완료 후 Aunion AI 앱 실행
     - 최초 실행 시 AI 모델 다운로드로 10~20분 소요
@@ -27,13 +27,6 @@
     conda activate aunion
     pip install -r requirements.txt
     python run.py
-
-[백엔드 - AI 없이 테스트용]
-사전 준비: Python 3.11
-
-    cd backend
-    pip install -r requirements.minimal.txt
-    uvicorn app.main:app --reload --port 8000
 
 [프론트엔드]
 사전 준비: Node.js 18 이상
@@ -55,31 +48,34 @@
 3-2. Electron 빌드 (Setup exe 생성)
     cd frontend
     npm run electron:build
-    → dist-electron/Aunion AI Setup 0.1.0.exe 생성
+    → setup/Aunion AI Setup 0.1.0.exe 생성
 
 
 ================================================================================
 4. GPU 설정 (선택)
 ================================================================================
 
-프로젝트 루트 .env 파일에 아래 내용 추가:
+프로젝트 루트 .env 파일에서 모델별 디바이스 설정:
 
-    USE_GPU=true
+    ASR_DEVICE=cuda    # 음성인식 (GPU 지원)
+    NMT_DEVICE=cuda    # 번역 (GPU 지원)
+    TTS_DEVICE=cpu     # 음성합성 (CPU 전용)
+    OCR_DEVICE=cpu     # 문자인식 (CPU 전용)
 
-기본값은 CPU 모드입니다.
-GPU 모드 시 ASR(faster-whisper)이 CUDA로 실행됩니다.
-VRAM 2GB 이상 권장.
+기본값은 모두 CPU 모드입니다.
+CUDA 없는 환경에서 cuda로 설정해도 자동으로 CPU로 전환됩니다.
+자세한 내용은 docs/setting/환경설정.md 참고.
 
 
 ================================================================================
 5. AI 모델 정보
 ================================================================================
 
-    ASR : faster-whisper large-v3-turbo  (~1.5GB, GPU/CPU)
-    NMT : Helsinki-NLP/opus-mt-ko-en     (~300MB, CPU)
-    TTS : Supertonic-TTS-2-ONNX          (~500MB, CPU)
-    OCR : RapidOCR                       (~50MB,  CPU)
-    총 디스크                            : ~3GB
+    ASR : ghost613/faster-whisper-large-v3-turbo-korean  (~1.5GB, GPU/CPU)
+    NMT : Helsinki-NLP/opus-mt-ko-en                     (~300MB, GPU/CPU)
+    TTS : onnx-community/Supertonic-TTS-2-ONNX           (~500MB, CPU)
+    OCR : RapidOCR                                       (~50MB,  CPU)
+    총 디스크                                            : ~3GB
 
 
 ================================================================================
@@ -95,7 +91,11 @@ VRAM 2GB 이상 권장.
     로딩 화면 하단 로그에서 진행 상황 확인 가능
 
 [CUDA 오류]
-    .env에서 USE_GPU=false 로 변경 후 재실행
+    .env에서 해당 모델 DEVICE를 cpu로 변경 후 재실행
+    예) ASR_DEVICE=cpu, NMT_DEVICE=cpu
+
+[에러 로그 위치]
+    %LOCALAPPDATA%\Aunion AI\error_log.txt
 
 
 ================================================================================

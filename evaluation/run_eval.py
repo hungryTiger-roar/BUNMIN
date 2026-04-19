@@ -297,11 +297,13 @@ def select_device() -> str:
     while True:
         raw = input("선택 (1-2): ").strip()
         if raw == "1":
-            os.environ["USE_GPU"] = "false"
+            os.environ["ASR_DEVICE"] = "cpu"
+            os.environ["NMT_DEVICE"] = "cpu"
             print("  → CPU 모드")
         elif raw == "2":
-            os.environ["USE_GPU"] = "true"
-            print("  → GPU 모드")
+            os.environ["ASR_DEVICE"] = "cuda"
+            os.environ["NMT_DEVICE"] = "cuda"
+            print("  → GPU 모드 (TTS/OCR은 CPU 고정)")
         else:
             print("  1 또는 2를 입력하세요.")
             continue
