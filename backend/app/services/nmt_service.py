@@ -35,7 +35,7 @@ class NMTService:
 
             self.model = AutoModelForSeq2SeqLM.from_pretrained(
                 self.model_name,
-                torch_dtype=torch.float16 if "cuda" in self.device else torch.float32,
+                dtype=torch.float16 if "cuda" in self.device else torch.float32,
             )
 
             if "cuda" in self.device:
@@ -138,43 +138,46 @@ class NMTService:
         try:
             import torch
 
-            # 빈 텍스트 필터링
-            valid_texts = [t for t in texts if t.strip()]
-            if not valid_texts:
-                return [""] * len(texts)
+            CHUNK_SIZE = 16
 
-            inputs = self.tokenizer(
-                valid_texts,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=512,
-            )
+            result = []
+            for i in range(0, len(texts), CHUNK_SIZE):
+                chunk = texts[i:i + CHUNK_SIZE]
+                valid_mask = [bool(t.strip()) for t in chunk]
+                valid_texts = [t for t, v in zip(chunk, valid_mask) if v]
 
-            if self.device == "cuda":
-                inputs = {k: v.to("cuda") for k, v in inputs.items()}
+                if not valid_texts:
+                    result.extend([""] * len(chunk))
+                    continue
 
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
+                inputs = self.tokenizer(
+                    valid_texts,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
                     max_length=512,
-                    num_beams=4,
-                    early_stopping=True,
                 )
 
-            translated = self.tokenizer.batch_decode(
-                outputs, skip_special_tokens=True
-            )
+                if "cuda" in self.device:
+                    inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-            # 원래 순서대로 결과 매핑
-            result = []
-            valid_idx = 0
-            for text in texts:
-                if text.strip():
-                    result.append(translated[valid_idx].strip())
-                    valid_idx += 1
-                else:
-                    result.append("")
+                with torch.no_grad():
+                    outputs = self.model.generate(
+                        **inputs,
+                        max_length=512,
+                        num_beams=4,
+                        early_stopping=True,
+                    )
+
+                translated = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
+
+                valid_idx = 0
+                for v in valid_mask:
+                    if v:
+                        result.append(translated[valid_idx].strip())
+                        valid_idx += 1
+                    else:
+                        result.append("")
 
             return result
 

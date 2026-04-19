@@ -7,21 +7,33 @@ import { useScreenCapture } from '@/hooks/useScreenCapture'
 import SubtitleDisplay from '@/components/common/SubtitleDisplay'
 import SlideUpload from '@/components/lecturer/SlideUpload'
 import ConnectionStatus from '@/components/common/ConnectionStatus'
+import { WS_BASE } from '@/lib/api'
 
-const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-const WS_URL = `${wsProtocol}//${window.location.host}/ws/pipeline`
+const WS_URL = `${WS_BASE}/ws/pipeline`
 
 function Lecturer() {
   const navigate = useNavigate()
   const previewRef = useRef<HTMLVideoElement>(null)
   const [linkCopied, setLinkCopied] = useState(false)
+  const [studentLink, setStudentLink] = useState<string>('')
+
+  useEffect(() => {
+    if (window.electron?.getLanIp) {
+      // Electron: LAN IP + 백엔드 포트로 수강생 URL 구성
+      window.electron.getLanIp().then((ip: string) => {
+        setStudentLink(`http://${ip}:8000/#/student`)
+      })
+    } else {
+      // 웹 개발 환경: 같은 Vite 서버 origin 그대로 사용
+      setStudentLink(`${window.location.protocol}//${window.location.host}/#/student`)
+    }
+  }, [])
 
   const copyStudentLink = useCallback(async () => {
-    const studentUrl = `${window.location.protocol}//${window.location.host}/student`
-    await navigator.clipboard.writeText(studentUrl)
+    await navigator.clipboard.writeText(studentLink)
     setLinkCopied(true)
     setTimeout(() => setLinkCopied(false), 2000)
-  }, [])
+  }, [studentLink])
 
   const {
     isMicOn,

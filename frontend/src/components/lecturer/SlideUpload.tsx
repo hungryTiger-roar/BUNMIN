@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react'
 import { useLectureStore } from '@/stores/lectureStore'
+import { API_BASE } from '@/lib/api'
 
 function SlideUpload() {
   const inputRef = useRef<HTMLInputElement>(null)
@@ -28,7 +29,7 @@ function SlideUpload() {
       const formData = new FormData()
       formData.append('file', file)
 
-      const response = await fetch(`/slides/upload`, {
+      const response = await fetch(`${API_BASE}/slides/upload`, {
         method: 'POST',
         body: formData,
       })
@@ -57,7 +58,7 @@ function SlideUpload() {
 
     const checkStatus = async () => {
       try {
-        const response = await fetch(`/slides/status/${slideId}`)
+        const response = await fetch(`${API_BASE}/slides/status/${slideId}`)
         const data = await response.json()
 
         if (data.status === 'completed') {

@@ -6,9 +6,9 @@ import SubtitleDisplay from '@/components/common/SubtitleDisplay'
 import ConnectionStatus from '@/components/common/ConnectionStatus'
 import ScreenOverlay from '@/components/student/ScreenOverlay'
 import ViewToggle from '@/components/student/ViewToggle'
+import { WS_BASE } from '@/lib/api'
 
-const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-const WS_URL = `${wsProtocol}//${window.location.host}/ws/pipeline`
+const WS_URL = `${WS_BASE}/ws/pipeline`
 
 function Student() {
   const navigate = useNavigate()
