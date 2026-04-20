@@ -28,9 +28,13 @@ class ASRService:
         """faster-whisper 모델 로드"""
         try:
             from faster_whisper import WhisperModel
+            from huggingface_hub import snapshot_download
+
+            # 로컬 캐시 경로를 먼저 확보 → WhisperModel이 자체 다운로드 시도하지 않음
+            local_path = snapshot_download(self.model_name)
 
             self.model = WhisperModel(
-                self.model_name,
+                local_path,
                 device=self.device,
                 compute_type=self.compute_type,
             )

@@ -3,8 +3,12 @@ ASR (Automatic Speech Recognition) 평가
 품질: WER (Word Error Rate)
 속도: RTF, 지연시간
 """
+import sys
 import json
 from pathlib import Path
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from evaluation.metrics.wer import compute_avg_wer
 from evaluation.metrics.speed import timer, compute_rtf, summarize_latencies

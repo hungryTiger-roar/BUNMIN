@@ -9,9 +9,20 @@ AI 모델 통합 평가 스크립트
     python evaluation/run_eval.py --compare     # 이전 결과와 비교
 """
 import sys
-import io
+import os
 import json
 import argparse
+import importlib
+
+# conda aunion 환경 검사 — 잘못된 Python으로 실행 시 자동 재실행
+_AUNION_PYTHON = r"C:\Users\SSAFY\miniforge3\envs\aunion\python.exe"
+if os.path.isfile(_AUNION_PYTHON) and _AUNION_PYTHON.lower() not in sys.executable.lower():
+    import subprocess
+    # -E: PYTHON* 환경변수 무시, -s: user site-packages 제외 → Windows Store Python 격리
+    clean_env = {k: v for k, v in os.environ.items()
+                 if not k.startswith("PYTHON")}
+    result = subprocess.run([_AUNION_PYTHON, "-s"] + sys.argv, env=clean_env)
+    sys.exit(result.returncode)
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -273,6 +284,69 @@ def print_friendly_summary(model: str, result: dict):
 # ──────────────────────────────────────────────
 # 메인
 # ──────────────────────────────────────────────
+MENU_ITEMS = [
+    ("asr",      "ASR      (음성인식)"),
+    ("nmt",      "NMT      (번역)"),
+    ("tts",      "TTS      (음성합성)"),
+    ("ocr",      "OCR      (문자인식)"),
+    ("pipeline", "Pipeline (ASR→NMT→TTS 전체)"),
+    ("ocr_nmt",  "OCR+NMT  (슬라이드 번역)"),
+    ("__all__",  "전체 평가"),
+    ("__cmp__",  "이전 결과와 비교"),
+]
+
+
+def select_device() -> str:
+    """CPU / GPU 선택 메뉴. 'cpu' 또는 'cuda' 반환."""
+    print("=" * 60)
+    print("  실행 환경 선택")
+    print("=" * 60)
+    print("  1. CPU")
+    print("  2. GPU")
+    print("-" * 60)
+    while True:
+        raw = input("선택 (1-2): ").strip()
+        if raw == "1":
+            os.environ["ASR_DEVICE"] = "cpu"
+            os.environ["NMT_DEVICE"] = "cpu"
+            print("  → CPU 모드")
+        elif raw == "2":
+            os.environ["ASR_DEVICE"] = "cuda"
+            os.environ["NMT_DEVICE"] = "cuda"
+            print("  → GPU 모드 (TTS/OCR은 CPU 고정)")
+        else:
+            print("  1 또는 2를 입력하세요.")
+            continue
+
+        if "app.config" in sys.modules:
+            importlib.reload(sys.modules["app.config"])
+        return "cuda" if raw == "2" else "cpu"
+
+
+def interactive_menu() -> list[str] | str:
+    """번호 선택 메뉴. 선택된 model key 리스트 또는 특수 커맨드 문자열 반환."""
+    select_device()
+
+    print("=" * 60)
+    print("  AI 모델 평가")
+    print("=" * 60)
+    for i, (_, label) in enumerate(MENU_ITEMS, 1):
+        print(f"  {i}. {label}")
+    print("-" * 60)
+
+    while True:
+        raw = input("선택 (1-8): ").strip()
+        if not raw.isdigit() or not (1 <= int(raw) <= len(MENU_ITEMS)):
+            print(f"  1~{len(MENU_ITEMS)} 사이 숫자를 입력하세요.")
+            continue
+        key, _ = MENU_ITEMS[int(raw) - 1]
+        if key == "__all__":
+            return ["asr", "nmt", "tts", "ocr", "pipeline", "ocr_nmt"]
+        if key == "__cmp__":
+            return "__compare__"
+        return [key]
+
+
 def main():
     parser = argparse.ArgumentParser(description="AI 모델 평가")
     parser.add_argument("--model", choices=["asr", "nmt", "tts", "ocr", "pipeline", "ocr_nmt"], help="특정 모델만 평가")
@@ -280,7 +354,15 @@ def main():
     parser.add_argument("--compare", action="store_true", help="이전 결과와 비교")
     args = parser.parse_args()
 
-    if args.compare:
+    # 인자가 없으면 대화형 메뉴
+    no_args = not args.model and not args.all and not args.compare
+    if no_args:
+        selection = interactive_menu()
+        if selection == "__compare__":
+            compare_results()
+            return
+        targets = selection
+    elif args.compare:
         compare_results()
         return
 
@@ -299,7 +381,9 @@ def main():
         "ocr_nmt":  eval_ocr_nmt,
     }
 
-    if args.model:
+    if no_args:
+        pass  # targets already set above
+    elif args.model:
         targets = [args.model]
     elif args.all:
         targets = ["asr", "nmt", "tts", "ocr", "pipeline", "ocr_nmt"]

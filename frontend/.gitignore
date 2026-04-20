@@ -16,6 +16,9 @@ build/
 .vscode/
 .idea/
 
+# electron-builder 출력
+release/
+
 # OS
 .DS_Store
 Thumbs.db

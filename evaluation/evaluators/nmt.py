@@ -1,3 +1,7 @@
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 """
 NMT (Neural Machine Translation) 평가
 품질: BLEU, METEOR, BERTScore

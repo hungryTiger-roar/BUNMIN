@@ -27,7 +27,7 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}) {
         video: {
           cursor: 'always',
           displaySurface: 'monitor',
-        },
+        } as MediaTrackConstraints,
         audio: false,
       })
 

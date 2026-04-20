@@ -27,24 +27,69 @@ SLIDES_DIR.mkdir(parents=True, exist_ok=True)
 # HuggingFace 설정
 os.environ.setdefault("HF_HOME", str(CACHE_DIR / "huggingface"))
 
-# 모델 설정
+# GPU 지원 여부 (런타임 체크)
+def _cuda_available() -> bool:
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
+
+_CUDA_AVAILABLE = _cuda_available()
+
+_CPU_ONLY_MODELS: set[str] = set()  # GPU 미지원 모델 (현재 없음)
+_GPU_ONLY_MODELS: set[str] = set()  # CPU 미지원 모델 (현재 없음, 확장 대비)
+
+
+def _resolve_device(env_key: str, model_key: str, default: str = "cpu") -> str:
+    requested = os.environ.get(env_key, default).lower()
+    label = model_key.upper()
+
+    if requested == "cuda":
+        if model_key in _CPU_ONLY_MODELS:
+            print(f"[Config] {label}: GPU 미지원 모델 → CPU로 실행합니다.")
+            return "cpu"
+        if not _CUDA_AVAILABLE:
+            if model_key in _GPU_ONLY_MODELS:
+                raise RuntimeError(
+                    f"[Config] {label}: GPU 전용 모델인데 CUDA를 사용할 수 없습니다. "
+                    "NVIDIA 드라이버 및 CUDA 설치를 확인하세요."
+                )
+            print(f"[Config] {label}: CUDA를 사용할 수 없습니다 → CPU로 실행합니다.")
+            return "cpu"
+        return "cuda"
+
+    if requested == "cpu":
+        if model_key in _GPU_ONLY_MODELS:
+            if _CUDA_AVAILABLE:
+                print(f"[Config] {label}: CPU 미지원 모델 → GPU로 실행합니다.")
+                return "cuda"
+            raise RuntimeError(
+                f"[Config] {label}: CPU 미지원 모델인데 CUDA도 사용할 수 없습니다. "
+                "NVIDIA 드라이버 및 CUDA 설치를 확인하세요."
+            )
+        return "cpu"
+
+    return "cpu"
+
+
+def _dtype(device: str) -> str:
+    return "float16" if device == "cuda" else "float32"
+
+
 class ModelConfig:
-    # ASR - GPU 실행 (faster-whisper)
-    ASR_MODEL = "large-v3-turbo"
-    ASR_DEVICE = "cpu"
-    ASR_DTYPE = "float32"  # GPU: float16, CPU: float32
+    ASR_MODEL  = os.environ.get("ASR_MODEL",  "ghost613/faster-whisper-large-v3-turbo-korean")
+    ASR_DEVICE = _resolve_device("ASR_DEVICE", "asr")
+    ASR_DTYPE  = _dtype(ASR_DEVICE)
 
-    # NMT - CPU 실행
-    NMT_MODEL = "Helsinki-NLP/opus-mt-ko-en"
-    NMT_DEVICE = "cpu"
-    NMT_DTYPE = "float32"
+    NMT_MODEL  = os.environ.get("NMT_MODEL",  "Helsinki-NLP/opus-mt-ko-en")
+    NMT_DEVICE = _resolve_device("NMT_DEVICE", "nmt")
+    NMT_DTYPE  = _dtype(NMT_DEVICE)
 
-    # TTS - CPU 실행 (Supertonic-2 ONNX)
-    TTS_MODEL = "onnx-community/Supertonic-TTS-2-ONNX"
-    TTS_DEVICE = "cpu"
+    TTS_MODEL  = os.environ.get("TTS_MODEL",  "facebook/mms-tts-eng")
+    TTS_DEVICE = _resolve_device("TTS_DEVICE", "tts")
 
-    # OCR - CPU 실행
-    OCR_DEVICE = "cpu"
+    OCR_DEVICE = _resolve_device("OCR_DEVICE", "ocr")
 
 
 # 서버 설정
@@ -52,11 +97,3 @@ class ServerConfig:
     HOST = "0.0.0.0"
     PORT = 8000
     RELOAD = True
-
-
-# GPU 사용 시 설정 변경
-USE_GPU = os.environ.get("USE_GPU", "false").lower() == "true"
-
-if USE_GPU:
-    ModelConfig.ASR_DEVICE = "cuda"
-    ModelConfig.ASR_DTYPE = "float16"

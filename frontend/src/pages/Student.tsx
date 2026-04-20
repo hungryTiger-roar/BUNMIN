@@ -5,9 +5,10 @@ import { useWebSocket } from '@/hooks/useWebSocket'
 import SubtitleDisplay from '@/components/common/SubtitleDisplay'
 import ConnectionStatus from '@/components/common/ConnectionStatus'
 import ViewToggle from '@/components/student/ViewToggle'
+import { WS_BASE, API_BASE } from '@/lib/api'
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws/pipeline'
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const WS_URL = `${WS_BASE}/ws/pipeline`
+const API_URL = API_BASE
 
 function Student() {
   const navigate = useNavigate()

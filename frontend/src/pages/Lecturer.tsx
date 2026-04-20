@@ -8,8 +8,9 @@ import SubtitleDisplay from '@/components/common/SubtitleDisplay'
 import SlideUpload from '@/components/lecturer/SlideUpload'
 import SlideViewer from '@/components/lecturer/SlideViewer'
 import ConnectionStatus from '@/components/common/ConnectionStatus'
+import { WS_BASE } from '@/lib/api'
 
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws/pipeline'
+const WS_URL = `${WS_BASE}/ws/pipeline`
 
 function Lecturer() {
   const navigate = useNavigate()
@@ -87,15 +88,6 @@ function Lecturer() {
     } else {
       await startAudioCapture()
       setMicOn(true)
-    }
-  }
-
-  // 화면공유 토글
-  const toggleScreenShare = async () => {
-    if (isScreenSharing) {
-      stopScreenCapture()
-    } else {
-      await startScreenCapture()
     }
   }
 
