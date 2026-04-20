@@ -2,13 +2,10 @@
   "name": "aunion-ai-frontend",
   "private": true,
   "version": "0.1.0",
-  "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview",
-    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:3000 && electron .\"",
-    "electron:build": "npm run build && electron-builder"
+    "preview": "vite preview"
   },
   "dependencies": {
     "react": "^18.2.0",
@@ -21,42 +18,9 @@
     "@types/react-dom": "^18.2.19",
     "@vitejs/plugin-react": "^4.2.1",
     "autoprefixer": "^10.4.17",
-    "concurrently": "^8.2.2",
-    "electron": "^28.2.0",
-    "electron-builder": "^24.9.1",
     "postcss": "^8.4.35",
     "tailwindcss": "^3.4.1",
     "typescript": "^5.3.3",
-    "vite": "^5.1.0",
-    "wait-on": "^7.2.0"
-  },
-  "build": {
-    "appId": "com.aunion.ai",
-    "productName": "Aunion AI",
-    "directories": {
-      "output": "../setup"
-    },
-    "extraResources": [
-      {
-        "from": "../backend/dist/aunion_backend",
-        "to": "backend",
-        "filter": ["**/*"]
-      }
-    ],
-    "compression": "store",
-    "win": {
-      "target": [
-        { "target": "nsis", "arch": ["x64"] }
-      ],
-      "requestedExecutionLevel": "requireAdministrator"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "deleteAppDataOnUninstall": true,
-      "language": "1042"
-    }
+    "vite": "^5.1.0"
   }
 }

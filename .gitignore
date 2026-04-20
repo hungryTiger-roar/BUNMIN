@@ -5,9 +5,12 @@ __pycache__/
 *.egg-info/
 .env
 server.log
+error_log.txt
+*.log
 
 # 빌드 산출물
 setup/
+node_modules/
 
 # 평가
 evaluation/datasets/

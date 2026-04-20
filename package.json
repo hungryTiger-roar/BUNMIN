@@ -1,0 +1,17 @@
+{
+  "name": "aunion-ai",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "concurrently \"npm run dev --prefix frontend\" \"C:/Users/SSAFY/miniforge3/envs/aunion/python.exe backend/run.py\"",
+    "electron:dev": "concurrently \"npm run dev --prefix frontend\" \"wait-on http://localhost:3000 && cross-env NODE_ENV=development electron frontend/.\"",
+    "electron:build": "npm run build --prefix frontend && electron-builder --config electron-builder.json"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "electron": "^28.2.0",
+    "electron-builder": "^24.9.1",
+    "wait-on": "^7.2.0"
+  }
+}

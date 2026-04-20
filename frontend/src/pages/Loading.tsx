@@ -15,7 +15,7 @@ interface ModelEntry {
 const DEFAULT_MODELS: Record<ModelKey, ModelEntry> = {
   asr: { status: 'pending', progress: 0, label: 'ASR (음성인식)', desc: 'faster-whisper' },
   nmt: { status: 'pending', progress: 0, label: 'NMT (번역)', desc: 'OPUS-MT' },
-  tts: { status: 'pending', progress: 0, label: 'TTS (음성합성)', desc: 'Supertonic-2' },
+  tts: { status: 'pending', progress: 0, label: 'TTS (음성합성)', desc: 'MMS-TTS' },
   ocr: { status: 'pending', progress: 0, label: 'OCR (문자인식)', desc: 'RapidOCR' },
 }
 
