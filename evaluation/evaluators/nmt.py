@@ -26,7 +26,7 @@ def eval_nmt() -> dict:
     with open(pairs_path, encoding="utf-8") as f:
         samples = json.load(f)
 
-    service = NMTService(model_name=ModelConfig.NMT_MODEL, device=ModelConfig.NMT_DEVICE)
+    service = NMTService(model_name=ModelConfig.NMT_MODEL, device=ModelConfig.NMT_DEVICE, dtype=ModelConfig.NMT_DTYPE)
 
     references = [s["en"] for s in samples]
     ko_texts   = [s["ko"] for s in samples]

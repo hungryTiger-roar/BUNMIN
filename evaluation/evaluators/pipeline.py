@@ -39,8 +39,8 @@ def eval_realtime_pipeline() -> dict:
     if not wav_samples:
         return {"skipped": True, "reason": "no_audio_files"}
 
-    asr_service = ASRService(model_name=ModelConfig.ASR_MODEL, device=ModelConfig.ASR_DEVICE)
-    nmt_service = NMTService(model_name=ModelConfig.NMT_MODEL, device=ModelConfig.NMT_DEVICE)
+    asr_service = ASRService(model_name=ModelConfig.ASR_MODEL, device=ModelConfig.ASR_DEVICE, dtype=ModelConfig.ASR_DTYPE)
+    nmt_service = NMTService(model_name=ModelConfig.NMT_MODEL, device=ModelConfig.NMT_DEVICE, dtype=ModelConfig.NMT_DTYPE)
     tts_service = TTSService(model_name=ModelConfig.TTS_MODEL, device=ModelConfig.TTS_DEVICE)
 
     wer_pairs = []
@@ -167,7 +167,7 @@ def eval_ocr_nmt() -> dict:
         return {"skipped": True, "reason": "no_image_files"}
 
     ocr_service = OCRService()
-    nmt_service = NMTService(model_name=ModelConfig.NMT_MODEL, device=ModelConfig.NMT_DEVICE)
+    nmt_service = NMTService(model_name=ModelConfig.NMT_MODEL, device=ModelConfig.NMT_DEVICE, dtype=ModelConfig.NMT_DTYPE)
 
     cer_pairs = []
     ocr_latencies_ms = []
