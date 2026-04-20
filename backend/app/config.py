@@ -93,9 +93,3 @@ class ModelConfig:
     OCR_MODEL  = os.environ.get("OCR_MODEL",  "rapidocr")
     OCR_DEVICE = _resolve_device("OCR_DEVICE", "ocr")
 
-
-# 서버 설정
-class ServerConfig:
-    HOST = "0.0.0.0"
-    PORT = 8000
-    RELOAD = True

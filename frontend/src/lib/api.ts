@@ -10,3 +10,5 @@ export const API_BASE = isElectron
 export const WS_BASE = isElectron
   ? `ws://localhost:${BACKEND_PORT}`
   : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
+
+export const WS_PIPELINE_URL = `${WS_BASE}/ws/pipeline`

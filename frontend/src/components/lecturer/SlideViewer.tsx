@@ -1,7 +1,6 @@
 import { useEffect } from 'react'
 import { useLectureStore } from '@/stores/lectureStore'
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+import { API_BASE } from '@/lib/api'
 
 interface SlideViewerProps {
   onPageChange?: (page: number) => void
@@ -31,7 +30,7 @@ function SlideViewer({ onPageChange }: SlideViewerProps) {
     if (!slideId) return
 
     try {
-      const response = await fetch(`${API_URL}/slides/pages/${slideId}`)
+      const response = await fetch(`${API_BASE}/slides/pages/${slideId}`)
       if (!response.ok) throw new Error('Failed to load slides')
 
       const data = await response.json()
@@ -87,7 +86,7 @@ function SlideViewer({ onPageChange }: SlideViewerProps) {
       <div className="relative bg-slate-900 rounded-xl overflow-hidden aspect-video group">
         {currentSlideImage ? (
           <img
-            src={`${API_URL}${currentSlideImage}`}
+            src={`${API_BASE}${currentSlideImage}`}
             alt={`슬라이드 ${currentPage}`}
             className="w-full h-full object-contain"
           />
@@ -177,7 +176,7 @@ function SlideViewer({ onPageChange }: SlideViewerProps) {
               }`}
             >
               <img
-                src={`${API_URL}${page.imageUrl}`}
+                src={`${API_BASE}${page.imageUrl}`}
                 alt={`썸네일 ${index + 1}`}
                 className="w-full h-full object-cover"
               />
