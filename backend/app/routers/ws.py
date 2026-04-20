@@ -51,16 +51,6 @@ class ConnectionManager:
         self.presentation_mode: str = "slide"  # 'slide' or 'screen'
         self.last_screen_hash: Optional[str] = None
 
-    async def connect_lecturer(self, websocket: WebSocket):
-        await websocket.accept()
-        self.lecturer = websocket
-        print("[WS] 강의자 연결됨")
-
-    async def connect_student(self, websocket: WebSocket):
-        await websocket.accept()
-        self.students.append(websocket)
-        print(f"[WS] 수강자 연결됨 (총 {len(self.students)}명)")
-
     def disconnect_lecturer(self):
         self.lecturer = None
         print("[WS] 강의자 연결 해제")

@@ -4,6 +4,7 @@ __pycache__/
 .cache/
 *.egg-info/
 .env
+.env.*
 server.log
 error_log.txt
 *.log
@@ -11,14 +12,47 @@ error_log.txt
 # 빌드 산출물
 setup/
 node_modules/
+*.tsbuildinfo
 
-# 업로드 파일 (슬라이드, 이미지)
+# AI 모델 가중치 (어느 위치에 있어도 차단)
+*.bin
+*.safetensors
+*.onnx
+*.pt
+*.pth
+
+# 업로드 파일 (슬라이드, 이미지) — 루트 기준 실행 시 생성됨
 uploads/
+# 백엔드 디렉토리에서 직접 실행 시 잘못 생성되는 경로
+backend/uploads/
+backend/slides/
+backend/dist/
+
+# 보안
+*.pem
+*.key
+*.cert
+*.p12
+
+# 테스트/커버리지
+.pytest_cache/
+.coverage
+htmlcov/
 
 # 평가
 evaluation/datasets/
-evaluation/results/latest.json
-evaluation/results/history/
+evaluation/results/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 평가용 다운로드 PDF
+evaluation/pdfs/
 
 # Claude
 .claude/

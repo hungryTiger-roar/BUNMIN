@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLectureStore } from '@/stores/lectureStore'
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+import { API_BASE } from '@/lib/api'
 
 interface WebSocketMessage {
   type: string
@@ -34,7 +33,7 @@ export function useWebSocket(url: string, role: Role = 'student') {
   // 슬라이드 페이지 로드
   const loadSlidePages = useCallback(async (slideId: string) => {
     try {
-      const response = await fetch(`${API_URL}/slides/pages/${slideId}`)
+      const response = await fetch(`${API_BASE}/slides/pages/${slideId}`)
       if (!response.ok) throw new Error('Failed to load slides')
 
       const data = await response.json()
@@ -56,7 +55,7 @@ export function useWebSocket(url: string, role: Role = 'student') {
         })
 
         // 오디오 재생 (잠금 해제된 경우에만)
-        if (data.audio && isAudioUnlocked) {
+        if (data.audio && isAudioUnlockedRef.current) {
           playAudio(data.audio as string)
         }
         break
@@ -151,7 +150,7 @@ export function useWebSocket(url: string, role: Role = 'student') {
       default:
         console.log('[WebSocket] 알 수 없는 메시지:', data.type)
     }
-  }, [role, addSubtitle, isAudioUnlocked, setSlideId, setSlideStatus, setCurrentPage, setLectureStarted, setPaused, setPresentationMode, setCurrentScreen, loadSlidePages])
+  }, [role, addSubtitle, setSlideId, setSlideStatus, setCurrentPage, setLectureStarted, setPaused, setPresentationMode, setCurrentScreen, loadSlidePages])
 
   const send = useCallback((data: object) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
