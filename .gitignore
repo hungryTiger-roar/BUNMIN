@@ -12,6 +12,9 @@ error_log.txt
 setup/
 node_modules/
 
+# 업로드 파일 (슬라이드, 이미지)
+uploads/
+
 # 평가
 evaluation/datasets/
 evaluation/results/latest.json
