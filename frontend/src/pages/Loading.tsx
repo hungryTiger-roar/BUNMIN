@@ -13,10 +13,10 @@ interface ModelEntry {
 }
 
 const DEFAULT_MODELS: Record<ModelKey, ModelEntry> = {
-  asr: { status: 'pending', progress: 0, label: 'ASR (음성인식)', desc: 'faster-whisper' },
-  nmt: { status: 'pending', progress: 0, label: 'NMT (번역)', desc: 'OPUS-MT' },
-  tts: { status: 'pending', progress: 0, label: 'TTS (음성합성)', desc: 'MMS-TTS' },
-  ocr: { status: 'pending', progress: 0, label: 'OCR (문자인식)', desc: 'RapidOCR' },
+  asr: { status: 'pending', progress: 0, label: 'ASR (음성인식)', desc: import.meta.env.VITE_ASR_MODEL || 'ASR' },
+  nmt: { status: 'pending', progress: 0, label: 'NMT (번역)', desc: import.meta.env.VITE_NMT_MODEL || 'NMT' },
+  tts: { status: 'pending', progress: 0, label: 'TTS (음성합성)', desc: import.meta.env.VITE_TTS_MODEL || 'TTS' },
+  ocr: { status: 'pending', progress: 0, label: 'OCR (문자인식)', desc: import.meta.env.VITE_OCR_MODEL || 'OCR' },
 }
 
 function StatusIcon({ status }: { status: ModelEntry['status'] }) {

@@ -8,6 +8,7 @@ const backendWsUrl = backendUrl.replace(/^http/, 'ws')
 export default defineConfig({
   plugins: [react()],
   base: './',
+  envDir: path.resolve(__dirname, '..'),
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

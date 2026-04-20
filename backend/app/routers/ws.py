@@ -409,10 +409,12 @@ async def process_screen(message: dict):
                 if not item["text"].strip():
                     continue
                 raw_bbox = item["bbox"]
-                bbox = (
-                    [raw_bbox[0][0], raw_bbox[0][1], raw_bbox[2][0], raw_bbox[2][1]]
-                    if len(raw_bbox) == 4 else raw_bbox
-                )
+                if raw_bbox is None:
+                    bbox = None
+                elif len(raw_bbox) == 4:
+                    bbox = [raw_bbox[0][0], raw_bbox[0][1], raw_bbox[2][0], raw_bbox[2][1]]
+                else:
+                    bbox = raw_bbox
                 overlay_items.append({
                     "original": item["text"],
                     "translated": translated_list[text_idx],

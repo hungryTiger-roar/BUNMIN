@@ -27,10 +27,10 @@ _model_status = {
     "message": "백엔드 시작 중...",
     "progress": 0,
     "models": {
-        "asr": {"status": "pending", "progress": 0, "label": "ASR (음성인식)", "desc": "faster-whisper large-v3-turbo-korean"},
-        "nmt": {"status": "pending", "progress": 0, "label": "NMT (번역)", "desc": "OPUS-MT"},
-        "tts": {"status": "pending", "progress": 0, "label": "TTS (음성합성)", "desc": "MMS-TTS (facebook/mms-tts-eng)"},
-        "ocr": {"status": "pending", "progress": 0, "label": "OCR (문자인식)", "desc": "RapidOCR"},
+        "asr": {"status": "pending", "progress": 0, "label": "ASR (음성인식)", "desc": ModelConfig.ASR_MODEL},
+        "nmt": {"status": "pending", "progress": 0, "label": "NMT (번역)", "desc": ModelConfig.NMT_MODEL},
+        "tts": {"status": "pending", "progress": 0, "label": "TTS (음성합성)", "desc": ModelConfig.TTS_MODEL},
+        "ocr": {"status": "pending", "progress": 0, "label": "OCR (문자인식)", "desc": ModelConfig.OCR_MODEL},
     },
 }
 
@@ -198,7 +198,7 @@ def _load_models_sync():
     # ASR
     _model_status["models"]["asr"]["status"] = "loading"
     _emit_status()
-    _set_status(f"ASR 초기화 중... (1/4) - faster-whisper {ModelConfig.ASR_MODEL}", progress=15)
+    _set_status(f"ASR 초기화 중... (1/4) - {ModelConfig.ASR_MODEL}", progress=15)
     try:
         from app.services.asr_service import ASRService
         asr_service = ASRService(
@@ -266,7 +266,8 @@ def _load_models_sync():
     # OCR
     _model_status["models"]["ocr"]["status"] = "loading"
     _emit_status()
-    _set_status("OCR 초기화 중... (4/4) - RapidOCR", progress=90)
+    _ocr_model_name = ModelConfig.OCR_MODEL
+    _set_status(f"OCR 초기화 중... (4/4) - {_ocr_model_name}", progress=90)
     try:
         from app.services.ocr_service import OCRService
         ocr_service = OCRService()
@@ -275,7 +276,7 @@ def _load_models_sync():
         _model_status["models"]["ocr"]["status"] = "done"
         _model_status["models"]["ocr"]["progress"] = 100
         _set_status("OCR 완료 ✓ (4/4)", progress=100)
-        print("[OCR] RapidOCR 초기화 완료", flush=True)
+        print(f"[OCR] {_ocr_model_name} 초기화 완료", flush=True)
     except Exception as e:
         tb = traceback.format_exc()
         print(f"[OCR ERROR] {e}\n{tb}", flush=True)

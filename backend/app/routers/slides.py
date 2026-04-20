@@ -53,7 +53,7 @@ class SlideStatus(BaseModel):
 class OverlayItem(BaseModel):
     original: str
     translated: str
-    bbox: list
+    bbox: Optional[list]
     confidence: float
 
 
@@ -242,7 +242,9 @@ async def process_slide(slide_id: str, pdf_path: Path):
                                 _nmt_service.translate, text
                             )
                             raw_bbox = item["bbox"]
-                            if len(raw_bbox) == 4:
+                            if raw_bbox is None:
+                                bbox = None
+                            elif len(raw_bbox) == 4:
                                 bbox = [
                                     raw_bbox[0][0], raw_bbox[0][1],
                                     raw_bbox[2][0], raw_bbox[2][1],

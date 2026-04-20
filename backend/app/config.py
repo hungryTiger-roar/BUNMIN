@@ -12,9 +12,10 @@ if _FROZEN:
     # .env는 exe 옆에 있을 수도 있음
     load_dotenv(Path(sys.executable).parent / ".env")
 else:
-    # 개발 환경: 프로젝트 루트 기준
+    # 개발 환경: 프로젝트 루트(backend/app → backend → root)의 .env 로드
     APP_DATA_DIR = Path(__file__).parent.parent
-    load_dotenv(APP_DATA_DIR / ".env")
+    _PROJECT_ROOT = Path(__file__).parent.parent.parent
+    load_dotenv(_PROJECT_ROOT / ".env")
 
 # 기본 경로
 CACHE_DIR = APP_DATA_DIR / "cache"
@@ -89,6 +90,7 @@ class ModelConfig:
     TTS_MODEL  = os.environ.get("TTS_MODEL",  "facebook/mms-tts-eng")
     TTS_DEVICE = _resolve_device("TTS_DEVICE", "tts")
 
+    OCR_MODEL  = os.environ.get("OCR_MODEL",  "rapidocr")
     OCR_DEVICE = _resolve_device("OCR_DEVICE", "ocr")
 
 
