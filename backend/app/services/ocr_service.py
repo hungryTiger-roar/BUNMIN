@@ -29,12 +29,15 @@ class OCRService:
     def _load_rapidocr(self):
         try:
             from rapidocr_onnxruntime import RapidOCR
-            self.ocr = RapidOCR()
+            from huggingface_hub import hf_hub_download
+            rec_path  = hf_hub_download("cycloneboy/korean_PP-OCRv4_rec_infer", "model.onnx")
+            dict_path = hf_hub_download("cycloneboy/korean_PP-OCRv4_rec_infer", "korean_dict.txt")
+            self.ocr  = RapidOCR(rec_model_path=rec_path, rec_keys_path=dict_path)
             self.mode = "rapidocr"
-            print("[OCR] RapidOCR 초기화 완료")
-        except ImportError:
-            print("[OCR] RapidOCR이 설치되지 않았습니다")
-            print("[OCR] pip install rapidocr-onnxruntime")
+            print("[OCR] RapidOCR (Korean PP-OCRv4) 초기화 완료")
+        except ImportError as e:
+            print(f"[OCR] 패키지 미설치: {e}")
+            print("[OCR] pip install rapidocr-onnxruntime huggingface_hub")
 
     def _load_hf_model(self, model_id: str):
         try:

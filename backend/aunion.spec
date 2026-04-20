@@ -47,37 +47,32 @@ hiddenimports = [
     'anyio._backends._asyncio',
     'anyio._backends._trio',
     'h11',
-    # AI/ML
+    # AI/ML Core
     'transformers',
     'torch',
-    'rapidocr_onnxruntime',
-    'PIL',
     'numpy',
     'soundfile',
-    # ASR - faster-whisper
-    'faster_whisper',
-    'ctranslate2',
-    'av',
-    # TTS - Supertonic-2 ONNX (optimum + onnxruntime)
-    'optimum',
-    'optimum.onnxruntime',
-    'onnxruntime',
-    'onnx',
+    # ASR - CohereLabs/cohere-transcribe-03-2026
+    'accelerate',
+    # NMT - tencent/HY-MT1.5-1.8B
+    'sentencepiece',
+    # TTS - Piper TTS
+    'piper',
+    # OCR - RapidOCR + Korean PP-OCRv4
+    'rapidocr_onnxruntime',
+    'PIL',
 ]
 
 hiddenimports += collect_submodules('starlette')
 hiddenimports += collect_submodules('uvicorn')
 hiddenimports += collect_submodules('transformers')
 hiddenimports += collect_submodules('torch')
-hiddenimports += collect_submodules('faster_whisper')
-hiddenimports += collect_submodules('optimum')
+hiddenimports += collect_submodules('piper')
 
 # 데이터 파일
 datas = []
 datas += collect_data_files('transformers')
 datas += collect_data_files('rapidocr_onnxruntime')
-datas += collect_data_files('faster_whisper')
-datas += collect_data_files('ctranslate2')
 
 # 앱 디렉토리 포함
 datas += [

@@ -1,49 +1,51 @@
 """
 NMT (Neural Machine Translation) 서비스
 한국어 → 영어 번역
+tencent/HY-MT1.5-1.8B (AutoModelForCausalLM, GPU: float16 / CPU: float32, chat template)
 """
-from typing import Optional
+
+
+def _normalize_device(device: str) -> str:
+    """'cuda' → 'cuda:0' 정규화"""
+    return "cuda:0" if device == "cuda" else device
 
 
 class NMTService:
-    """
-    기계 번역 서비스
+    _LANG_MAP = {
+        "en": "English",
+        "ko": "Korean",
+        "zh": "Chinese",
+        "ja": "Japanese",
+    }
 
-    CPU: Helsinki-NLP/opus-mt-ko-en
-    GPU: facebook/nllb-200-distilled-600M
-    """
-
-    def __init__(self, model_name: str, device: str = "cpu"):
+    def __init__(self, model_name: str = "tencent/HY-MT1.5-1.8B", device: str = "cpu", dtype: str = "float32"):
         self.model_name = model_name
-        self.device = device
+        self.device = _normalize_device(device)
+        self.dtype = dtype
         self.model = None
         self.tokenizer = None
-        self.is_nllb = "nllb" in model_name.lower()
         self._load_model()
 
+    def _torch_dtype(self):
+        import torch
+        return {"float16": torch.float16, "bfloat16": torch.bfloat16}.get(self.dtype, torch.float32)
+
     def _load_model(self):
-        """모델 로드"""
         try:
-            from transformers import AutoModelForSeq2SeqLM, MarianTokenizer, AutoTokenizer
             import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer
 
-            # Marian 모델 (OPUS-MT)은 MarianTokenizer 사용
-            if "opus-mt" in self.model_name.lower() or "marian" in self.model_name.lower():
-                self.tokenizer = MarianTokenizer.from_pretrained(self.model_name)
-            else:
-                self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(
-                self.model_name,
-                dtype=torch.float16 if "cuda" in self.device else torch.float32,
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                self.model_name, trust_remote_code=True
             )
-
-            if "cuda" in self.device:
-                self.model = self.model.to(self.device)
-
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_name,
+                torch_dtype=self._torch_dtype(),
+                device_map=self.device,
+                trust_remote_code=True,
+            )
             self.model.eval()
-            print(f"[NMT] {self.model_name} 모델 로드 완료")
-
+            print(f"[NMT] {self.model_name} 로드 완료 ({self.dtype}, {self.device})")
         except ImportError:
             raise RuntimeError("Transformers가 설치되지 않았습니다")
 
@@ -54,66 +56,35 @@ class NMTService:
         target_lang: str = "en",
         max_length: int = 512,
     ) -> str:
-        """
-        텍스트 번역
-
-        Args:
-            text: 번역할 텍스트
-            source_lang: 원본 언어
-            target_lang: 대상 언어
-            max_length: 최대 출력 길이
-
-        Returns:
-            번역된 텍스트
-        """
         if self.model is None or not text.strip():
             return ""
-
         try:
             import torch
-
-            # NLLB 모델은 언어 코드가 다름
-            if self.is_nllb:
-                # NLLB 언어 코드: kor_Hang (한국어), eng_Latn (영어)
-                self.tokenizer.src_lang = "kor_Hang"
-                forced_bos_token_id = self.tokenizer.convert_tokens_to_ids("eng_Latn")
-            else:
-                forced_bos_token_id = None
-
-            # 토큰화
-            inputs = self.tokenizer(
-                text,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=max_length,
+            tgt = self._LANG_MAP.get(target_lang, "English")
+            messages = [{
+                "role": "user",
+                "content": f"Translate the following segment into {tgt}, without additional explanation.\n\n{text}",
+            }]
+            prompt = self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
             )
-
-            if "cuda" in self.device:
-                inputs = {k: v.to(self.device) for k, v in inputs.items()}
-
-            # 번역 생성
+            inputs = {k: v.to(self.device) for k, v in self.tokenizer(prompt, return_tensors="pt").items() if k != "token_type_ids"}
+            input_len = inputs["input_ids"].shape[1]
             with torch.no_grad():
-                generate_kwargs = {
-                    "max_length": max_length,
-                    "num_beams": 4,
-                    "early_stopping": True,
-                }
-                if forced_bos_token_id:
-                    generate_kwargs["forced_bos_token_id"] = forced_bos_token_id
-
-                outputs = self.model.generate(**inputs, **generate_kwargs)
-
-            # 디코딩
-            translated = self.tokenizer.decode(
-                outputs[0], skip_special_tokens=True
-            )
-
-            return translated.strip()
-
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=max_length,
+                    top_k=20,
+                    top_p=0.6,
+                    repetition_penalty=1.05,
+                    temperature=0.7,
+                )
+            return self.tokenizer.decode(
+                outputs[0][input_len:], skip_special_tokens=True
+            ).strip()
         except Exception as e:
             print(f"[NMT] 번역 오류: {e}")
-            return text
+            return ""
 
     def translate_batch(
         self,
@@ -121,66 +92,6 @@ class NMTService:
         source_lang: str = "ko",
         target_lang: str = "en",
     ) -> list[str]:
-        """
-        여러 텍스트 일괄 번역
-
-        Args:
-            texts: 번역할 텍스트 리스트
-            source_lang: 원본 언어
-            target_lang: 대상 언어
-
-        Returns:
-            번역된 텍스트 리스트
-        """
         if not texts:
             return []
-
-        try:
-            import torch
-
-            CHUNK_SIZE = 16
-
-            result = []
-            for i in range(0, len(texts), CHUNK_SIZE):
-                chunk = texts[i:i + CHUNK_SIZE]
-                valid_mask = [bool(t.strip()) for t in chunk]
-                valid_texts = [t for t, v in zip(chunk, valid_mask) if v]
-
-                if not valid_texts:
-                    result.extend([""] * len(chunk))
-                    continue
-
-                inputs = self.tokenizer(
-                    valid_texts,
-                    return_tensors="pt",
-                    padding=True,
-                    truncation=True,
-                    max_length=512,
-                )
-
-                if "cuda" in self.device:
-                    inputs = {k: v.to(self.device) for k, v in inputs.items()}
-
-                with torch.no_grad():
-                    outputs = self.model.generate(
-                        **inputs,
-                        max_length=512,
-                        num_beams=4,
-                        early_stopping=True,
-                    )
-
-                translated = self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
-
-                valid_idx = 0
-                for v in valid_mask:
-                    if v:
-                        result.append(translated[valid_idx].strip())
-                        valid_idx += 1
-                    else:
-                        result.append("")
-
-            return result
-
-        except Exception as e:
-            print(f"[NMT] 배치 번역 오류: {e}")
-            return texts
+        return [self.translate(t, source_lang, target_lang) for t in texts]
