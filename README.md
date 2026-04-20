@@ -12,7 +12,7 @@
 | Frontend | React + TypeScript + Vite |
 | Backend | FastAPI + uvicorn |
 | 실시간 통신 | WebSocket |
-| AI | faster-whisper, Helsinki-NLP, mms-tts-eng, RapidOCR |
+| AI | Cohere ASR, Tencent HY-MT, Piper TTS, RapidOCR |
 | 데스크탑 (선택) | Electron |
 
 ---
@@ -39,18 +39,33 @@ cd frontend && npm install && cd ..
 conda create -n aunion python=3.10
 conda activate aunion
 pip install -r backend/requirements.txt
+
+# transformers 4.50+ 필요 (CohereLabs ASR 지원)
+pip install "transformers>=4.50.0"
 ```
 
-- `.env` 설정 (`backend/.env` 생성)
+GPU 사용 시 CUDA 버전 PyTorch 재설치 (`nvidia-smi` 우측 상단 숫자 기준):
+
+```bash
+# CUDA 11.8 → cu118 / CUDA 12.1 → cu121 / CUDA 12.4 이상 or 13.x → cu124
+pip install torch --index-url https://download.pytorch.org/whl/cu124
+```
+
+- 프로젝트 루트에 `.env` 파일 생성
 
 ```env
-ASR_MODEL=ghost613/faster-whisper-large-v3-turbo-korean
-NMT_MODEL=Helsinki-NLP/opus-mt-ko-en
-TTS_MODEL=facebook/mms-tts-eng
+# 필수: CohereLabs ASR 모델은 gated 모델 — HuggingFace에서 접근 승인 후 토큰 입력
+HF_TOKEN=hf_xxxxxxxxxxxx
+
+ASR_MODEL=CohereLabs/cohere-transcribe-03-2026
+NMT_MODEL=tencent/HY-MT1.5-1.8B
+TTS_MODEL=piper
+OCR_MODEL=rapidocr
+
 ASR_DEVICE=cuda
 NMT_DEVICE=cuda
-TTS_DEVICE=cuda
-OCR_DEVICE=cuda
+TTS_DEVICE=cpu
+OCR_DEVICE=cpu
 ```
 
 ---
@@ -99,8 +114,9 @@ S14P31S205/
 │
 ├── backend/                  # FastAPI 서버
 │   ├── app/                  # 라우터 + 서비스
-│   ├── evaluation/           # AI 모델 평가 스크립트
 │   └── run.py                # 진입점
+│
+├── evaluation/               # AI 모델 평가 스크립트
 │
 └── docs/                     # 문서
     ├── setting/              # 환경설정, 실행방법
