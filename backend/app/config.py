@@ -86,7 +86,7 @@ class ModelConfig:
     ASR_DEVICE = _resolve_device("ASR_DEVICE", "asr")
     ASR_DTYPE  = _asr_dtype(ASR_DEVICE)
 
-    NMT_MODEL  = os.environ.get("NMT_MODEL",  "tencent/HY-MT1.5-1.8B")
+    NMT_MODEL  = os.environ.get("NMT_MODEL",  "facebook/nllb-200-distilled-600M")
     NMT_DEVICE = _resolve_device("NMT_DEVICE", "nmt")
     NMT_DTYPE  = _dtype(NMT_DEVICE)
 
