@@ -1,0 +1,34 @@
+# 가상환경
+venv/
+.venv/
+
+# PyInstaller 빌드
+build/
+dist/
+
+# 캐시
+cache/
+__pycache__/
+*.pyc
+
+# 모델 파일
+*.onnx
+*.bin
+*.safetensors
+
+# 로그
+error_log.txt
+*.log
+
+# 업로드 파일
+uploads/
+
+# 슬라이드 임시 파일
+slides/
+
+# 환경변수
+.env
+
+# IDE
+.vscode/
+.idea/
