@@ -1,0 +1,29 @@
+{
+  "appId": "com.aunion.ai",
+  "productName": "Aunion AI",
+  "directories": {
+    "output": "setup"
+  },
+  "extraResources": [
+    {
+      "from": "backend/dist/aunion_backend",
+      "to": "backend",
+      "filter": ["**/*"]
+    }
+  ],
+  "compression": "store",
+  "win": {
+    "target": [
+      { "target": "nsis", "arch": ["x64"] }
+    ],
+    "requestedExecutionLevel": "requireAdministrator"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "deleteAppDataOnUninstall": true,
+    "language": "1042"
+  }
+}

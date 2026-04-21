@@ -8,8 +8,7 @@ import SubtitleDisplay from '@/components/common/SubtitleDisplay'
 import SlideUpload from '@/components/lecturer/SlideUpload'
 import SlideViewer from '@/components/lecturer/SlideViewer'
 import ConnectionStatus from '@/components/common/ConnectionStatus'
-
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws/pipeline'
+import { WS_PIPELINE_URL } from '@/lib/api'
 
 function Lecturer() {
   const navigate = useNavigate()
@@ -31,7 +30,7 @@ function Lecturer() {
     reset,
   } = useLectureStore()
 
-  const { isConnected, connect, send } = useWebSocket(WS_URL, 'lecturer')
+  const { isConnected, connect, send } = useWebSocket(WS_PIPELINE_URL, 'lecturer')
 
   // 오디오 데이터 전송
   const handleAudioData = useCallback(async (audioBlob: Blob) => {
@@ -87,15 +86,6 @@ function Lecturer() {
     } else {
       await startAudioCapture()
       setMicOn(true)
-    }
-  }
-
-  // 화면공유 토글
-  const toggleScreenShare = async () => {
-    if (isScreenSharing) {
-      stopScreenCapture()
-    } else {
-      await startScreenCapture()
     }
   }
 

@@ -82,6 +82,8 @@ datas += collect_data_files('ctranslate2')
 # 앱 디렉토리 포함
 datas += [
     ('app', 'app'),
+    # 수강생 브라우저 접속용 프론트엔드 빌드 결과물
+    ('../frontend/dist', 'frontend_dist'),
 ]
 
 a = Analysis(

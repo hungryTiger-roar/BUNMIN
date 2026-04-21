@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLectureStore } from '@/stores/lectureStore'
-
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+import { API_BASE } from '@/lib/api'
 
 interface WebSocketMessage {
   type: string
@@ -14,6 +13,7 @@ export function useWebSocket(url: string, role: Role = 'student') {
   const socketRef = useRef<WebSocket | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const [isAudioUnlocked, setIsAudioUnlocked] = useState(false)
+  const isAudioUnlockedRef = useRef(false)  // stale closure 방지
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
   const audioContextRef = useRef<AudioContext | null>(null)
 
@@ -33,7 +33,7 @@ export function useWebSocket(url: string, role: Role = 'student') {
   // 슬라이드 페이지 로드
   const loadSlidePages = useCallback(async (slideId: string) => {
     try {
-      const response = await fetch(`${API_URL}/slides/pages/${slideId}`)
+      const response = await fetch(`${API_BASE}/slides/pages/${slideId}`)
       if (!response.ok) throw new Error('Failed to load slides')
 
       const data = await response.json()
@@ -55,7 +55,7 @@ export function useWebSocket(url: string, role: Role = 'student') {
         })
 
         // 오디오 재생 (잠금 해제된 경우에만)
-        if (data.audio && isAudioUnlocked) {
+        if (data.audio && isAudioUnlockedRef.current) {
           playAudio(data.audio as string)
         }
         break
@@ -150,16 +150,22 @@ export function useWebSocket(url: string, role: Role = 'student') {
       default:
         console.log('[WebSocket] 알 수 없는 메시지:', data.type)
     }
-  }, [role, addSubtitle, isAudioUnlocked, setSlideId, setSlideStatus, setCurrentPage, setLectureStarted, setPaused, setPresentationMode, setCurrentScreen, loadSlidePages])
+  }, [role, addSubtitle, setSlideId, setSlideStatus, setCurrentPage, setLectureStarted, setPaused, setPresentationMode, setCurrentScreen, loadSlidePages])
+
+  const send = useCallback((data: object) => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify(data))
+    } else {
+      console.warn('[WebSocket] 연결되지 않음')
+    }
+  }, [])
 
   const connect = useCallback(() => {
-    // 이미 연결 중이거나 연결된 경우 무시
     if (socketRef.current?.readyState === WebSocket.OPEN ||
         socketRef.current?.readyState === WebSocket.CONNECTING) {
       return
     }
 
-    // 기존 재연결 타이머 취소
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current)
       reconnectTimeoutRef.current = undefined
@@ -169,7 +175,6 @@ export function useWebSocket(url: string, role: Role = 'student') {
 
     socket.onopen = () => {
       console.log('[WebSocket] 연결됨')
-      // 역할 등록 메시지 전송
       socket.send(JSON.stringify({ type: 'register', role }))
       console.log(`[WebSocket] 역할 등록: ${role}`)
       setIsConnected(true)
@@ -181,7 +186,6 @@ export function useWebSocket(url: string, role: Role = 'student') {
       setIsConnected(false)
       setConnected(false)
 
-      // 3초 후 재연결 시도
       reconnectTimeoutRef.current = setTimeout(() => {
         console.log('[WebSocket] 재연결 시도...')
         connect()
@@ -226,25 +230,16 @@ export function useWebSocket(url: string, role: Role = 'student') {
     }
   }
 
-  const send = useCallback((data: object) => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify(data))
-    } else {
-      console.warn('[WebSocket] 연결되지 않음')
-    }
-  }, [])
-
-  // 오디오 재생 잠금 해제 (사용자 상호작용 필요)
   const unlockAudio = useCallback(() => {
     if (!audioContextRef.current) {
       audioContextRef.current = new AudioContext()
     }
-    // 무음 재생으로 오디오 잠금 해제
     const buffer = audioContextRef.current.createBuffer(1, 1, 22050)
     const source = audioContextRef.current.createBufferSource()
     source.buffer = buffer
     source.connect(audioContextRef.current.destination)
     source.start()
+    isAudioUnlockedRef.current = true
     setIsAudioUnlocked(true)
     console.log('[Audio] 재생 잠금 해제됨')
   }, [])

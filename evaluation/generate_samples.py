@@ -1,80 +1,16 @@
 """
 평가용 샘플 데이터 자동 생성 스크립트
 
-ASR: gTTS로 한국어 음성 WAV 파일 생성
 OCR: Pillow로 슬라이드 형태 PNG 이미지 생성
 
 사용법:
-    python evaluation/generate_samples.py          # 전체 생성
-    python evaluation/generate_samples.py --asr    # ASR만
-    python evaluation/generate_samples.py --ocr    # OCR만
+    python evaluation/generate_samples.py
 """
-import sys
 import json
 import argparse
 from pathlib import Path
 
-ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(ROOT))
-
-ASR_DIR = Path(__file__).parent / "datasets" / "asr_samples"
 OCR_DIR = Path(__file__).parent / "datasets" / "ocr_samples"
-
-# ──────────────────────────────────────────────
-# ASR 샘플 데이터 정의
-# ──────────────────────────────────────────────
-ASR_SAMPLES = [
-    {"file": "sample_01.wav", "text": "안녕하세요 오늘 강의를 시작하겠습니다"},
-    {"file": "sample_02.wav", "text": "이 그래프는 시간에 따른 변화를 보여줍니다"},
-    {"file": "sample_03.wav", "text": "머신러닝은 데이터를 통해 패턴을 학습합니다"},
-    {"file": "sample_04.wav", "text": "딥러닝은 여러 층의 신경망을 사용합니다"},
-    {"file": "sample_05.wav", "text": "질문 있으신 분 계신가요"},
-    {"file": "sample_06.wav", "text": "다음 슬라이드에서 자세히 설명하겠습니다"},
-    {"file": "sample_07.wav", "text": "모델의 정확도는 테스트 데이터셋으로 평가합니다"},
-    {"file": "sample_08.wav", "text": "과적합을 방지하기 위해 드롭아웃을 사용합니다"},
-    {"file": "sample_09.wav", "text": "학습률은 모델 훈련에서 중요한 하이퍼파라미터입니다"},
-    {"file": "sample_10.wav", "text": "오늘 배운 내용을 정리해 보겠습니다"},
-    {"file": "sample_11.wav", "text": "트랜스포머 모델은 자연어 처리에 혁신을 가져왔습니다"},
-    {"file": "sample_12.wav", "text": "어텐션 메커니즘은 중요한 부분에 집중하게 해줍니다"},
-    {"file": "sample_13.wav", "text": "전이 학습을 통해 적은 데이터로도 좋은 성능을 낼 수 있습니다"},
-    {"file": "sample_14.wav", "text": "경사 하강법은 손실 함수를 최소화하는 최적화 방법입니다"},
-    {"file": "sample_15.wav", "text": "배치 정규화는 훈련을 안정적으로 만들어 줍니다"},
-    {"file": "sample_16.wav", "text": "합성곱 신경망은 이미지 분류에 효과적입니다"},
-    {"file": "sample_17.wav", "text": "강화 학습은 보상을 통해 최적의 행동을 학습합니다"},
-    {"file": "sample_18.wav", "text": "데이터 증강 기법으로 모델 성능을 향상시킬 수 있습니다"},
-    {"file": "sample_19.wav", "text": "모델 압축 기법을 사용해 추론 속도를 높일 수 있습니다"},
-    {"file": "sample_20.wav", "text": "지식 증류는 큰 모델의 지식을 작은 모델에 전달합니다"},
-    {"file": "sample_21.wav", "text": "실시간 음성 인식을 위해 스트리밍 처리가 필요합니다"},
-    {"file": "sample_22.wav", "text": "웹소켓을 통해 데이터가 실시간으로 전송됩니다"},
-    {"file": "sample_23.wav", "text": "번역 결과는 원본 레이아웃에 오버레이됩니다"},
-    {"file": "sample_24.wav", "text": "OCR 엔진이 슬라이드의 텍스트를 자동으로 추출합니다"},
-    {"file": "sample_25.wav", "text": "외국인 학생도 강의 내용을 쉽게 이해할 수 있습니다"},
-    {"file": "sample_26.wav", "text": "이 시스템은 교육 접근성을 크게 향상시킵니다"},
-    {"file": "sample_27.wav", "text": "하이퍼파라미터 튜닝을 통해 최적의 설정을 찾습니다"},
-    {"file": "sample_28.wav", "text": "앙상블 방법은 여러 모델을 결합하여 성능을 높입니다"},
-    {"file": "sample_29.wav", "text": "재현성을 위해 랜덤 시드를 고정하는 것이 중요합니다"},
-    {"file": "sample_30.wav", "text": "감사합니다 이상으로 오늘 강의를 마치겠습니다"},
-    {"file": "sample_31.wav", "text": "손실 함수는 모델의 예측 오차를 나타냅니다"},
-    {"file": "sample_32.wav", "text": "역전파 알고리즘으로 가중치를 업데이트합니다"},
-    {"file": "sample_33.wav", "text": "소프트맥스 함수는 다중 클래스 분류에 사용됩니다"},
-    {"file": "sample_34.wav", "text": "임베딩은 단어를 고차원 벡터로 표현합니다"},
-    {"file": "sample_35.wav", "text": "사전 훈련된 모델을 파인튜닝하여 성능을 향상시킵니다"},
-    {"file": "sample_36.wav", "text": "객체 탐지 모델은 이미지에서 물체의 위치를 찾습니다"},
-    {"file": "sample_37.wav", "text": "이 수식은 확률 분포를 나타냅니다"},
-    {"file": "sample_38.wav", "text": "조기 종료는 과적합을 방지하는 효과적인 방법입니다"},
-    {"file": "sample_39.wav", "text": "클래스 불균형 문제는 오버샘플링으로 해결할 수 있습니다"},
-    {"file": "sample_40.wav", "text": "설명 가능한 AI는 모델의 결정 과정을 투명하게 합니다"},
-    {"file": "sample_41.wav", "text": "훈련 데이터와 검증 데이터를 분리해야 합니다"},
-    {"file": "sample_42.wav", "text": "아담 옵티마이저는 학습률을 자동으로 조정합니다"},
-    {"file": "sample_43.wav", "text": "혼합 정밀도 훈련은 메모리 사용량을 줄입니다"},
-    {"file": "sample_44.wav", "text": "파이프라인의 각 단계를 순서대로 살펴보겠습니다"},
-    {"file": "sample_45.wav", "text": "이 접근법의 장점은 낮은 계산 비용입니다"},
-    {"file": "sample_46.wav", "text": "마이크를 통해 강의자의 음성이 입력됩니다"},
-    {"file": "sample_47.wav", "text": "음성 합성 엔진이 번역된 텍스트를 음성으로 출력합니다"},
-    {"file": "sample_48.wav", "text": "지연 시간을 최소화하여 실시간 경험을 제공합니다"},
-    {"file": "sample_49.wav", "text": "벤치마크 데이터셋에서 최고 성능을 달성했습니다"},
-    {"file": "sample_50.wav", "text": "향후 연구에서는 다국어 지원을 확장할 예정입니다"},
-]
 
 # ──────────────────────────────────────────────
 # OCR 샘플 데이터 정의
@@ -384,94 +320,6 @@ OCR_SAMPLES = [
 
 
 # ──────────────────────────────────────────────
-# ASR WAV 생성
-# ──────────────────────────────────────────────
-def generate_asr_samples():
-    print("\n[ASR] 음성 샘플 생성 중...")
-
-    try:
-        import edge_tts
-    except ImportError:
-        print("[ASR] edge-tts 미설치: pip install edge-tts")
-        return
-
-    import asyncio
-    import subprocess
-    import tempfile
-    import os
-
-    # ffmpeg 경로 탐색
-    ffmpeg_candidates = [
-        "ffmpeg",  # PATH에 있을 경우
-        r"C:\Users\SSAFY\AppData\Roaming\vrew\ffmpeg_gpl_vgx_v3\ffmpeg.exe",
-        r"C:\Users\SSAFY\miniforge3\envs\computer_vision\Library\bin\ffmpeg.exe",
-        r"C:\Users\SSAFY\miniforge3\envs\nlp\Library\bin\ffmpeg.exe",
-    ]
-    ffmpeg_path = None
-    for candidate in ffmpeg_candidates:
-        try:
-            subprocess.run([candidate, "-version"], capture_output=True, check=True)
-            ffmpeg_path = candidate
-            print(f"  ffmpeg 경로: {ffmpeg_path}")
-            break
-        except Exception:
-            continue
-
-    if ffmpeg_path is None:
-        print("[ASR] ffmpeg를 찾을 수 없습니다. PATH에 ffmpeg를 추가하거나 경로를 확인하세요.")
-        return
-
-    ASR_DIR.mkdir(parents=True, exist_ok=True)
-    generated = []
-
-    async def synthesize(text: str, mp3_path: str):
-        communicate = edge_tts.Communicate(text, voice="ko-KR-SunHiNeural")
-        await communicate.save(mp3_path)
-
-    for sample in ASR_SAMPLES:
-        wav_path = ASR_DIR / sample["file"]
-
-        try:
-            # edge-tts로 MP3 생성 (임시 파일)
-            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-                mp3_path = tmp.name
-
-            asyncio.run(synthesize(sample["text"], mp3_path))
-
-            # ffmpeg으로 MP3 → WAV (16kHz, mono) 변환
-            subprocess.run([
-                ffmpeg_path, "-y", "-i", mp3_path,
-                "-ar", "16000", "-ac", "1", str(wav_path)
-            ], capture_output=True, check=True)
-
-            os.remove(mp3_path)
-
-            # 실제 duration 측정
-            import wave
-            with wave.open(str(wav_path)) as wf:
-                duration = wf.getnframes() / wf.getframerate()
-
-            generated.append({
-                "file": sample["file"],
-                "text": sample["text"],
-                "duration_sec": round(duration, 2),
-            })
-            print(f"  ✅ {sample['file']} ({duration:.1f}초)")
-
-        except subprocess.CalledProcessError:
-            print(f"  ❌ {sample['file']} 변환 실패 - ffmpeg가 설치되어 있는지 확인하세요")
-        except Exception as e:
-            print(f"  ❌ {sample['file']} 생성 실패: {e}")
-
-    # ground_truth.json 업데이트
-    gt_path = ASR_DIR / "ground_truth.json"
-    with open(gt_path, "w", encoding="utf-8") as f:
-        json.dump(generated, f, ensure_ascii=False, indent=2)
-
-    print(f"\n[ASR] {len(generated)}개 생성 완료 → {ASR_DIR}")
-
-
-# ──────────────────────────────────────────────
 # OCR PNG 생성
 # ──────────────────────────────────────────────
 def generate_ocr_samples():
@@ -485,11 +333,10 @@ def generate_ocr_samples():
 
     OCR_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 폰트 경로 탐색 (Windows 기본 한글 폰트)
     font_candidates = [
-        "C:/Windows/Fonts/malgun.ttf",    # 맑은 고딕
-        "C:/Windows/Fonts/gulim.ttc",     # 굴림
-        "C:/Windows/Fonts/batang.ttc",    # 바탕
+        "C:/Windows/Fonts/malgun.ttf",
+        "C:/Windows/Fonts/gulim.ttc",
+        "C:/Windows/Fonts/batang.ttc",
     ]
     font_path = next((p for p in font_candidates if Path(p).exists()), None)
 
@@ -499,14 +346,11 @@ def generate_ocr_samples():
         output_path = OCR_DIR / sample["file"]
 
         try:
-            # 슬라이드 크기 (1280x720)
             img = Image.new("RGB", (1280, 720), color=(255, 255, 255))
             draw = ImageDraw.Draw(img)
 
-            # 헤더 배경
             draw.rectangle([0, 0, 1280, 100], fill=(30, 80, 160))
 
-            # 폰트 설정
             if font_path:
                 font_title    = ImageFont.truetype(font_path, 42)
                 font_subtitle = ImageFont.truetype(font_path, 28)
@@ -514,27 +358,19 @@ def generate_ocr_samples():
             else:
                 font_title = font_subtitle = font_body = ImageFont.load_default()
 
-            # 제목
             draw.text((40, 25), sample["text"], font=font_title, fill=(255, 255, 255))
-
-            # 구분선
             draw.rectangle([40, 120, 1240, 123], fill=(30, 80, 160))
-
-            # 부제목
             draw.text((40, 140), sample["subtitle"], font=font_subtitle, fill=(50, 50, 50))
 
-            # 본문
             y = 210
             for line in sample["body"]:
                 draw.text((60, y), line, font=font_body, fill=(30, 30, 30))
                 y += 60
 
-            # 페이지 번호
             draw.text((1200, 690), sample["file"].replace(".png", ""), font=font_body, fill=(150, 150, 150))
 
             img.save(str(output_path), "PNG")
 
-            # OCR 정답 텍스트: 제목 + 부제목 + 본문 합산
             full_text = " ".join([sample["text"], sample["subtitle"]] + sample["body"])
             generated.append({"file": sample["file"], "text": full_text})
 
@@ -543,7 +379,6 @@ def generate_ocr_samples():
         except Exception as e:
             print(f"  ❌ {sample['file']} 생성 실패: {e}")
 
-    # ground_truth.json 업데이트
     gt_path = OCR_DIR / "ground_truth.json"
     with open(gt_path, "w", encoding="utf-8") as f:
         json.dump(generated, f, ensure_ascii=False, indent=2)
@@ -555,22 +390,14 @@ def generate_ocr_samples():
 # 메인
 # ──────────────────────────────────────────────
 def main():
-    parser = argparse.ArgumentParser(description="평가용 샘플 데이터 생성")
-    parser.add_argument("--asr", action="store_true", help="ASR 샘플만 생성")
-    parser.add_argument("--ocr", action="store_true", help="OCR 샘플만 생성")
-    args = parser.parse_args()
+    parser = argparse.ArgumentParser(description="평가용 OCR 샘플 데이터 생성")
+    parser.parse_args()
 
     print("=" * 50)
-    print("평가용 샘플 데이터 생성")
+    print("평가용 OCR 샘플 데이터 생성")
     print("=" * 50)
 
-    if args.asr:
-        generate_asr_samples()
-    elif args.ocr:
-        generate_ocr_samples()
-    else:
-        generate_asr_samples()
-        generate_ocr_samples()
+    generate_ocr_samples()
 
     print("\n완료.")
 

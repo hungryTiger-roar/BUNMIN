@@ -16,8 +16,15 @@ __pycache__/
 *.bin
 *.safetensors
 
+# 로그
+error_log.txt
+*.log
+
 # 업로드 파일
 uploads/
+
+# 슬라이드 임시 파일
+slides/
 
 # 환경변수
 .env

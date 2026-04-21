@@ -43,6 +43,6 @@ bert-score>=0.3.13
 # 평가 샘플 생성
 edge-tts>=6.1.0
 
-# GPU 지원 (CUDA)
-# torch는 기본 설치 시 CPU 버전
-# GPU 사용 시: pip install torch --index-url https://download.pytorch.org/whl/cu118
+# GPU 사용 시 torch를 CUDA 버전으로 재설치:
+# pip install torch --index-url https://download.pytorch.org/whl/cu121
+# 디바이스 설정은 프로젝트 루트 .env 파일에서 관리 (docs/setting/환경설정.md 참고)

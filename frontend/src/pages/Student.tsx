@@ -5,9 +5,7 @@ import { useWebSocket } from '@/hooks/useWebSocket'
 import SubtitleDisplay from '@/components/common/SubtitleDisplay'
 import ConnectionStatus from '@/components/common/ConnectionStatus'
 import ViewToggle from '@/components/student/ViewToggle'
-
-const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws/pipeline'
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
 
 function Student() {
   const navigate = useNavigate()
@@ -30,7 +28,7 @@ function Student() {
     setSubtitleOn,
   } = useLectureStore()
 
-  const { isConnected, isAudioUnlocked, connect, unlockAudio } = useWebSocket(WS_URL, 'student')
+  const { isConnected, isAudioUnlocked, connect, unlockAudio } = useWebSocket(WS_PIPELINE_URL, 'student')
 
   // 서버 연결
   useEffect(() => {
@@ -57,7 +55,7 @@ function Student() {
       return
     }
     if (!slideId) return
-    const url = `${API_URL}/slides/download/${slideId}?type=${type}`
+    const url = `${API_BASE}/slides/download/${slideId}?type=${type}`
     window.open(url, '_blank')
   }
 
@@ -176,7 +174,7 @@ function Student() {
               <>
                 {/* 슬라이드 이미지 */}
                 <img
-                  src={`${API_URL}${currentSlideImage}`}
+                  src={`${API_BASE}${currentSlideImage}`}
                   alt={`슬라이드 ${currentPage}`}
                   className="w-full h-full object-contain"
                 />

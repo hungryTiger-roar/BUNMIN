@@ -3,7 +3,6 @@
 PDF 업로드 및 전처리 (OCR + 번역)
 """
 import asyncio
-import hashlib
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -53,7 +52,7 @@ class SlideStatus(BaseModel):
 class OverlayItem(BaseModel):
     original: str
     translated: str
-    bbox: list
+    bbox: Optional[list]
     confidence: float
 
 
@@ -174,24 +173,6 @@ async def download_slide(slide_id: str, type: str = "original"):
         raise HTTPException(400, "type은 'original' 또는 'translated'여야 합니다")
 
 
-@router.get("/page/{slide_id}/{page_number}")
-async def get_page(slide_id: str, page_number: int) -> PageData:
-    """특정 페이지 데이터 조회"""
-    if slide_id not in slide_data:
-        raise HTTPException(404, "슬라이드를 찾을 수 없습니다")
-
-    pages = slide_data[slide_id]
-    if page_number < 0 or page_number >= len(pages):
-        raise HTTPException(404, "페이지를 찾을 수 없습니다")
-
-    page = pages[page_number]
-    return PageData(
-        pageNumber=page["page_number"] + 1,
-        imageUrl=f"/slides/image/{slide_id}/{page['page_number']}",
-        ocrText=page.get("ocr_text"),
-    )
-
-
 async def process_slide(slide_id: str, pdf_path: Path):
     """
     슬라이드 전처리 (백그라운드)
@@ -212,9 +193,6 @@ async def process_slide(slide_id: str, pdf_path: Path):
             image_path = IMAGES_DIR / f"{slide_id}_{i}.png"
             with open(image_path, "wb") as f:
                 f.write(image_bytes)
-
-            # 이미지 해시 (페이지 매칭용)
-            image_hash = compute_image_hash(image_bytes)
 
             # OCR + 번역 (서비스가 있을 때만)
             ocr_text = None
@@ -242,7 +220,9 @@ async def process_slide(slide_id: str, pdf_path: Path):
                                 _nmt_service.translate, text
                             )
                             raw_bbox = item["bbox"]
-                            if len(raw_bbox) == 4:
+                            if raw_bbox is None:
+                                bbox = None
+                            elif len(raw_bbox) == 4:
                                 bbox = [
                                     raw_bbox[0][0], raw_bbox[0][1],
                                     raw_bbox[2][0], raw_bbox[2][1],
@@ -262,7 +242,6 @@ async def process_slide(slide_id: str, pdf_path: Path):
             # 저장
             slide_data[slide_id].append({
                 "page_number": i,
-                "image_hash": image_hash,
                 "ocr_text": ocr_text,
                 "overlay_items": overlay_items,
             })
@@ -299,7 +278,3 @@ def pdf_to_images(pdf_path: Path) -> list[bytes]:
     return images
 
 
-def compute_image_hash(image_bytes: bytes) -> str:
-    """이미지 해시 계산 (페이지 매칭용)"""
-    # 간단한 MD5 해시 (실제로는 pHash 등 사용 권장)
-    return hashlib.md5(image_bytes).hexdigest()[:16]
