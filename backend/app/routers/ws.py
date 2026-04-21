@@ -313,6 +313,9 @@ async def process_audio(message: dict):
         )
         print(f"[NMT] {english_text}")
 
+        if not english_text.strip():
+            return
+
         # TTS: 영어 텍스트 → 음성
         audio_output = await asyncio.to_thread(
             _tts_service.synthesize, english_text

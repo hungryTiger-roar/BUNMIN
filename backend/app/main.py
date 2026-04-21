@@ -60,7 +60,10 @@ def _start_health_thread(port: int = 18765):
 
 def _is_cached(model_name: str) -> bool:
     """HuggingFace 캐시에 모델이 완전히 있는지 확인.
-    incomplete 파일이 있거나 모델 가중치(10MB 이상 파일)가 없으면 False."""
+    incomplete 파일이 있거나 모델 가중치(10MB 이상 파일)가 없으면 False.
+    'piper' 등 HF 외 모델은 True로 처리 (서비스 자체에서 다운로드)."""
+    if "/" not in model_name:
+        return True
     try:
         from huggingface_hub import scan_cache_dir
         from pathlib import Path
@@ -227,6 +230,7 @@ def _load_models_sync():
         nmt_service = NMTService(
             model_name=ModelConfig.NMT_MODEL,
             device=ModelConfig.NMT_DEVICE,
+            dtype=ModelConfig.NMT_DTYPE,
         )
         ws.set_nmt_service(nmt_service)
         slides.set_nmt_service(nmt_service)
@@ -341,7 +345,7 @@ app.include_router(ws.router)
 app.include_router(slides.router)
 
 
-@app.get("/health", tags=["Health"])
+@app.api_route("/health", methods=["GET", "HEAD"], tags=["Health"])
 async def health():
     return _model_status
 

@@ -15,8 +15,30 @@ import argparse
 import importlib
 
 # conda aunion 환경 검사 — 잘못된 Python으로 실행 시 자동 재실행
-_AUNION_PYTHON = r"C:\Users\SSAFY\miniforge3\envs\aunion\python.exe"
-if os.path.isfile(_AUNION_PYTHON) and _AUNION_PYTHON.lower() not in sys.executable.lower():
+def _find_aunion_python() -> str | None:
+    """aunion conda 환경의 Python 경로를 동적으로 탐색."""
+    from pathlib import Path
+    # 1. 환경변수로 명시적 지정 가능
+    env_path = os.environ.get("AUNION_PYTHON")
+    if env_path and os.path.isfile(env_path):
+        return env_path
+    # 2. 일반적인 conda 설치 경로 탐색 (Windows)
+    bases = [
+        Path.home() / "miniforge3",
+        Path.home() / "miniconda3",
+        Path.home() / "anaconda3",
+        Path("C:/ProgramData/miniforge3"),
+        Path("C:/ProgramData/miniconda3"),
+        Path("C:/ProgramData/anaconda3"),
+    ]
+    for base in bases:
+        py = base / "envs" / "aunion" / "python.exe"
+        if py.exists():
+            return str(py)
+    return None
+
+_AUNION_PYTHON = _find_aunion_python()
+if _AUNION_PYTHON and _AUNION_PYTHON.lower() not in sys.executable.lower():
     import subprocess
     # -E: PYTHON* 환경변수 무시, -s: user site-packages 제외 → Windows Store Python 격리
     clean_env = {k: v for k, v in os.environ.items()

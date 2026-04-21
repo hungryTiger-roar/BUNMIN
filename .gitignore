@@ -21,6 +21,9 @@ node_modules/
 *.pt
 *.pth
 
+# TTS 자동 다운로드 모델 파일
+backend/app/services/models/
+
 # 업로드 파일 (슬라이드, 이미지) — 루트 기준 실행 시 생성됨
 uploads/
 # 백엔드 디렉토리에서 직접 실행 시 잘못 생성되는 경로
@@ -41,6 +44,7 @@ htmlcov/
 
 # 평가
 evaluation/datasets/
+evaluation/datasets.zip
 evaluation/results/
 
 # IDE
@@ -53,6 +57,7 @@ Thumbs.db
 
 # 평가용 다운로드 PDF
 evaluation/pdfs/
+evaluation/datasets/ocr_pdfs/
 
 # Claude
 .claude/

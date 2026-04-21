@@ -230,6 +230,8 @@ async def process_slide(slide_id: str, pdf_path: Path):
                             else:
                                 bbox = raw_bbox
 
+                            if not translated.strip():
+                                continue
                             overlay_items.append({
                                 "original": text,
                                 "translated": translated,

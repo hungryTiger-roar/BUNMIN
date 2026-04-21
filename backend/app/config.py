@@ -19,11 +19,9 @@ else:
 
 # 기본 경로
 CACHE_DIR = APP_DATA_DIR / "cache"
-SLIDES_DIR = APP_DATA_DIR / "slides"
 
 # 디렉토리 생성
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
-SLIDES_DIR.mkdir(parents=True, exist_ok=True)
 
 # HuggingFace 설정
 os.environ.setdefault("HF_HOME", str(CACHE_DIR / "huggingface"))
@@ -78,16 +76,21 @@ def _dtype(device: str) -> str:
     return "float16" if device == "cuda" else "float32"
 
 
-class ModelConfig:
-    ASR_MODEL  = os.environ.get("ASR_MODEL",  "ghost613/faster-whisper-large-v3-turbo-korean")
-    ASR_DEVICE = _resolve_device("ASR_DEVICE", "asr")
-    ASR_DTYPE  = _dtype(ASR_DEVICE)
+def _asr_dtype(device: str) -> str:
+    # bfloat16 required: model uses -1e9 as attention mask fill which overflows float16
+    return "bfloat16" if device == "cuda" else "float32"
 
-    NMT_MODEL  = os.environ.get("NMT_MODEL",  "Helsinki-NLP/opus-mt-ko-en")
+
+class ModelConfig:
+    ASR_MODEL  = os.environ.get("ASR_MODEL",  "CohereLabs/cohere-transcribe-03-2026")
+    ASR_DEVICE = _resolve_device("ASR_DEVICE", "asr")
+    ASR_DTYPE  = _asr_dtype(ASR_DEVICE)
+
+    NMT_MODEL  = os.environ.get("NMT_MODEL",  "tencent/HY-MT1.5-1.8B")
     NMT_DEVICE = _resolve_device("NMT_DEVICE", "nmt")
     NMT_DTYPE  = _dtype(NMT_DEVICE)
 
-    TTS_MODEL  = os.environ.get("TTS_MODEL",  "facebook/mms-tts-eng")
+    TTS_MODEL  = os.environ.get("TTS_MODEL",  "piper")
     TTS_DEVICE = _resolve_device("TTS_DEVICE", "tts")
 
     OCR_MODEL  = os.environ.get("OCR_MODEL",  "rapidocr")
