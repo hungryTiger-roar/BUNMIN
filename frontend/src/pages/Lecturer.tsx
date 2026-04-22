@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react'
+import { useEffect, useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
@@ -8,10 +8,12 @@ import SubtitleDisplay from '@/components/common/SubtitleDisplay'
 import SlideUpload from '@/components/lecturer/SlideUpload'
 import SlideViewer from '@/components/lecturer/SlideViewer'
 import ConnectionStatus from '@/components/common/ConnectionStatus'
-import { WS_PIPELINE_URL } from '@/lib/api'
+import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
 
 function Lecturer() {
   const navigate = useNavigate()
+  const [shareUrl, setShareUrl] = useState('')
+  const [copied, setCopied] = useState(false)
 
   const {
     isMicOn,
@@ -63,6 +65,19 @@ function Lecturer() {
   useEffect(() => {
     connect()
   }, [connect])
+
+  // 수강자 초대 링크 생성
+  useEffect(() => {
+    fetch(`${API_BASE}/network/info`)
+      .then((res) => res.json())
+      .then((data) => {
+        // Electron: 프론트가 백엔드에서 서빙되므로 백엔드 포트 사용
+        // Dev: Vite 개발 서버 포트(window.location.port) 사용
+        const port = window.location.port || data.port
+        setShareUrl(`http://${data.lan_ip}:${port}/#/student/start`)
+      })
+      .catch(() => {})
+  }, [])
 
   // 슬라이드 선택 시 서버에 알림
   useEffect(() => {
@@ -328,6 +343,30 @@ function Lecturer() {
               </p>
             )}
           </div>
+
+          {/* 수강자 초대 링크 */}
+          {shareUrl && (
+            <div className="bg-white rounded-xl p-4 shadow-sm">
+              <h3 className="text-sm font-medium text-slate-500 mb-3">수강자 초대 링크</h3>
+              <p className="text-xs text-slate-400 break-all bg-slate-50 rounded-lg px-3 py-2 mb-2">
+                {shareUrl}
+              </p>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(shareUrl)
+                  setCopied(true)
+                  setTimeout(() => setCopied(false), 2000)
+                }}
+                className={`w-full py-2 rounded-lg text-sm font-medium transition-colors ${
+                  copied
+                    ? 'bg-green-500 text-white'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                }`}
+              >
+                {copied ? '복사됨!' : '링크 복사'}
+              </button>
+            </div>
+          )}
 
           {/* 상태 표시 */}
           <div className="bg-white rounded-xl p-4 shadow-sm">

@@ -14,6 +14,14 @@ interface SlidePage {
 }
 
 interface LectureState {
+  // 수강자 이름
+  studentName: string
+  setStudentName: (name: string) => void
+
+  // 현재 접속 중인 수강자 수 (서버가 student_count 메시지를 보낼 때 갱신)
+  studentCount: number
+  setStudentCount: (count: number) => void
+
   // 연결 상태
   isConnected: boolean
   setConnected: (connected: boolean) => void
@@ -74,6 +82,8 @@ interface LectureState {
 }
 
 const initialState = {
+  studentName: '',
+  studentCount: 0,
   isConnected: false,
   isMicOn: false,
   isLectureStarted: false,
@@ -98,6 +108,10 @@ const initialState = {
 
 export const useLectureStore = create<LectureState>((set, get) => ({
   ...initialState,
+
+  // 수강자 이름
+  setStudentName: (name) => set({ studentName: name }),
+  setStudentCount: (count) => set({ studentCount: count }),
 
   // 연결 상태
   setConnected: (connected) => set({ isConnected: connected }),

@@ -82,6 +82,13 @@ class ConnectionManager:
         for ws in disconnected:
             self.disconnect_student(ws)
 
+    async def broadcast_student_count(self):
+        """현재 접속 중인 수강자 수를 모든 수강자에게 전송"""
+        await self.broadcast_to_students({
+            "type": "student_count",
+            "count": len(self.students),
+        })
+
 
 manager = ConnectionManager()
 
@@ -162,6 +169,7 @@ async def websocket_pipeline(websocket: WebSocket):
             manager.students.append(websocket)
             print(f"[WS] 수강자 연결됨 (총 {len(manager.students)}명)")
             await websocket.send_json({"type": "registered", "role": "student"})
+            await manager.broadcast_student_count()
             # 현재 강의 상태 즉시 전송
             if manager.is_lecture_started:
                 await websocket.send_json({
@@ -192,6 +200,7 @@ async def websocket_pipeline(websocket: WebSocket):
             manager.disconnect_lecturer()
         elif role == "student":
             manager.disconnect_student(websocket)
+            await manager.broadcast_student_count()
 
 
 async def handle_lecturer(websocket: WebSocket):
@@ -312,6 +321,7 @@ async def handle_student(websocket: WebSocket):
 
     except WebSocketDisconnect:
         manager.disconnect_student(websocket)
+        await manager.broadcast_student_count()
 
 
 async def process_audio(message: dict):

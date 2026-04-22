@@ -58,6 +58,10 @@ export default defineConfig({
         target: backendUrl,
         changeOrigin: true,
       },
+      '/network': {
+        target: backendUrl,
+        changeOrigin: true,
+      },
       '/ws': {
         target: backendWsUrl,
         ws: true,
