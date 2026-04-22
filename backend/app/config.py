@@ -86,9 +86,13 @@ class ModelConfig:
     ASR_DEVICE = _resolve_device("ASR_DEVICE", "asr")
     ASR_DTYPE  = _asr_dtype(ASR_DEVICE)
 
-    NMT_MODEL  = os.environ.get("NMT_MODEL",  "facebook/nllb-200-distilled-1.3B")
-    NMT_DEVICE = _resolve_device("NMT_DEVICE", "nmt")
-    NMT_DTYPE  = _dtype(NMT_DEVICE)
+    NMT_ASR_MODEL  = os.environ.get("NMT_ASR_MODEL", "facebook/nllb-200-distilled-1.3B")
+    NMT_ASR_DEVICE = _resolve_device("NMT_ASR_DEVICE", "nmt_asr")
+    NMT_ASR_DTYPE  = _dtype(NMT_ASR_DEVICE)
+
+    NMT_OCR_MODEL  = os.environ.get("NMT_OCR_MODEL", "tencent/HY-MT1.5-1.8B")
+    NMT_OCR_DEVICE = _resolve_device("NMT_OCR_DEVICE", "nmt_ocr")
+    NMT_OCR_DTYPE  = _dtype(NMT_OCR_DEVICE)
 
     TTS_MODEL  = os.environ.get("TTS_MODEL",  "piper")
     TTS_DEVICE = _resolve_device("TTS_DEVICE", "tts")

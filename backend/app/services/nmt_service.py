@@ -67,8 +67,8 @@ class NMTService:
 
             self.model.eval()
             print(f"[NMT] {self.model_name} 로드 완료 ({self.dtype}, {self.device})")
-        except ImportError:
-            raise RuntimeError("Transformers가 설치되지 않았습니다")
+        except ImportError as e:
+            raise RuntimeError(f"필요한 패키지가 설치되지 않았습니다: {e}")
 
     def translate(
         self,
@@ -137,4 +137,10 @@ class NMTService:
     ) -> list[str]:
         if not texts:
             return []
-        return [self.translate(t, source_lang, target_lang) for t in texts]
+        results = []
+        total = len(texts)
+        for i, t in enumerate(texts, 1):
+            results.append(self.translate(t, source_lang, target_lang))
+            if total > 1 and (i % 10 == 0 or i == total):
+                print(f"  번역 진행: {i}/{total}", flush=True)
+        return results
