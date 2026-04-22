@@ -2,6 +2,106 @@
 @tailwind components;
 @tailwind utilities;
 
+@font-face {
+  font-family: 'Pretendard';
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-Thin.woff2') format('woff2');
+  font-weight: 100;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Pretendard';
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-ExtraLight.woff2') format('woff2');
+  font-weight: 200;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Pretendard';
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-Light.woff2') format('woff2');
+  font-weight: 300;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Pretendard';
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Pretendard';
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Pretendard';
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Pretendard';
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Pretendard';
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-ExtraBold.woff2') format('woff2');
+  font-weight: 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Pretendard';
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-Black.woff2') format('woff2');
+  font-weight: 900;
+  font-display: swap;
+}
+
+@layer base {
+  :root {
+    /* Light Mode Colors (LightColorScheme) */
+    --color-primary: #6495EB;
+    --color-secondary: #1F1B17;
+    --color-tertiary: #1F1B17;
+    --color-primary-container: #F1EEE9;
+    --color-background: #FBFBFB;
+    --color-on-background: #1F1B17;
+    --color-surface: #FFFFFF;
+    --color-on-surface: #1F1B17;
+    --color-on-primary: #FFFFFF;
+    --color-error: #B3261E;
+
+    /* Gradient Colors */
+    --color-gradient-blue: #7DB3FF;
+    --color-gradient-purple: #C0A4D6;
+
+    /* Theme에 매핑되지 않았지만 Color.kt에 선언된 공통/기타 색상 */
+    --color-find-id: #2E2E2E;
+  }
+
+  .dark {
+    /* Dark Mode Colors (DarkColorScheme) */
+    --color-primary: #6495EB; /* LoginButton (Light/Dark 동일) */
+    --color-secondary: #E9E3DC;
+    --color-tertiary: #E9E3DC;
+    --color-primary-container: #2A262B;
+    --color-background: #151214;
+    --color-on-background: #E9E3DC;
+    --color-surface: #1F1B1D;
+    --color-on-surface: #E9E3DC;
+    --color-on-primary: #FFFFFF; /* LightSurfaceColor 사용 */
+    --color-error: #F2B8B5;
+  }
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -10,8 +110,8 @@
 
 body {
   font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background-color: #f8fafc;
-  color: #1e293b;
+  background-color: var(--color-background);
+  color: var(--color-on-background);
 }
 
 /* 스크롤바 스타일 */
@@ -21,14 +121,14 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f5f9;
+  background: var(--color-primary-container);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: var(--color-tertiary);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: var(--color-primary);
 }

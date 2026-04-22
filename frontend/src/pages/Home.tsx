@@ -4,12 +4,12 @@ function Home() {
   const navigate = useNavigate()
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-50 to-slate-100">
+    <div className="min-h-screen flex flex-col items-center justify-center bg-home-gradient [background-size:800%_800%] animate-gradient-shift">
       <div className="text-center mb-12">
-        <h1 className="text-4xl font-bold text-slate-800 mb-3">
-          Aunion AI
+        <h1 className="text-4xl font-special-gothic text-onPrimary mb-3">
+          Aunion AI LECTURE
         </h1>
-        <p className="text-slate-500 text-lg">
+        <p className="text-onPrimary/80 text-lg">
           실시간 AI 강의 번역 시스템
         </p>
       </div>
@@ -17,7 +17,7 @@ function Home() {
       <div className="flex flex-col gap-4 w-80">
         <button
           onClick={() => navigate('/lecturer')}
-          className="w-full py-4 px-6 bg-primary-600 hover:bg-primary-700 text-white font-medium rounded-xl transition-colors shadow-lg shadow-primary-600/20"
+          className="w-full py-4 px-6 bg-primary hover:opacity-90 text-onPrimary font-medium rounded-xl transition-all shadow-lg shadow-primary/20"
         >
           <div className="flex items-center justify-center gap-3">
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -29,7 +29,7 @@ function Home() {
 
         <button
           onClick={() => navigate('/student')}
-          className="w-full py-4 px-6 bg-white hover:bg-slate-50 text-slate-700 font-medium rounded-xl transition-colors border border-slate-200 shadow-sm"
+          className="w-full py-4 px-6 bg-surface hover:bg-primaryContainer text-onSurface font-medium rounded-xl transition-colors border border-tertiary/20 shadow-sm"
         >
           <div className="flex items-center justify-center gap-3">
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -40,8 +40,8 @@ function Home() {
         </button>
       </div>
 
-      <p className="mt-12 text-sm text-slate-400">
-        한국어 강의를 실시간으로 영어로 번역합니다
+      <p className="mt-12 text-sm text-onPrimary/70">
+        Aunion AI X 번역의 민족
       </p>
     </div>
   )
