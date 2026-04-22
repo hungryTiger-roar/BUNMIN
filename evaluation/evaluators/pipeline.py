@@ -10,6 +10,7 @@ if hasattr(sys.stdout, "reconfigure"):
 import io
 import json
 import wave
+from datetime import datetime
 from pathlib import Path
 
 from evaluation.metrics.wer import compute_avg_wer
@@ -40,8 +41,16 @@ def eval_realtime_pipeline() -> dict:
         return {"skipped": True, "reason": "no_audio_files"}
 
     asr_service = ASRService(model_name=ModelConfig.ASR_MODEL, device=ModelConfig.ASR_DEVICE, dtype=ModelConfig.ASR_DTYPE)
-    nmt_service = NMTService(model_name=ModelConfig.NMT_MODEL, device=ModelConfig.NMT_DEVICE, dtype=ModelConfig.NMT_DTYPE)
+    nmt_service = NMTService(model_name=ModelConfig.NMT_ASR_MODEL, device=ModelConfig.NMT_ASR_DEVICE, dtype=ModelConfig.NMT_ASR_DTYPE)
     tts_service = TTSService(model_name=ModelConfig.TTS_MODEL, device=ModelConfig.TTS_DEVICE)
+
+    # 출력 디렉토리 생성
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = Path(__file__).parent.parent / "results" / "pipeline_outputs" / timestamp
+    output_dir.mkdir(parents=True, exist_ok=True)
+    tts_dir = output_dir / "tts_audio"
+    tts_dir.mkdir(exist_ok=True)
+    print(f"  [출력] 결과 저장 경로: {output_dir}")
 
     wer_pairs = []
     asr_latencies_ms = []
@@ -63,20 +72,23 @@ def eval_realtime_pipeline() -> dict:
         wer_pairs.append((sample["text"], korean_text))
         print(f"  [ASR {sample['file']}] {t_asr['elapsed']*1000:.0f}ms → {korean_text[:40]}")
 
-    # 2단계: NMT 배치 번역
-    print(f"\n  [NMT] 배치 번역 중 ({len(korean_texts)}개)...")
-    valid_texts = [t if t.strip() else " " for t in korean_texts]
-    with timer() as t_nmt_batch:
-        english_texts = nmt_service.translate_batch(valid_texts)
-    nmt_total_ms = t_nmt_batch["elapsed"] * 1000
-    nmt_per_ms = nmt_total_ms / len(korean_texts)
-    nmt_latencies_ms = [nmt_per_ms] * len(korean_texts)
+    # 2단계: NMT 개별 번역 (발화당 실제 지연시간 측정)
+    print(f"\n  [NMT] 개별 번역 중 ({len(korean_texts)}개)...")
+    english_texts = []
+    for i, text in enumerate(korean_texts):
+        valid_text = text if text.strip() else " "
+        with timer() as t_nmt:
+            result = nmt_service.translate_batch([valid_text])
+        nmt_latencies_ms.append(t_nmt["elapsed"] * 1000)
+        english_texts.append(result[0])
+        print(f"  [NMT {i+1}/{len(korean_texts)}] {t_nmt['elapsed']*1000:.0f}ms → {result[0][:40]}")
 
     gt_texts = [s["text"] for s in wav_samples]
     ref_translations = nmt_service.translate_batch(gt_texts)
     hyp_translations = english_texts
 
     # 3단계: TTS 전체 순차 실행
+    text_results = []
     for i, (sample, english_text) in enumerate(zip(wav_samples, english_texts)):
         with timer() as t_tts:
             audio_output = tts_service.synthesize(english_text) if english_text.strip() else tts_service._create_silence(0.1)
@@ -90,11 +102,35 @@ def eval_realtime_pipeline() -> dict:
             actual_duration = len(english_text.split()) / 2.5
         tts_rtf_list.append(compute_rtf(t_tts["elapsed"], actual_duration))
 
-        pipeline_ms = asr_latencies_ms[i] + nmt_per_ms + tts_ms
+        pipeline_ms = asr_latencies_ms[i] + nmt_latencies_ms[i] + tts_ms
         pipeline_latencies_ms.append(pipeline_ms)
 
-        print(f"  [{sample['file']}] ASR={asr_latencies_ms[i]:.0f}ms | NMT={nmt_per_ms:.0f}ms | TTS={tts_ms:.0f}ms | 합계={pipeline_ms:.0f}ms")
+        # TTS 음성 파일 저장
+        stem = Path(sample["file"]).stem
+        tts_wav_path = tts_dir / f"{stem}_tts.wav"
+        tts_wav_path.write_bytes(audio_output)
+
+        # 텍스트 결과 누적
+        text_results.append({
+            "file": sample["file"],
+            "gt_ko": sample["text"],
+            "asr_ko": korean_texts[i],
+            "nmt_en": english_text,
+            "asr_ms": round(asr_latencies_ms[i], 1),
+            "nmt_ms": round(nmt_latencies_ms[i], 1),
+            "tts_ms": round(tts_ms, 1),
+            "pipeline_ms": round(pipeline_ms, 1),
+        })
+
+        print(f"  [{sample['file']}] ASR={asr_latencies_ms[i]:.0f}ms | NMT={nmt_latencies_ms[i]:.0f}ms | TTS={tts_ms:.0f}ms | 합계={pipeline_ms:.0f}ms")
         print(f"    NMT: {english_text[:60]}")
+
+    # 텍스트 결과 JSON 저장
+    text_output_path = output_dir / "transcriptions.json"
+    with open(text_output_path, "w", encoding="utf-8") as f:
+        json.dump(text_results, f, ensure_ascii=False, indent=2)
+    print(f"\n  [출력] 텍스트 결과 저장: {text_output_path}")
+    print(f"  [출력] TTS 음성 저장: {tts_dir} ({len(text_results)}개)")
 
     wer_result = compute_avg_wer(wer_pairs)
     bleu_result = compute_avg_bleu(list(zip(ref_translations, hyp_translations)))
@@ -115,7 +151,7 @@ def eval_realtime_pipeline() -> dict:
     result = {
         "models": {
             "asr": ModelConfig.ASR_MODEL,
-            "nmt": ModelConfig.NMT_MODEL,
+            "nmt_asr": ModelConfig.NMT_ASR_MODEL,
             "tts": "piper-tts",
         },
         "quality": {
@@ -167,7 +203,7 @@ def eval_ocr_nmt() -> dict:
         return {"skipped": True, "reason": "no_image_files"}
 
     ocr_service = OCRService()
-    nmt_service = NMTService(model_name=ModelConfig.NMT_MODEL, device=ModelConfig.NMT_DEVICE, dtype=ModelConfig.NMT_DTYPE)
+    nmt_service = NMTService(model_name=ModelConfig.NMT_OCR_MODEL, device=ModelConfig.NMT_OCR_DEVICE, dtype=ModelConfig.NMT_OCR_DTYPE)
 
     cer_pairs = []
     ocr_latencies_ms = []
@@ -188,22 +224,24 @@ def eval_ocr_nmt() -> dict:
 
         print(f"  [OCR {sample['file']}] {ocr_ms:.0f}ms | extracted: {ocr_text[:40] or '(none)'}")
 
-    # Step 2: NMT 배치 번역
-    valid_ocr_texts = [t if t.strip() else " " for t in ocr_texts]
-    print(f"  [NMT] batch translating ({len(valid_ocr_texts)} samples)...")
-    with timer() as t_nmt_batch:
-        hyp_translations = nmt_service.translate_batch(valid_ocr_texts)
-    nmt_total_ms = t_nmt_batch["elapsed"] * 1000
-    nmt_per_ms = nmt_total_ms / len(image_samples)
-    nmt_latencies_ms = [nmt_per_ms] * len(image_samples)
+    # Step 2: NMT 개별 번역 (슬라이드당 실제 지연시간 측정)
+    print(f"  [NMT] 개별 번역 중 ({len(ocr_texts)}개)...")
+    hyp_translations = []
+    nmt_latencies_ms = []
+    for i, text in enumerate(ocr_texts):
+        valid_text = text if text.strip() else " "
+        with timer() as t_nmt:
+            result = nmt_service.translate_batch([valid_text])
+        nmt_latencies_ms.append(t_nmt["elapsed"] * 1000)
+        hyp_translations.append(result[0])
 
     gt_texts = [s["text"] if s["text"].strip() else " " for s in image_samples]
     ref_translations = nmt_service.translate_batch(gt_texts)
 
-    pipeline_latencies_ms = [ocr_ms + nmt_per_ms for ocr_ms in ocr_latencies_ms]
+    pipeline_latencies_ms = [ocr_ms + nmt_ms for ocr_ms, nmt_ms in zip(ocr_latencies_ms, nmt_latencies_ms)]
 
     for i, (sample, ocr_text, translated) in enumerate(zip(image_samples, ocr_texts, hyp_translations)):
-        print(f"  [{sample['file']}] OCR={ocr_latencies_ms[i]:.0f}ms | NMT={nmt_per_ms:.0f}ms")
+        print(f"  [{sample['file']}] OCR={ocr_latencies_ms[i]:.0f}ms | NMT={nmt_latencies_ms[i]:.0f}ms")
         print(f"    translated: {translated[:60] or '(none)'}")
 
     cer_result = compute_avg_cer(cer_pairs)
@@ -221,7 +259,7 @@ def eval_ocr_nmt() -> dict:
 
     result = {
         "ocr_model": ocr_service.mode,
-        "nmt_model": ModelConfig.NMT_MODEL,
+        "nmt_model": ModelConfig.NMT_OCR_MODEL,
         "quality": {
             "ocr_cer": round(cer_result["avg_cer"], 4),
             "pipeline_bleu": round(bleu_result["avg_bleu"] * 100, 2),

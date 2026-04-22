@@ -58,12 +58,14 @@ pip install torch --index-url https://download.pytorch.org/whl/cu124
 HF_TOKEN=hf_xxxxxxxxxxxx
 
 ASR_MODEL=CohereLabs/cohere-transcribe-03-2026
-NMT_MODEL=tencent/HY-MT1.5-1.8B
+NMT_ASR_MODEL=facebook/nllb-200-distilled-1.3B
+NMT_OCR_MODEL=tencent/HY-MT1.5-1.8B
 TTS_MODEL=piper
 OCR_MODEL=rapidocr
 
 ASR_DEVICE=cuda
-NMT_DEVICE=cuda
+NMT_ASR_DEVICE=cuda
+NMT_OCR_DEVICE=cuda
 TTS_DEVICE=cpu
 OCR_DEVICE=cpu
 ```

@@ -1,10 +1,11 @@
 """
-BLEU / METEOR / BERTScore 계산
+BLEU / METEOR / BERTScore / COMET-22 계산
 NMT 품질 평가 지표
 
 - BLEU: 단어 n-gram 일치율 (표준 베이스라인)
 - METEOR: 동의어·어간 고려한 일치율
-- BERTScore: 의미 기반 유사도 (가장 사람 평가와 상관관계 높음)
+- BERTScore: 의미 기반 유사도
+- XCOMET-XL: 소스 문장까지 참조, 사람 평가와 상관관계 가장 높음
 """
 import math
 from collections import Counter
@@ -167,4 +168,44 @@ def compute_bertscore(references: list[str], hypotheses: list[str]) -> dict:
         return {"skipped": True, "reason": "bert-score not installed"}
     except Exception as e:
         print(f"[BERTScore] 오류: {e}")
+        return {"skipped": True, "reason": str(e)}
+
+
+# ──────────────────────────────────────────────
+# COMET-22
+# ──────────────────────────────────────────────
+def compute_comet(sources: list[str], hypotheses: list[str], references: list[str], gpus: int = 0) -> dict:
+    """
+    COMET-22 계산 (unbabel-comet 사용)
+    소스 문장까지 참조 — 사람 평가와 상관관계 가장 높음
+
+    Returns:
+        {"avg_score": float, "per_sample": [float, ...]}
+    """
+    try:
+        from huggingface_hub import snapshot_download
+        from comet import load_from_checkpoint
+
+        print("[XCOMET-XL] 모델 로드 중...")
+        model_path = snapshot_download(repo_id="Unbabel/XCOMET-XL")
+        ckpt_path = f"{model_path}/checkpoints/model.ckpt"
+        model = load_from_checkpoint(ckpt_path)
+
+        data = [
+            {"src": src, "mt": mt, "ref": ref}
+            for src, mt, ref in zip(sources, hypotheses, references)
+        ]
+        output = model.predict(data, batch_size=8, gpus=gpus)
+        scores = output.scores
+
+        return {
+            "avg_score": round(sum(scores) / len(scores), 4),
+            "per_sample": [round(s, 4) for s in scores],
+        }
+
+    except ImportError:
+        print("[XCOMET-XL] unbabel-comet 미설치: pip install unbabel-comet")
+        return {"skipped": True, "reason": "unbabel-comet not installed"}
+    except Exception as e:
+        print(f"[XCOMET-XL] 오류: {e}")
         return {"skipped": True, "reason": str(e)}

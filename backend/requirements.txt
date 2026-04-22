@@ -38,6 +38,7 @@ huggingface-hub>=0.20.0
 # 평가 지표
 nltk>=3.8.0
 bert-score>=0.3.13
+unbabel-comet>=2.2.7  # XCOMET-XL 평가 시 필요 (--xcomet 플래그), HuggingFace 접근 승인 필요
 
 # 평가 샘플 생성
 edge-tts>=6.1.0
