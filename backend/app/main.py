@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import ModelConfig
-from app.routers import ws, slides
+from app.routers import ws, slides, transcripts
 
 # PyInstaller 번들 여부에 따라 frontend dist 경로 결정
 if getattr(sys, 'frozen', False):
@@ -368,6 +368,7 @@ app.add_middleware(
 
 app.include_router(ws.router)
 app.include_router(slides.router)
+app.include_router(transcripts.router)
 
 
 @app.api_route("/health", methods=["GET", "HEAD"], tags=["Health"])
