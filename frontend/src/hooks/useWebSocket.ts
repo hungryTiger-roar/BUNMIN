@@ -51,12 +51,15 @@ export function useWebSocket(url: string, role: Role = 'student') {
 
   const handleMessage = useCallback((data: WebSocketMessage) => {
     switch (data.type) {
-      case 'transcription':
+      case 'transcription': {
         // 번역 결과 수신
+        const outputTime = Date.now()
+        const inputTime = data.sentAt as number | undefined
         addSubtitle({
           original: data.original as string,
           translated: data.translated as string,
-          timestamp: Date.now(),
+          timestamp: outputTime,
+          inputTime,
         })
 
         // 오디오 재생 (잠금 해제된 경우에만)
@@ -64,6 +67,7 @@ export function useWebSocket(url: string, role: Role = 'student') {
           playAudio(data.audio as string)
         }
         break
+      }
 
       case 'slide_select':
         // 강의자가 슬라이드 선택
@@ -181,6 +185,7 @@ export function useWebSocket(url: string, role: Role = 'student') {
       reconnectTimeoutRef.current = undefined
     }
 
+    console.log('[WebSocket] 재연결 시도...')
     const socket = new WebSocket(url)
 
     socket.onopen = () => {
@@ -197,7 +202,6 @@ export function useWebSocket(url: string, role: Role = 'student') {
       setConnected(false)
 
       reconnectTimeoutRef.current = setTimeout(() => {
-        console.log('[WebSocket] 재연결 시도...')
         connect()
       }, 3000)
     }
@@ -233,11 +237,11 @@ export function useWebSocket(url: string, role: Role = 'student') {
 
     audio.play().catch((err) => {
       console.error('[Audio] 재생 실패:', err)
+      URL.revokeObjectURL(audioUrl)
     })
 
-    audio.onended = () => {
-      URL.revokeObjectURL(audioUrl)
-    }
+    audio.onended = () => URL.revokeObjectURL(audioUrl)
+    audio.onerror = () => URL.revokeObjectURL(audioUrl)
   }
 
   const unlockAudio = useCallback(() => {
@@ -267,6 +271,8 @@ export function useWebSocket(url: string, role: Role = 'student') {
   useEffect(() => {
     return () => {
       disconnect()
+      audioContextRef.current?.close()
+      audioContextRef.current = null
     }
   }, [disconnect])
 
