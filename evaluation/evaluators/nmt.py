@@ -10,13 +10,13 @@ NMT (Neural Machine Translation) 평가
 import json
 from pathlib import Path
 
-from evaluation.metrics.bleu import compute_avg_bleu, compute_avg_meteor, compute_bertscore
+from evaluation.metrics.bleu import compute_avg_bleu, compute_avg_meteor, compute_bertscore, compute_comet
 from evaluation.metrics.speed import timer, compute_throughput, summarize_latencies
 
 DATASETS_DIR = Path(__file__).parent.parent / "datasets"
 
 
-def eval_nmt() -> dict:
+def eval_nmt(use_xcomet: bool = False) -> dict:
     print("\n[NMT] 평가 시작...")
 
     from app.config import ModelConfig
@@ -26,7 +26,7 @@ def eval_nmt() -> dict:
     with open(pairs_path, encoding="utf-8") as f:
         samples = json.load(f)
 
-    service = NMTService(model_name=ModelConfig.NMT_MODEL, device=ModelConfig.NMT_DEVICE, dtype=ModelConfig.NMT_DTYPE)
+    service = NMTService(model_name=ModelConfig.NMT_ASR_MODEL, device=ModelConfig.NMT_ASR_DEVICE, dtype=ModelConfig.NMT_ASR_DTYPE)
 
     references = [s["en"] for s in samples]
     ko_texts   = [s["ko"] for s in samples]
@@ -50,6 +50,14 @@ def eval_nmt() -> dict:
 
     print("\n  [BERTScore] 계산 중 (시간이 걸릴 수 있습니다)...")
     bert_result = compute_bertscore(references, hypotheses)
+
+    if use_xcomet:
+        print("\n  [XCOMET-XL] 계산 중 (처음 실행 시 모델 다운로드)...")
+        gpus = 1 if ModelConfig.NMT_ASR_DEVICE == "cuda" else 0
+        comet_result = compute_comet(ko_texts, hypotheses, references, gpus=gpus)
+    else:
+        print("\n  [XCOMET-XL] 스킵 (--xcomet 플래그로 활성화 가능)")
+        comet_result = {"skipped": True, "reason": "use --xcomet flag to enable"}
 
     speed_result = summarize_latencies(latencies_ms)
     total_time = sum(latencies_ms) / 1000
@@ -77,14 +85,24 @@ def eval_nmt() -> dict:
             "avg_precision": round(bert_result["avg_precision"], 4),
             "avg_recall": round(bert_result["avg_recall"], 4),
             "per_sample_f1": [round(f, 4) for f in bert_result["per_sample_f1"]],
-            "note": "의미 기반 유사도. 동의어에 가장 강함. 사람 평가와 상관관계 최고.",
+            "note": "의미 기반 유사도. 동의어에 강함.",
         }
     else:
         quality["bertscore"] = bert_result
 
+    if not comet_result.get("skipped"):
+        quality["comet22"] = {
+            "avg_score": comet_result["avg_score"],
+            "avg_score_pct": round(comet_result["avg_score"] * 100, 2),
+            "per_sample": comet_result["per_sample"],
+            "note": "소스 문장까지 참조. 에러 스팬 감지. 사람 평가와 상관관계 가장 높음.",
+        }
+    else:
+        quality["comet22"] = comet_result
+
     result = {
-        "model": ModelConfig.NMT_MODEL,
-        "device": ModelConfig.NMT_DEVICE,
+        "model": ModelConfig.NMT_ASR_MODEL,
+        "device": ModelConfig.NMT_ASR_DEVICE,
         "quality": quality,
         "speed": {
             "throughput_per_sec": round(throughput, 2),
@@ -93,13 +111,29 @@ def eval_nmt() -> dict:
         "num_samples": len(samples),
     }
 
+    # 속도 기준 모델 자동 전환: avg_ms > 1000ms 이면 1.3B로 교체
+    if speed_result.get("avg_ms", 0) > 1000:
+        env_path = Path(__file__).parent.parent.parent / ".env"
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+        new_lines = [
+            f"NMT_ASR_MODEL=facebook/nllb-200-distilled-1.3B" if l.startswith("NMT_ASR_MODEL=") else l
+            for l in lines
+        ]
+        env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+        print(f"\n[NMT] 평균 지연 {speed_result['avg_ms']:.0f}ms > 1000ms → .env NMT_ASR_MODEL을 facebook/nllb-200-distilled-1.3B 로 자동 전환했습니다.")
+
     bert_f1_str = (
         f"BERTScore F1={quality['bertscore'].get('avg_f1_pct', 'N/A'):.1f}%"
         if not bert_result.get("skipped") else "BERTScore=스킵"
+    )
+    comet_str = (
+        f"XCOMET-XL={quality['comet22'].get('avg_score_pct', 'N/A'):.1f}%"
+        if not comet_result.get("skipped") else "XCOMET-XL=스킵"
     )
     print(f"\n[NMT] 결과: "
           f"BLEU={quality['bleu']['avg_pct']:.1f}% | "
           f"METEOR={quality['meteor']['avg_pct']:.1f}% | "
           f"{bert_f1_str} | "
+          f"{comet_str} | "
           f"처리량={throughput:.1f}문장/초 | 평균지연={speed_result.get('avg_ms', 0):.1f}ms")
     return result

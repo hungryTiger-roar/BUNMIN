@@ -193,11 +193,14 @@ def print_friendly_summary(model: str, result: dict):
         print(f"  [번역 품질] {grade}")
         print(f"    BLEU     {bleu:.1f}%  <- 단어 일치율 (동의어 불인정, 낮게 나옴)")
         print(f"    METEOR   {meteor:.1f}%  <- 비슷한 뜻 단어 포함 정확도")
+        comet  = q.get("comet22", {}).get("avg_score_pct")
         if bert:
-            print(f"    BERTScore {bert:.1f}%  <- AI가 직접 의미 비교 (가장 실제 체감에 가까움)")
+            print(f"    BERTScore {bert:.1f}%  <- AI가 직접 의미 비교")
             main_score = bert
         else:
             main_score = meteor
+        if comet:
+            print(f"    XCOMET-XL {comet:.1f}%  <- 소스 문장까지 참조 (사람 평가와 상관관계 가장 높음)")
         if main_score >= 90:
             comment = "매우 자연스러운 번역입니다."
         elif main_score >= 70:
@@ -330,11 +333,13 @@ def select_device() -> str:
         raw = input("선택 (1-2): ").strip()
         if raw == "1":
             os.environ["ASR_DEVICE"] = "cpu"
-            os.environ["NMT_DEVICE"] = "cpu"
+            os.environ["NMT_ASR_DEVICE"] = "cpu"
+            os.environ["NMT_OCR_DEVICE"] = "cpu"
             print("  → CPU 모드")
         elif raw == "2":
             os.environ["ASR_DEVICE"] = "cuda"
-            os.environ["NMT_DEVICE"] = "cuda"
+            os.environ["NMT_ASR_DEVICE"] = "cuda"
+            os.environ["NMT_OCR_DEVICE"] = "cuda"
             print("  → GPU 모드 (TTS/OCR은 CPU 고정)")
         else:
             print("  1 또는 2를 입력하세요.")
@@ -374,6 +379,7 @@ def main():
     parser.add_argument("--model", choices=["asr", "nmt", "tts", "ocr", "pipeline", "ocr_nmt"], help="특정 모델만 평가")
     parser.add_argument("--all", action="store_true", help="모든 모델 평가 (OCR 포함)")
     parser.add_argument("--compare", action="store_true", help="이전 결과와 비교")
+    parser.add_argument("--xcomet", action="store_true", help="NMT 평가 시 XCOMET-XL 포함 (시간 매우 오래 걸림)")
     args = parser.parse_args()
 
     # 인자가 없으면 대화형 메뉴
@@ -396,7 +402,7 @@ def main():
 
     eval_map = {
         "asr":      eval_asr,
-        "nmt":      eval_nmt,
+        "nmt":      lambda: eval_nmt(use_xcomet=args.xcomet),
         "tts":      eval_tts,
         "ocr":      eval_ocr,
         "pipeline": eval_realtime_pipeline,
@@ -450,7 +456,9 @@ def main():
                 bleu   = q.get("bleu", {}).get("avg_pct", "N/A")
                 meteor = q.get("meteor", {}).get("avg_pct", "N/A")
                 bert   = q.get("bertscore", {}).get("avg_f1_pct", "스킵")
-                print(f"  NMT     | BLEU: {bleu:.1f}% | METEOR: {meteor:.1f}% | BERTScore: {bert if bert == '스킵' else f'{bert:.1f}%'} | "
+                comet  = q.get("comet22", {}).get("avg_score_pct", "스킵")
+                comet_str = comet if comet == "스킵" else f"{comet:.1f}%"
+                print(f"  NMT     | BLEU: {bleu:.1f}% | METEOR: {meteor:.1f}% | BERTScore: {bert if bert == '스킵' else f'{bert:.1f}%'} | XCOMET-XL: {comet_str} | "
                       f"처리량: {s.get('throughput_per_sec', 'N/A'):.1f}문장/초 | 지연: {s.get('avg_ms', 'N/A'):.1f}ms")
             elif model == "tts":
                 print(f"  TTS     | RTF: {s.get('avg_rtf', 'N/A'):.3f} | 실시간: {'[OK]' if s.get('realtime_capable') else '[NO]'} | 지연: {s.get('avg_ms', 'N/A'):.1f}ms")
