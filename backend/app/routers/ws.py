@@ -142,6 +142,17 @@ async def websocket_pipeline(websocket: WebSocket):
         role = init_msg.get("role")
 
         if role == "lecturer":
+            client_host = websocket.client.host if websocket.client else ""
+            # 강의자는 강의자 PC 자체(loopback)에서만 허용 — LAN 접속 수강자가 역할 가로채기 방지
+            if client_host not in ("127.0.0.1", "::1"):
+                print(f"[WS] 강의자 역할 거부 (외부 호스트): {client_host}")
+                await websocket.close(code=4403, reason="lecturer role requires localhost")
+                return
+            # 이미 강의자가 연결되어 있으면 중복 연결 거부
+            if manager.lecturer is not None:
+                print("[WS] 강의자 역할 거부 (중복 연결)")
+                await websocket.close(code=4409, reason="lecturer already connected")
+                return
             manager.lecturer = websocket
             print("[WS] 강의자 연결됨")
             await websocket.send_json({"type": "registered", "role": "lecturer"})
