@@ -165,7 +165,7 @@ def _load_models_sync():
         _model_status["status"] = "ready"
         _model_status["message"] = "슬라이드 번역 전용 모드"
         _model_status["progress"] = 100
-        for key in ["asr", "nmt", "tts", "ocr"]:
+        for key in ["asr", "nmt_asr", "nmt_ocr", "tts", "ocr"]:
             _model_status["models"][key]["status"] = "skipped"
         _emit_status()
         return
