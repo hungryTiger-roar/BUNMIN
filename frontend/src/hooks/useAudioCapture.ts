@@ -7,9 +7,6 @@ declare global {
   }
 }
 
-// 발화가 이 시간(ms)을 초과하면 강제로 잘라서 전송
-const MAX_SPEECH_MS = 15000
-
 interface UseAudioCaptureOptions {
   onAudioData: (audioBlob: Blob) => void
 }
@@ -18,21 +15,38 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
   const [isCapturing, setIsCapturing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const vadRef = useRef<any>(null)
-  const maxTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const streamRef = useRef<MediaStream | null>(null)
+  const keepAliveRef = useRef<NodeJS.Timeout | null>(null)
   const onAudioDataRef = useRef(onAudioData)
   onAudioDataRef.current = onAudioData
 
-  const clearMaxTimer = () => {
-    if (maxTimerRef.current) {
-      clearTimeout(maxTimerRef.current)
-      maxTimerRef.current = null
+  // AudioContext가 suspend되면 자동 resume (Chrome 무음 정책 대응)
+  const startKeepAlive = (vad: any) => {
+    keepAliveRef.current = setInterval(() => {
+      const ctx = vad?.audioContext
+      if (ctx?.state === 'suspended') {
+        ctx.resume().then(() => console.log('[VAD] AudioContext resumed'))
+      }
+    }, 5000)
+  }
+
+  const stopKeepAlive = () => {
+    if (keepAliveRef.current) {
+      clearInterval(keepAliveRef.current)
+      keepAliveRef.current = null
     }
+  }
+
+  const stopStream = () => {
+    streamRef.current?.getTracks().forEach(track => track.stop())
+    streamRef.current = null
   }
 
   useEffect(() => {
     return () => {
-      clearMaxTimer()
+      stopKeepAlive()
       vadRef.current?.destroy()
+      stopStream()
     }
   }, [])
 
@@ -40,38 +54,55 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
     try {
       setError(null)
       vadRef.current?.destroy()
+      stopStream()
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      })
 
       const { MicVAD } = window.vad
       const vad = await MicVAD.new({
+        stream,
         baseAssetPath: '/',
         onnxWASMBasePath: '/',
-        // 묵음 1.2초 지속 시 발화 종료 판정 (기본 1.4초 → 강의 환경에 맞게 조정)
-        redemptionMs: 1200,
-        // pause() 시 현재 발화 오디오를 onSpeechEnd로 제출 (최대 길이 강제 전송에 사용)
-        submitUserSpeechOnPause: true,
+        ortConfig: (ort: any) => {
+          ort.env.wasm.numThreads = 1
+        },
+        // 묵음 0.6초 지속 시 발화 종료 판정
+        redemptionMs: 600,
+        // 발화 감지 직전 프레임 2개 포함 (발화 시작 잘림 방지, 1프레임 ≈ 96ms)
+        preSpeechPadFrames: 2,
+        submitUserSpeechOnPause: false,
         onSpeechStart: () => {
-          // 발화 시작 시 최대 길이 타이머 설정
-          clearMaxTimer()
-          maxTimerRef.current = setTimeout(() => {
-            // MAX_SPEECH_MS 초과 시 pause → onSpeechEnd 트리거 → start 재개
-            vadRef.current?.pause()
-            vadRef.current?.start()
-            console.log('[VAD] 최대 발화 길이 초과 → 강제 전송 후 재개')
-          }, MAX_SPEECH_MS)
+          console.log('[VAD] 발화 시작')
         },
         onSpeechEnd: (audio: Float32Array) => {
-          clearMaxTimer()
+
+          // 최소 발화 길이: 0.3초 미만은 노이즈 버스트 (16000Hz * 0.3s = 4800)
+          if (audio.length < 4800) {
+            console.log('[VAD] 발화 너무 짧음 → 노이즈로 판단, 스킵')
+            return
+          }
+
+          // RMS 에너지: 너무 조용하면 빈 구간이 VAD를 통과한 것
+          const rms = Math.sqrt(audio.reduce((sum, s) => sum + s * s, 0) / audio.length)
+          if (rms < 0.005) {
+            console.log(`[VAD] 에너지 너무 낮음 (rms=${rms.toFixed(4)}) → 스킵`)
+            return
+          }
+
           const wavBlob = float32ToWav(audio, 16000)
           onAudioDataRef.current(wavBlob)
         },
         onVADMisfire: () => {
-          clearMaxTimer()
           console.log('[VAD] 오발화 감지 — 무시')
         },
       })
 
+      streamRef.current = stream
       vadRef.current = vad
       vad.start()
+      startKeepAlive(vad)
       setIsCapturing(true)
       console.log('[AudioCapture] Silero VAD 캡처 시작')
     } catch (err) {
@@ -81,8 +112,9 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
   }, [])
 
   const stopCapture = useCallback(() => {
-    clearMaxTimer()
+    stopKeepAlive()
     vadRef.current?.pause()
+    stopStream()
     setIsCapturing(false)
     console.log('[AudioCapture] 캡처 중지')
   }, [])
