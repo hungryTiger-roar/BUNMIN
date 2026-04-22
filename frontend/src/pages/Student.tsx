@@ -24,6 +24,7 @@ function Student() {
     isAudioOn,
     isSubtitleOn,
     subtitles,
+    viewMode,
     setAudioOn,
     setSubtitleOn,
   } = useLectureStore()
@@ -50,17 +51,16 @@ function Student() {
 
   // PDF 다운로드
   const handleDownload = (type: 'original' | 'translated') => {
-    if (type === 'translated') {
-      setToast('번역본 PDF는 준비 중입니다')
-      return
-    }
     if (!slideId) return
     const url = `${API_BASE}/slides/download/${slideId}?type=${type}`
     window.open(url, '_blank')
   }
 
-  // 현재 슬라이드 이미지 URL
+  // 현재 슬라이드 이미지 URL (원본/번역 모드에 따라)
   const currentSlideImage = slidePages[currentPage - 1]?.imageUrl
+  const slideImageUrl = currentSlideImage
+    ? `${API_BASE}${currentSlideImage}${viewMode === 'translated' ? '?translated=true' : ''}`
+    : null
 
   return (
     <div className="min-h-screen bg-slate-900 text-white">
@@ -170,16 +170,13 @@ function Student() {
                 alt="화면 공유"
                 className="w-full h-full object-contain"
               />
-            ) : slideStatus === 'ready' && currentSlideImage ? (
-              <>
-                {/* 슬라이드 이미지 */}
-                <img
-                  src={`${API_BASE}${currentSlideImage}`}
-                  alt={`슬라이드 ${currentPage}`}
-                  className="w-full h-full object-contain"
-                />
-
-              </>
+            ) : slideStatus === 'ready' && slideImageUrl ? (
+              <img
+                key={`${currentPage}-${viewMode}`}
+                src={slideImageUrl}
+                alt={`슬라이드 ${currentPage}`}
+                className="w-full h-full object-contain"
+              />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center text-slate-500">
                 <div className="text-center">

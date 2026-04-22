@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import ModelConfig
-from app.routers import ws, slides
+from app.routers import ws, slides, translate
 
 # PyInstaller 번들 여부에 따라 frontend dist 경로 결정
 if getattr(sys, 'frozen', False):
@@ -154,6 +154,18 @@ def _load_models_sync():
     print("=" * 50, flush=True)
     print("Aunion AI Backend 시작", flush=True)
     print("=" * 50, flush=True)
+
+    # 슬라이드 번역 전용 모드 - 다른 모델 스킵
+    skip_models = os.environ.get("SKIP_STARTUP_MODELS", "").lower() == "true"
+    if skip_models:
+        print("[모드] 슬라이드 번역 전용 - ASR/NMT/TTS/OCR 스킵", flush=True)
+        _model_status["status"] = "ready"
+        _model_status["message"] = "슬라이드 번역 전용 모드"
+        _model_status["progress"] = 100
+        for key in ["asr", "nmt", "tts", "ocr"]:
+            _model_status["models"][key]["status"] = "skipped"
+        _emit_status()
+        return
 
     # ── 1단계: 병렬 다운로드 ─────────────────────────────────────────
     model_repos = [
@@ -343,6 +355,7 @@ app.add_middleware(
 
 app.include_router(ws.router)
 app.include_router(slides.router)
+app.include_router(translate.router)
 
 
 @app.api_route("/health", methods=["GET", "HEAD"], tags=["Health"])
