@@ -26,6 +26,10 @@ export default defineConfig({
         target: backendUrl,
         changeOrigin: true,
       },
+      '/health': {
+        target: backendUrl,
+        changeOrigin: true,
+      },
       '/network': {
         target: backendUrl,
         changeOrigin: true,

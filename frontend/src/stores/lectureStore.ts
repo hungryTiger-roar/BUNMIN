@@ -13,7 +13,13 @@ interface SlidePage {
   ocrText?: string
 }
 
+type ModelMode = 'idle' | 'slide' | 'switching' | 'realtime'
+
 interface LectureState {
+  // AI 모델 모드 상태
+  modelMode: ModelMode
+  setModelMode: (mode: ModelMode) => void
+
   // 수강자 이름
   studentName: string
   setStudentName: (name: string) => void
@@ -82,6 +88,7 @@ interface LectureState {
 }
 
 const initialState = {
+  modelMode: 'idle' as ModelMode,
   studentName: '',
   studentCount: 0,
   isConnected: false,
@@ -108,6 +115,9 @@ const initialState = {
 
 export const useLectureStore = create<LectureState>((set, get) => ({
   ...initialState,
+
+  // AI 모델 모드 상태
+  setModelMode: (mode) => set({ modelMode: mode }),
 
   // 수강자 이름
   setStudentName: (name) => set({ studentName: name }),
