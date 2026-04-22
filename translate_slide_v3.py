@@ -95,6 +95,32 @@ def get_vlm_model():
     return _vlm_model, _vlm_processor
 
 
+def is_vlm_loaded() -> bool:
+    """VLM 모델 로드 여부 확인"""
+    return _vlm_model is not None
+
+
+def unload_vlm_model():
+    """VLM 모델 언로드 (GPU 메모리 해제)"""
+    global _vlm_model, _vlm_processor
+
+    if _vlm_model is None:
+        print("[VLM] 언로드할 모델 없음")
+        return
+
+    print("[VLM] 모델 언로드 중...")
+    del _vlm_model
+    del _vlm_processor
+    _vlm_model = None
+    _vlm_processor = None
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    print("[VLM] 모델 언로드 완료, GPU 메모리 해제됨")
+
+
 def is_number_or_english_only(text: str) -> bool:
     """숫자, 영어, 기호만 있는지 확인 (번역 불필요)"""
     # 한글이 하나라도 있으면 False
