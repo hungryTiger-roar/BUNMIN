@@ -9,6 +9,8 @@ from typing import Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
+from app.routers import transcripts
+
 router = APIRouter(prefix="/ws", tags=["WebSocket"])
 
 # 서비스 인스턴스 (main.py에서 주입)
@@ -50,9 +52,16 @@ class ConnectionManager:
         self.is_paused: bool = False
         self.presentation_mode: str = "slide"  # 'slide' or 'screen'
         self.last_screen_hash: Optional[str] = None
+        self.current_session_id: Optional[str] = None  # 자막 저장 세션
 
     def disconnect_lecturer(self):
         self.lecturer = None
+        # 강의 중 비정상 종료 — 자막 저장 마무리
+        if self.is_lecture_started and self.current_session_id:
+            ended_id = transcripts.end_session(self.current_session_id)
+            print(f"[WS] 강의자 비정상 종료, 자막 세션 자동 저장: {ended_id}")
+            self.current_session_id = None
+            self.is_lecture_started = False
         print("[WS] 강의자 연결 해제")
 
     def disconnect_student(self, websocket: WebSocket):
@@ -72,6 +81,13 @@ class ConnectionManager:
         # 끊어진 연결 제거
         for ws in disconnected:
             self.disconnect_student(ws)
+
+    async def broadcast_student_count(self):
+        """현재 접속 중인 수강자 수를 모든 수강자에게 전송"""
+        await self.broadcast_to_students({
+            "type": "student_count",
+            "count": len(self.students),
+        })
 
 
 manager = ConnectionManager()
@@ -133,6 +149,17 @@ async def websocket_pipeline(websocket: WebSocket):
         role = init_msg.get("role")
 
         if role == "lecturer":
+            client_host = websocket.client.host if websocket.client else ""
+            # 강의자는 강의자 PC 자체(loopback)에서만 허용 — LAN 접속 수강자가 역할 가로채기 방지
+            if client_host not in ("127.0.0.1", "::1"):
+                print(f"[WS] 강의자 역할 거부 (외부 호스트): {client_host}")
+                await websocket.close(code=4403, reason="lecturer role requires localhost")
+                return
+            # 이미 강의자가 연결되어 있으면 중복 연결 거부
+            if manager.lecturer is not None:
+                print("[WS] 강의자 역할 거부 (중복 연결)")
+                await websocket.close(code=4409, reason="lecturer already connected")
+                return
             manager.lecturer = websocket
             print("[WS] 강의자 연결됨")
             await websocket.send_json({"type": "registered", "role": "lecturer"})
@@ -142,6 +169,7 @@ async def websocket_pipeline(websocket: WebSocket):
             manager.students.append(websocket)
             print(f"[WS] 수강자 연결됨 (총 {len(manager.students)}명)")
             await websocket.send_json({"type": "registered", "role": "student"})
+            await manager.broadcast_student_count()
             # 현재 강의 상태 즉시 전송
             if manager.is_lecture_started:
                 await websocket.send_json({
@@ -172,6 +200,7 @@ async def websocket_pipeline(websocket: WebSocket):
             manager.disconnect_lecturer()
         elif role == "student":
             manager.disconnect_student(websocket)
+            await manager.broadcast_student_count()
 
 
 async def handle_lecturer(websocket: WebSocket):
@@ -218,10 +247,20 @@ async def handle_lecturer(websocket: WebSocket):
                 manager.is_lecture_started = True
                 manager.current_slide_id = message.get("slide_id")
                 manager.presentation_mode = message.get("mode", "slide")
-                print(f"[WS] 강의 시작: {manager.current_slide_id}, 모드: {manager.presentation_mode}")
+                # 자막 세션 시작 — session_id 발급
+                manager.current_session_id = transcripts.start_session(
+                    manager.current_slide_id
+                )
+                print(f"[WS] 강의 시작: {manager.current_slide_id}, 모드: {manager.presentation_mode}, 세션: {manager.current_session_id}")
+                # 강의자에게 session_id 회신 (다운로드 시 필요)
+                await websocket.send_json({
+                    "type": "session_started",
+                    "session_id": manager.current_session_id,
+                })
                 await manager.broadcast_to_students({
                     "type": "lecture_start",
                     "slide_id": manager.current_slide_id,
+                    "session_id": manager.current_session_id,
                 })
                 # 발표 모드도 함께 전송
                 await manager.broadcast_to_students({
@@ -232,10 +271,14 @@ async def handle_lecturer(websocket: WebSocket):
             elif msg_type == "lecture_end":
                 manager.is_lecture_started = False
                 manager.is_paused = False
-                print("[WS] 강의 종료")
+                # 자막 세션 종료 — jsonl → 최종 json 병합
+                ended_id = transcripts.end_session(manager.current_session_id)
+                print(f"[WS] 강의 종료 (세션: {ended_id})")
                 await manager.broadcast_to_students({
                     "type": "lecture_end",
+                    "session_id": ended_id,
                 })
+                manager.current_session_id = None
 
             elif msg_type == "lecture_pause":
                 manager.is_paused = True
@@ -278,6 +321,7 @@ async def handle_student(websocket: WebSocket):
 
     except WebSocketDisconnect:
         manager.disconnect_student(websocket)
+        await manager.broadcast_student_count()
 
 
 async def process_audio(message: dict):
@@ -321,6 +365,12 @@ async def process_audio(message: dict):
             _tts_service.synthesize, english_text
         )
         audio_output_b64 = base64.b64encode(audio_output).decode()
+
+        # 자막 파일에 append (세션 진행 중일 때만)
+        if manager.current_session_id:
+            transcripts.append_segment(
+                manager.current_session_id, korean_text, english_text
+            )
 
         # 수강자에게 전송 (프론트엔드는 'transcription' 타입 기대)
         await manager.broadcast_to_students({
