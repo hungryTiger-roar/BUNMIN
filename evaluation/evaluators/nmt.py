@@ -26,7 +26,7 @@ def eval_nmt(use_xcomet: bool = False) -> dict:
     with open(pairs_path, encoding="utf-8") as f:
         samples = json.load(f)
 
-    service = NMTService(model_name=ModelConfig.NMT_MODEL, device=ModelConfig.NMT_DEVICE, dtype=ModelConfig.NMT_DTYPE)
+    service = NMTService(model_name=ModelConfig.NMT_ASR_MODEL, device=ModelConfig.NMT_ASR_DEVICE, dtype=ModelConfig.NMT_ASR_DTYPE)
 
     references = [s["en"] for s in samples]
     ko_texts   = [s["ko"] for s in samples]
@@ -53,7 +53,7 @@ def eval_nmt(use_xcomet: bool = False) -> dict:
 
     if use_xcomet:
         print("\n  [XCOMET-XL] 계산 중 (처음 실행 시 모델 다운로드)...")
-        gpus = 1 if ModelConfig.NMT_DEVICE == "cuda" else 0
+        gpus = 1 if ModelConfig.NMT_ASR_DEVICE == "cuda" else 0
         comet_result = compute_comet(ko_texts, hypotheses, references, gpus=gpus)
     else:
         print("\n  [XCOMET-XL] 스킵 (--xcomet 플래그로 활성화 가능)")
@@ -101,8 +101,8 @@ def eval_nmt(use_xcomet: bool = False) -> dict:
         quality["comet22"] = comet_result
 
     result = {
-        "model": ModelConfig.NMT_MODEL,
-        "device": ModelConfig.NMT_DEVICE,
+        "model": ModelConfig.NMT_ASR_MODEL,
+        "device": ModelConfig.NMT_ASR_DEVICE,
         "quality": quality,
         "speed": {
             "throughput_per_sec": round(throughput, 2),
@@ -116,11 +116,11 @@ def eval_nmt(use_xcomet: bool = False) -> dict:
         env_path = Path(__file__).parent.parent.parent / ".env"
         lines = env_path.read_text(encoding="utf-8").splitlines()
         new_lines = [
-            f"NMT_MODEL=facebook/nllb-200-distilled-1.3B" if l.startswith("NMT_MODEL=") else l
+            f"NMT_ASR_MODEL=facebook/nllb-200-distilled-1.3B" if l.startswith("NMT_ASR_MODEL=") else l
             for l in lines
         ]
         env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-        print(f"\n[NMT] 평균 지연 {speed_result['avg_ms']:.0f}ms > 1000ms → .env를 facebook/nllb-200-distilled-1.3B 로 자동 전환했습니다.")
+        print(f"\n[NMT] 평균 지연 {speed_result['avg_ms']:.0f}ms > 1000ms → .env NMT_ASR_MODEL을 facebook/nllb-200-distilled-1.3B 로 자동 전환했습니다.")
 
     bert_f1_str = (
         f"BERTScore F1={quality['bertscore'].get('avg_f1_pct', 'N/A'):.1f}%"
