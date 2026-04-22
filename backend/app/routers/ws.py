@@ -9,6 +9,8 @@ from typing import Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
+from app.routers import transcripts
+
 router = APIRouter(prefix="/ws", tags=["WebSocket"])
 
 # 서비스 인스턴스 (main.py에서 주입)
@@ -50,9 +52,16 @@ class ConnectionManager:
         self.is_paused: bool = False
         self.presentation_mode: str = "slide"  # 'slide' or 'screen'
         self.last_screen_hash: Optional[str] = None
+        self.current_session_id: Optional[str] = None  # 자막 저장 세션
 
     def disconnect_lecturer(self):
         self.lecturer = None
+        # 강의 중 비정상 종료 — 자막 저장 마무리
+        if self.is_lecture_started and self.current_session_id:
+            ended_id = transcripts.end_session(self.current_session_id)
+            print(f"[WS] 강의자 비정상 종료, 자막 세션 자동 저장: {ended_id}")
+            self.current_session_id = None
+            self.is_lecture_started = False
         print("[WS] 강의자 연결 해제")
 
     def disconnect_student(self, websocket: WebSocket):
@@ -218,10 +227,20 @@ async def handle_lecturer(websocket: WebSocket):
                 manager.is_lecture_started = True
                 manager.current_slide_id = message.get("slide_id")
                 manager.presentation_mode = message.get("mode", "slide")
-                print(f"[WS] 강의 시작: {manager.current_slide_id}, 모드: {manager.presentation_mode}")
+                # 자막 세션 시작 — session_id 발급
+                manager.current_session_id = transcripts.start_session(
+                    manager.current_slide_id
+                )
+                print(f"[WS] 강의 시작: {manager.current_slide_id}, 모드: {manager.presentation_mode}, 세션: {manager.current_session_id}")
+                # 강의자에게 session_id 회신 (다운로드 시 필요)
+                await websocket.send_json({
+                    "type": "session_started",
+                    "session_id": manager.current_session_id,
+                })
                 await manager.broadcast_to_students({
                     "type": "lecture_start",
                     "slide_id": manager.current_slide_id,
+                    "session_id": manager.current_session_id,
                 })
                 # 발표 모드도 함께 전송
                 await manager.broadcast_to_students({
@@ -232,10 +251,14 @@ async def handle_lecturer(websocket: WebSocket):
             elif msg_type == "lecture_end":
                 manager.is_lecture_started = False
                 manager.is_paused = False
-                print("[WS] 강의 종료")
+                # 자막 세션 종료 — jsonl → 최종 json 병합
+                ended_id = transcripts.end_session(manager.current_session_id)
+                print(f"[WS] 강의 종료 (세션: {ended_id})")
                 await manager.broadcast_to_students({
                     "type": "lecture_end",
+                    "session_id": ended_id,
                 })
+                manager.current_session_id = None
 
             elif msg_type == "lecture_pause":
                 manager.is_paused = True
@@ -321,6 +344,12 @@ async def process_audio(message: dict):
             _tts_service.synthesize, english_text
         )
         audio_output_b64 = base64.b64encode(audio_output).decode()
+
+        # 자막 파일에 append (세션 진행 중일 때만)
+        if manager.current_session_id:
+            transcripts.append_segment(
+                manager.current_session_id, korean_text, english_text
+            )
 
         # 수강자에게 전송 (프론트엔드는 'transcription' 타입 기대)
         await manager.broadcast_to_students({
