@@ -28,7 +28,12 @@ export function useWebSocket(url: string, role: Role = 'student') {
     setPaused,
     setPresentationMode,
     setCurrentScreen,
+    setStudentCount,
+    studentName,
   } = useLectureStore()
+
+  const studentNameRef = useRef(studentName)
+  useEffect(() => { studentNameRef.current = studentName }, [studentName])
 
   // 슬라이드 페이지 로드
   const loadSlidePages = useCallback(async (slideId: string) => {
@@ -142,6 +147,11 @@ export function useWebSocket(url: string, role: Role = 'student') {
         // 핑퐁 응답
         break
 
+      case 'student_count':
+        // 현재 접속 중인 수강자 수
+        setStudentCount(data.count as number)
+        break
+
       case 'registered':
         // 역할 등록 확인
         console.log('[WebSocket] 역할 등록 완료:', data.role)
@@ -175,7 +185,7 @@ export function useWebSocket(url: string, role: Role = 'student') {
 
     socket.onopen = () => {
       console.log('[WebSocket] 연결됨')
-      socket.send(JSON.stringify({ type: 'register', role }))
+      socket.send(JSON.stringify({ type: 'register', role, name: studentNameRef.current }))
       console.log(`[WebSocket] 역할 등록: ${role}`)
       setIsConnected(true)
       setConnected(true)

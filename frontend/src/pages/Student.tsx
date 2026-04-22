@@ -26,6 +26,8 @@ function Student() {
     subtitles,
     setAudioOn,
     setSubtitleOn,
+    studentName,
+    studentCount,
   } = useLectureStore()
 
   const { isConnected, isAudioUnlocked, connect, unlockAudio } = useWebSocket(WS_PIPELINE_URL, 'student')
@@ -79,6 +81,14 @@ function Student() {
         <div className="flex items-center gap-4">
           <h1 className="text-lg font-medium">Aunion AI</h1>
           <ConnectionStatus isConnected={isConnected} />
+          {studentCount > 0 && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-700/70 rounded-lg text-slate-300 text-sm">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+              <span>{studentCount}명</span>
+            </div>
+          )}
           {isLectureStarted && (
             <div className="flex items-center gap-2">
               <span className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white text-sm font-semibold rounded-lg shadow-lg shadow-red-500/30">
@@ -135,6 +145,14 @@ function Student() {
                 번역본 PDF
               </button>
             </>
+          )}
+          {studentName && (
+            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-700 rounded-lg text-sm text-slate-200">
+              <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              </svg>
+              {studentName}
+            </div>
           )}
           <button
             onClick={handleExit}
