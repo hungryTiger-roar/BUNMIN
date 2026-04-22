@@ -1,14 +1,12 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { useLectureStore } from '../stores/lectureStore'
 
 const STORAGE_KEY = 'student_name'
 
 export default function Start() {
   const navigate = useNavigate()
-  const { lectureId } = useParams<{ lectureId: string }>()
   const setStudentName = useLectureStore((s) => s.setStudentName)
-  const setLectureId = useLectureStore((s) => s.setLectureId)
 
   const [name, setName] = useState('')
   const [saveInfo, setSaveInfo] = useState(false)
@@ -37,7 +35,6 @@ export default function Start() {
     }
 
     setStudentName(trimmed)
-    setLectureId(lectureId ?? '')
     navigate('/student')
   }
 
