@@ -62,6 +62,16 @@ class PageData(BaseModel):
     ocrText: Optional[str] = None
 
 
+def get_page_ocr_text(slide_id: str, page_number: int) -> str:
+    """현재 슬라이드 페이지의 OCR 텍스트 반환 (NMT 컨텍스트용, 0-indexed)"""
+    if slide_id not in slide_data:
+        return ""
+    pages = slide_data[slide_id]
+    if page_number < 0 or page_number >= len(pages):
+        return ""
+    return pages[page_number].get("ocr_text") or ""
+
+
 def get_page_overlay(slide_id: str, page_number: int) -> list[dict]:
     """특정 페이지의 오버레이 데이터 반환"""
     if slide_id not in slide_data:
@@ -212,13 +222,19 @@ async def process_slide(slide_id: str, pdf_path: Path):
 
                     ocr_text = "\n".join(texts)
 
-                    # 번역
-                    for item in ocr_results:
-                        text = item["text"]
-                        if text.strip():
-                            translated = await asyncio.to_thread(
-                                _nmt_service.translate, text
-                            )
+                    # 번역 — 페이지 내 모든 텍스트를 배치로 한 번에 처리
+                    valid_items = [
+                        item for item in ocr_results if item["text"].strip()
+                    ]
+                    batch_texts = [item["text"] for item in valid_items]
+
+                    if batch_texts:
+                        translations = await asyncio.to_thread(
+                            _nmt_service.translate_batch, batch_texts
+                        )
+                        for item, translated in zip(valid_items, translations):
+                            if not translated.strip():
+                                continue
                             raw_bbox = item["bbox"]
                             if raw_bbox is None:
                                 bbox = None
@@ -229,11 +245,8 @@ async def process_slide(slide_id: str, pdf_path: Path):
                                 ]
                             else:
                                 bbox = raw_bbox
-
-                            if not translated.strip():
-                                continue
                             overlay_items.append({
-                                "original": text,
+                                "original": item["text"],
                                 "translated": translated,
                                 "bbox": bbox,
                                 "confidence": item["confidence"],
