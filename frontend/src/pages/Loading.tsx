@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { API_BASE } from '@/lib/api'
 
-const MODEL_KEYS = ['asr', 'nmt', 'tts', 'ocr'] as const
+const MODEL_KEYS = ['asr', 'nmt_asr', 'nmt_ocr', 'tts', 'ocr'] as const
 type ModelKey = typeof MODEL_KEYS[number]
 
 interface ModelEntry {
@@ -13,10 +13,11 @@ interface ModelEntry {
 }
 
 const DEFAULT_MODELS: Record<ModelKey, ModelEntry> = {
-  asr: { status: 'pending', progress: 0, label: 'ASR (음성인식)', desc: '로딩 중...' },
-  nmt: { status: 'pending', progress: 0, label: 'NMT (번역)', desc: '로딩 중...' },
-  tts: { status: 'pending', progress: 0, label: 'TTS (음성합성)', desc: '로딩 중...' },
-  ocr: { status: 'pending', progress: 0, label: 'OCR (문자인식)', desc: '로딩 중...' },
+  asr:     { status: 'pending', progress: 0, label: 'ASR (음성인식)', desc: '로딩 중...' },
+  nmt_asr: { status: 'pending', progress: 0, label: 'NMT-ASR (실시간 번역)', desc: '로딩 중...' },
+  nmt_ocr: { status: 'pending', progress: 0, label: 'NMT-OCR (슬라이드 번역)', desc: '로딩 중...' },
+  tts:     { status: 'pending', progress: 0, label: 'TTS (음성합성)', desc: '로딩 중...' },
+  ocr:     { status: 'pending', progress: 0, label: 'OCR (문자인식)', desc: '로딩 중...' },
 }
 
 function StatusIcon({ status }: { status: ModelEntry['status'] }) {
