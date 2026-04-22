@@ -13,7 +13,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import ModelConfig
-from app.routers import ws, slides
+from app.routers import ws, slides, transcripts, network
+from app.utils.firewall import ensure_firewall_rule
+from app.utils.network import SERVER_PORT, get_lan_ip
 
 # PyInstaller 번들 여부에 따라 frontend dist 경로 결정
 if getattr(sys, 'frozen', False):
@@ -320,6 +322,8 @@ async def _load_models():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _start_health_thread()
+    ensure_firewall_rule(SERVER_PORT)
+    print(f"[Network] LAN 접속 주소: http://{get_lan_ip()}:{SERVER_PORT}", flush=True)
     task = asyncio.create_task(_load_models())
     yield
     task.cancel()
@@ -343,6 +347,8 @@ app.add_middleware(
 
 app.include_router(ws.router)
 app.include_router(slides.router)
+app.include_router(transcripts.router)
+app.include_router(network.router)
 
 
 @app.api_route("/health", methods=["GET", "HEAD"], tags=["Health"])
