@@ -41,7 +41,7 @@ function Lecturer() {
     const base64 = btoa(
       new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
     )
-    send({ type: 'audio', audio: base64, sample_rate: 16000 })
+    send({ type: 'audio', audio: base64, sample_rate: 16000, sentAt: Date.now() })
   }, [send])
 
   // 화면 캡처 데이터 전송
@@ -359,7 +359,16 @@ function Lecturer() {
               </p>
               <button
                 onClick={() => {
-                  navigator.clipboard.writeText(shareUrl)
+                  if (navigator.clipboard?.writeText) {
+                    navigator.clipboard.writeText(shareUrl)
+                  } else {
+                    const el = document.createElement('textarea')
+                    el.value = shareUrl
+                    document.body.appendChild(el)
+                    el.select()
+                    document.execCommand('copy')
+                    document.body.removeChild(el)
+                  }
                   setCopied(true)
                   setTimeout(() => setCopied(false), 2000)
                 }}

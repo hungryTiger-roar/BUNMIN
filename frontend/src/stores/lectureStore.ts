@@ -5,6 +5,7 @@ interface Subtitle {
   original: string
   translated: string
   timestamp: number
+  inputTime?: number  // 오디오 전송 시각 (ms)
 }
 
 interface SlidePage {

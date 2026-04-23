@@ -1,92 +1,120 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+
+// window.vad가 script 태그로 로드된 @ricky0123/vad-web 전역 번들
+declare global {
+  interface Window {
+    vad: { MicVAD: any }
+  }
+}
 
 interface UseAudioCaptureOptions {
   onAudioData: (audioBlob: Blob) => void
-  chunkInterval?: number
 }
 
-export function useAudioCapture({ onAudioData, chunkInterval = 2000 }: UseAudioCaptureOptions) {
+export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
   const [isCapturing, setIsCapturing] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
-  const audioContextRef = useRef<AudioContext | null>(null)
-  const processorRef = useRef<ScriptProcessorNode | null>(null)
+  const vadRef = useRef<any>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const chunksRef = useRef<Float32Array[]>([])
-  const intervalRef = useRef<NodeJS.Timeout | null>(null)
+  const keepAliveRef = useRef<NodeJS.Timeout | null>(null)
+  const onAudioDataRef = useRef(onAudioData)
+  onAudioDataRef.current = onAudioData
+
+  // AudioContext가 suspend되면 자동 resume (Chrome 무음 정책 대응)
+  const startKeepAlive = (vad: any) => {
+    keepAliveRef.current = setInterval(() => {
+      const ctx = vad?.audioContext
+      if (ctx?.state === 'suspended') {
+        ctx.resume().then(() => console.log('[VAD] AudioContext resumed'))
+      }
+    }, 5000)
+  }
+
+  const stopKeepAlive = () => {
+    if (keepAliveRef.current) {
+      clearInterval(keepAliveRef.current)
+      keepAliveRef.current = null
+    }
+  }
+
+  const stopStream = () => {
+    streamRef.current?.getTracks().forEach(track => track.stop())
+    streamRef.current = null
+  }
+
+  useEffect(() => {
+    return () => {
+      stopKeepAlive()
+      vadRef.current?.destroy()
+      stopStream()
+    }
+  }, [])
 
   const startCapture = useCallback(async () => {
     try {
       setError(null)
+      vadRef.current?.destroy()
+      stopStream()
 
-      // 마이크 권한 요청
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          sampleRate: 16000,
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      })
+
+      const { MicVAD } = window.vad
+      const vad = await MicVAD.new({
+        stream,
+        baseAssetPath: '/',
+        onnxWASMBasePath: '/',
+        ortConfig: (ort: any) => {
+          ort.env.wasm.numThreads = 1
+        },
+        // 묵음 0.6초 지속 시 발화 종료 판정
+        redemptionMs: 600,
+        // 발화 감지 직전 프레임 2개 포함 (발화 시작 잘림 방지, 1프레임 ≈ 96ms)
+        preSpeechPadFrames: 2,
+        submitUserSpeechOnPause: false,
+        onSpeechStart: () => {
+          console.log('[VAD] 발화 시작')
+        },
+        onSpeechEnd: (audio: Float32Array) => {
+
+          // 최소 발화 길이: 0.3초 미만은 노이즈 버스트 (16000Hz * 0.3s = 4800)
+          if (audio.length < 4800) {
+            console.log('[VAD] 발화 너무 짧음 → 노이즈로 판단, 스킵')
+            return
+          }
+
+          // RMS 에너지: 너무 조용하면 빈 구간이 VAD를 통과한 것
+          const rms = Math.sqrt(audio.reduce((sum, s) => sum + s * s, 0) / audio.length)
+          if (rms < 0.005) {
+            console.log(`[VAD] 에너지 너무 낮음 (rms=${rms.toFixed(4)}) → 스킵`)
+            return
+          }
+
+          const wavBlob = float32ToWav(audio, 16000)
+          onAudioDataRef.current(wavBlob)
+        },
+        onVADMisfire: () => {
+          console.log('[VAD] 오발화 감지 — 무시')
         },
       })
 
       streamRef.current = stream
-
-      // Web Audio API 설정
-      const audioContext = new AudioContext({ sampleRate: 16000 })
-      audioContextRef.current = audioContext
-
-      const source = audioContext.createMediaStreamSource(stream)
-      const processor = audioContext.createScriptProcessor(4096, 1, 1)
-      processorRef.current = processor
-
-      // 오디오 데이터 수집
-      processor.onaudioprocess = (e) => {
-        const inputData = e.inputBuffer.getChannelData(0)
-        chunksRef.current.push(new Float32Array(inputData))
-      }
-
-      source.connect(processor)
-      processor.connect(audioContext.destination)
-
-      // 주기적으로 오디오 전송
-      intervalRef.current = setInterval(() => {
-        if (chunksRef.current.length > 0) {
-          const audioData = mergeChunks(chunksRef.current)
-          const wavBlob = createWavBlob(audioData, 16000)
-          onAudioData(wavBlob)
-          chunksRef.current = []
-        }
-      }, chunkInterval)
-
+      vadRef.current = vad
+      vad.start()
+      startKeepAlive(vad)
       setIsCapturing(true)
-      console.log('[AudioCapture] 캡처 시작 (PCM/WAV)')
+      console.log('[AudioCapture] Silero VAD 캡처 시작')
     } catch (err) {
       console.error('[AudioCapture] 시작 실패:', err)
       setError('마이크 접근 권한이 필요합니다.')
     }
-  }, [onAudioData, chunkInterval])
+  }, [])
 
   const stopCapture = useCallback(() => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current)
-      intervalRef.current = null
-    }
-
-    if (processorRef.current) {
-      processorRef.current.disconnect()
-      processorRef.current = null
-    }
-
-    if (audioContextRef.current) {
-      audioContextRef.current.close()
-      audioContextRef.current = null
-    }
-
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop())
-      streamRef.current = null
-    }
-
-    chunksRef.current = []
+    stopKeepAlive()
+    vadRef.current?.pause()
+    stopStream()
     setIsCapturing(false)
     console.log('[AudioCapture] 캡처 중지')
   }, [])
@@ -99,43 +127,28 @@ export function useAudioCapture({ onAudioData, chunkInterval = 2000 }: UseAudioC
   }
 }
 
-// Float32Array 청크들을 하나로 합치기
-function mergeChunks(chunks: Float32Array[]): Float32Array {
-  const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0)
-  const result = new Float32Array(totalLength)
-  let offset = 0
-  for (const chunk of chunks) {
-    result.set(chunk, offset)
-    offset += chunk.length
-  }
-  return result
-}
-
-// Float32Array를 WAV Blob으로 변환
-function createWavBlob(samples: Float32Array, sampleRate: number): Blob {
+function float32ToWav(samples: Float32Array, sampleRate: number): Blob {
   const buffer = new ArrayBuffer(44 + samples.length * 2)
   const view = new DataView(buffer)
 
-  // WAV 헤더 작성
   writeString(view, 0, 'RIFF')
   view.setUint32(4, 36 + samples.length * 2, true)
   writeString(view, 8, 'WAVE')
   writeString(view, 12, 'fmt ')
-  view.setUint32(16, 16, true) // fmt chunk size
-  view.setUint16(20, 1, true) // audio format (PCM)
-  view.setUint16(22, 1, true) // num channels
-  view.setUint32(24, sampleRate, true) // sample rate
-  view.setUint32(28, sampleRate * 2, true) // byte rate
-  view.setUint16(32, 2, true) // block align
-  view.setUint16(34, 16, true) // bits per sample
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * 2, true)
+  view.setUint16(32, 2, true)
+  view.setUint16(34, 16, true)
   writeString(view, 36, 'data')
   view.setUint32(40, samples.length * 2, true)
 
-  // PCM 데이터 작성 (Float32 -> Int16)
   let offset = 44
   for (let i = 0; i < samples.length; i++) {
     const s = Math.max(-1, Math.min(1, samples[i]))
-    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true)
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true)
     offset += 2
   }
 

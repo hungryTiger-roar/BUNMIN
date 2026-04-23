@@ -37,17 +37,15 @@ _mode_lock = asyncio.Lock()
 # 서비스 참조 (main.py에서 설정)
 _asr_service = None
 _nmt_asr_service = None
-_nmt_ocr_service = None
 _tts_service = None
 _ocr_service = None
 
 
-def set_services(asr=None, nmt_asr=None, nmt_ocr=None, tts=None, ocr=None):
+def set_services(asr=None, nmt_asr=None, tts=None, ocr=None):
     """main.py에서 서비스 참조 설정"""
-    global _asr_service, _nmt_asr_service, _nmt_ocr_service, _tts_service, _ocr_service
+    global _asr_service, _nmt_asr_service, _tts_service, _ocr_service
     _asr_service = asr
     _nmt_asr_service = nmt_asr
-    _nmt_ocr_service = nmt_ocr
     _tts_service = tts
     _ocr_service = ocr
 
@@ -72,12 +70,11 @@ def _unload_vlm():
 
 
 def _unload_realtime_models():
-    """실시간 모델들 언로드 (ASR/NMT/TTS/OCR)"""
-    global _asr_service, _nmt_asr_service, _nmt_ocr_service, _tts_service, _ocr_service
+    """실시간 모델들 언로드 (ASR/NMT-ASR/TTS/OCR)"""
+    global _asr_service, _nmt_asr_service, _tts_service, _ocr_service
 
     unloaded = []
 
-    # ASR 언로드
     if _asr_service is not None:
         try:
             del _asr_service
@@ -86,7 +83,6 @@ def _unload_realtime_models():
         except:
             pass
 
-    # NMT-ASR 언로드
     if _nmt_asr_service is not None:
         try:
             del _nmt_asr_service
@@ -95,16 +91,6 @@ def _unload_realtime_models():
         except:
             pass
 
-    # NMT-OCR 언로드
-    if _nmt_ocr_service is not None:
-        try:
-            del _nmt_ocr_service
-            _nmt_ocr_service = None
-            unloaded.append("nmt_ocr")
-        except:
-            pass
-
-    # TTS 언로드
     if _tts_service is not None:
         try:
             del _tts_service
@@ -113,7 +99,6 @@ def _unload_realtime_models():
         except:
             pass
 
-    # OCR 언로드
     if _ocr_service is not None:
         try:
             del _ocr_service
@@ -140,8 +125,6 @@ async def get_mode():
         models_loaded.append("asr")
     if _nmt_asr_service is not None:
         models_loaded.append("nmt_asr")
-    if _nmt_ocr_service is not None:
-        models_loaded.append("nmt_ocr")
     if _tts_service is not None:
         models_loaded.append("tts")
     if _ocr_service is not None:
@@ -189,15 +172,15 @@ async def switch_to_slide_mode():
 
 @router.post("/realtime", response_model=ModeResponse)
 async def switch_to_realtime_mode():
-    """실시간 번역 모드로 전환 (VLM 언로드, ASR/NMT/TTS/OCR 로드)"""
-    global _current_mode, _asr_service, _nmt_asr_service, _nmt_ocr_service, _tts_service, _ocr_service
+    """실시간 번역 모드로 전환 (VLM 언로드, ASR/NMT-ASR/TTS/OCR 로드)"""
+    global _current_mode, _asr_service, _nmt_asr_service, _tts_service, _ocr_service
 
     async with _mode_lock:
         if _current_mode == Mode.REALTIME:
             return ModeResponse(
                 mode=Mode.REALTIME.value,
                 message="이미 실시간 번역 모드입니다",
-                models_loaded=["asr", "nmt_asr", "nmt_ocr", "tts", "ocr"]
+                models_loaded=["asr", "nmt_asr", "tts", "ocr"]
             )
 
         # VLM 언로드
@@ -234,16 +217,6 @@ async def switch_to_realtime_mode():
             ws.set_nmt_service(_nmt_asr_service)
             loaded.append("nmt_asr")
 
-            # NMT-OCR
-            print("[Mode] NMT-OCR 로드 중...")
-            _nmt_ocr_service = NMTService(
-                model_name=ModelConfig.NMT_OCR_MODEL,
-                device=ModelConfig.NMT_OCR_DEVICE,
-                dtype=ModelConfig.NMT_OCR_DTYPE,
-            )
-            slides.set_nmt_service(_nmt_ocr_service)
-            loaded.append("nmt_ocr")
-
             # TTS
             print("[Mode] TTS 로드 중...")
             _tts_service = TTSService(
@@ -265,7 +238,6 @@ async def switch_to_realtime_mode():
             raise HTTPException(status_code=500, detail=f"모델 로드 실패: {e}")
 
         _current_mode = Mode.REALTIME
-
         return ModeResponse(
             mode=Mode.REALTIME.value,
             message=f"실시간 번역 모드로 전환 완료. 로드: {loaded}",
