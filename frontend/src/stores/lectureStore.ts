@@ -169,7 +169,11 @@ export const useLectureStore = create<LectureState>((set, get) => ({
   addSubtitle: (subtitle) => set((state) => ({
     subtitles: [
       ...state.subtitles.slice(-50), // 최근 50개만 유지
-      { ...subtitle, id: crypto.randomUUID() }
+      // crypto.randomUUID는 secure context(HTTPS/localhost/file://) 전용 →
+      // LAN HTTP로 접속한 수강자에서는 throw되어 자막이 누락됨
+      { ...subtitle, id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}` }
     ]
   })),
   clearSubtitles: () => set({ subtitles: [] }),
