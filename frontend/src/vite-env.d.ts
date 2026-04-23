@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 
 interface ModelEntry {
-  status: 'pending' | 'loading' | 'done' | 'error'
+  status: 'pending' | 'loading' | 'done' | 'error' | 'skipped'
   progress: number
   label: string
   desc: string
@@ -10,7 +10,6 @@ interface ModelEntry {
 interface ModelMap {
   asr: ModelEntry
   nmt_asr: ModelEntry
-  nmt_ocr: ModelEntry
   tts: ModelEntry
   ocr: ModelEntry
 }

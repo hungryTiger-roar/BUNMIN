@@ -3,6 +3,7 @@
 PDF 업로드 및 전처리 (OCR + VLM 번역)
 """
 import asyncio
+import shutil
 import sys
 import uuid
 from pathlib import Path
@@ -19,13 +20,7 @@ sys.path.insert(0, str(_REPO_DIR))
 router = APIRouter(prefix="/slides", tags=["Slides"])
 
 # 서비스 인스턴스
-_nmt_service = None
 _ocr_service = None
-
-
-def set_nmt_service(service):
-    global _nmt_service
-    _nmt_service = service
 
 
 def set_ocr_service(service):
@@ -242,8 +237,6 @@ async def process_slide(slide_id: str, pdf_path: Path):
     슬라이드 전처리 (백그라운드)
     PDF → 이미지 저장 → VLM 번역 → 완료
     """
-    import shutil
-
     try:
         slide_status[slide_id]["status"] = "processing"
 
@@ -293,9 +286,9 @@ async def process_slide(slide_id: str, pdf_path: Path):
                                     "bbox": region.get("bbox"),
                                     "confidence": region.get("confidence", 0.9),
                                 })
-                        print(f"[Slides] {slide_id} 페이지 {i + 1}/{total_pages} 번역 완료!")
+                        print(f"[Slides] {slide_id} 페이지 {i + 1}/{total_pages} VLM 번역 완료!")
                     else:
-                        print(f"[Slides] {slide_id} 페이지 {i + 1} 번역 실패: {result.get('error')}")
+                        print(f"[Slides] {slide_id} 페이지 {i + 1} VLM 번역 실패: {result.get('error')}")
                         shutil.copy(image_path, translated_path)
                 except Exception as e:
                     print(f"[Slides] VLM 번역 예외 (원본 사용): {e}")
@@ -349,7 +342,6 @@ async def process_translation(slide_id: str):
     VLM 번역 처리 (별도 백그라운드 태스크)
     원본 이미지를 하나씩 번역하여 translated 폴더에 저장
     """
-    import shutil
 
     try:
         translation_status[slide_id]["status"] = "translating"
