@@ -8,8 +8,7 @@ websockets>=12.0
 
 # AI/ML Core
 numpy>=1.24.0
-torch>=2.0.0
-torchvision>=0.15.0
+# torch, torchvision은 npm run setup에서 CUDA 버전으로 설치 (requirements.txt에서 제외)
 transformers>=4.50.0
 accelerate>=0.25.0
 safetensors>=0.4.0

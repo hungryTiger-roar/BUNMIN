@@ -80,7 +80,7 @@ def get_vlm_model():
         }
 
     _vlm_processor = AutoProcessor.from_pretrained(
-        str(VLM_LORA_PATH),
+        VLM_BASE_MODEL,  # Base 모델에서 processor 로드 (LoRA에는 processor 없음)
         trust_remote_code=True,
         min_pixels=256 * 28 * 28,
         max_pixels=512 * 28 * 28,
