@@ -12,3 +12,28 @@ export const WS_BASE = isElectron
   : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
 
 export const WS_PIPELINE_URL = `${WS_BASE}/ws/pipeline`
+
+// 모델 모드 전환 API
+export interface ModeResponse {
+  mode: string
+  message: string
+  models_loaded: string[]
+}
+
+export async function getCurrentMode(): Promise<ModeResponse> {
+  const res = await fetch(`${API_BASE}/api/mode/current`)
+  if (!res.ok) throw new Error('Failed to get current mode')
+  return res.json()
+}
+
+export async function switchToSlideMode(): Promise<ModeResponse> {
+  const res = await fetch(`${API_BASE}/api/mode/slide`, { method: 'POST' })
+  if (!res.ok) throw new Error('Failed to switch to slide mode')
+  return res.json()
+}
+
+export async function switchToRealtimeMode(): Promise<ModeResponse> {
+  const res = await fetch(`${API_BASE}/api/mode/realtime`, { method: 'POST' })
+  if (!res.ok) throw new Error('Failed to switch to realtime mode')
+  return res.json()
+}
