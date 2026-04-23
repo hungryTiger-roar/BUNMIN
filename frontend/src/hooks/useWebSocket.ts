@@ -222,26 +222,29 @@ export function useWebSocket(url: string, role: Role = 'student') {
     socketRef.current = socket
   }, [url, role, setConnected, handleMessage])
 
-  const playAudio = (base64Audio: string) => {
+  const playAudio = async (base64Audio: string) => {
+    if (!audioContextRef.current) return
+
+    if (audioContextRef.current.state === 'suspended') {
+      await audioContextRef.current.resume()
+    }
+
     const audioData = atob(base64Audio)
     const arrayBuffer = new ArrayBuffer(audioData.length)
     const view = new Uint8Array(arrayBuffer)
-
     for (let i = 0; i < audioData.length; i++) {
       view[i] = audioData.charCodeAt(i)
     }
 
-    const blob = new Blob([arrayBuffer], { type: 'audio/wav' })
-    const audioUrl = URL.createObjectURL(blob)
-    const audio = new Audio(audioUrl)
-
-    audio.play().catch((err) => {
+    try {
+      const audioBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer)
+      const source = audioContextRef.current.createBufferSource()
+      source.buffer = audioBuffer
+      source.connect(audioContextRef.current.destination)
+      source.start()
+    } catch (err) {
       console.error('[Audio] 재생 실패:', err)
-      URL.revokeObjectURL(audioUrl)
-    })
-
-    audio.onended = () => URL.revokeObjectURL(audioUrl)
-    audio.onerror = () => URL.revokeObjectURL(audioUrl)
+    }
   }
 
   const unlockAudio = useCallback(() => {
