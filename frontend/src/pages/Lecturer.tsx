@@ -25,6 +25,7 @@ function Lecturer() {
     currentPage,
     totalPages,
     subtitles,
+    modelMode,
     setMicOn,
     setLectureStarted,
     setPaused,
@@ -139,8 +140,8 @@ function Lecturer() {
     navigate('/')
   }
 
-  // 강의 시작 가능 여부
-  const canStartLecture = isConnected && (
+  // 강의 시작 가능 여부 (모드 전환 중이면 불가)
+  const canStartLecture = isConnected && modelMode !== 'switching' && (
     presentationMode === 'screen' || slideStatus === 'ready'
   )
 
@@ -151,6 +152,11 @@ function Lecturer() {
         <div className="flex items-center gap-4">
           <h1 className="text-xl font-bold text-slate-800">강의자 모드</h1>
           <ConnectionStatus isConnected={isConnected} />
+          {modelMode === 'switching' && (
+            <span className="px-3 py-1 bg-orange-500 text-white text-sm font-medium rounded-full animate-pulse">
+              AI 모델 전환 중...
+            </span>
+          )}
           {isLectureStarted && (
             <span className={`px-3 py-1 text-white text-sm font-medium rounded-full ${
               isPaused ? 'bg-yellow-500' : 'bg-red-500 animate-pulse'
@@ -424,6 +430,19 @@ function Lecturer() {
                 <span className="text-slate-500">강의 상태</span>
                 <span className={isLectureStarted ? (isPaused ? 'text-yellow-600' : 'text-green-600') : 'text-slate-400'}>
                   {!isLectureStarted ? '대기' : (isPaused ? '일시정지' : '진행 중')}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">AI 모델</span>
+                <span className={
+                  modelMode === 'realtime' ? 'text-green-600' :
+                  modelMode === 'switching' ? 'text-orange-500' :
+                  modelMode === 'slide' ? 'text-blue-600' : 'text-slate-400'
+                }>
+                  {modelMode === 'idle' && '대기'}
+                  {modelMode === 'slide' && '슬라이드 번역'}
+                  {modelMode === 'switching' && '전환 중...'}
+                  {modelMode === 'realtime' && '실시간 번역'}
                 </span>
               </div>
             </div>

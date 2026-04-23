@@ -21,6 +21,9 @@ node_modules/
 *.pt
 *.pth
 
+# LoRA 모델은 예외 (번역용 파인튜닝 모델)
+!models/qwen3/**
+
 # TTS 자동 다운로드 모델 파일
 backend/app/services/models/
 

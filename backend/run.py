@@ -7,6 +7,12 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 
+# ── 상위 디렉토리를 Python 경로에 추가 (translate_slide_v3 import용) ─────
+_backend_dir = Path(__file__).parent
+_project_root = _backend_dir.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
 # ── 로그 파일 경로 결정 ──────────────────────────────────────────────
 _frozen = getattr(sys, 'frozen', False)
 if _frozen:

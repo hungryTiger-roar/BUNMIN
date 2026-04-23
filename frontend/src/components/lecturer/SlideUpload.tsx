@@ -1,13 +1,13 @@
 import { useCallback, useRef, useState } from 'react'
 import { useLectureStore } from '@/stores/lectureStore'
-import { API_BASE } from '@/lib/api'
+import { API_BASE, switchToRealtimeMode, switchToSlideMode } from '@/lib/api'
 
 function SlideUpload() {
   const inputRef = useRef<HTMLInputElement>(null)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
 
-  const { slideStatus, setSlideId, setSlideStatus } = useLectureStore()
+  const { slideStatus, setSlideId, setSlideStatus, modelMode, setModelMode } = useLectureStore()
 
   const handleFileSelect = useCallback(async (file: File) => {
     // 파일 타입 검증
@@ -63,6 +63,16 @@ function SlideUpload() {
 
         if (data.status === 'completed') {
           setSlideStatus('ready')
+          // 옵션 B: 번역 완료 후 즉시 실시간 모드로 전환
+          setModelMode('switching')
+          try {
+            await switchToRealtimeMode()
+            setModelMode('realtime')
+            console.log('[SlideUpload] 실시간 모드로 전환 완료')
+          } catch (err) {
+            console.error('[SlideUpload] 모드 전환 실패:', err)
+            setModelMode('idle')
+          }
           return
         }
 
@@ -164,9 +174,21 @@ function SlideUpload() {
           </div>
           <p className="text-sm text-green-600 font-medium">준비 완료</p>
           <button
-            onClick={() => {
+            onClick={async () => {
               setSlideStatus('none')
               setSlideId(null)
+              // 재업로드 시 슬라이드 모드로 전환 (VLM 재로드 준비)
+              if (modelMode === 'realtime') {
+                setModelMode('switching')
+                try {
+                  await switchToSlideMode()
+                  setModelMode('slide')
+                  console.log('[SlideUpload] 슬라이드 모드로 전환 완료')
+                } catch (err) {
+                  console.error('[SlideUpload] 모드 전환 실패:', err)
+                  setModelMode('idle')
+                }
+              }
             }}
             className="text-xs text-slate-400 hover:text-slate-600 mt-2"
           >
