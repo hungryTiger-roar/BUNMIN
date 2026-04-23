@@ -126,9 +126,7 @@ function SlideUpload() {
   }
 
   return (
-    <div className="bg-white rounded-xl p-4 shadow-sm">
-      <h3 className="text-sm font-medium text-slate-500 mb-3">강의자료 업로드</h3>
-
+    <div className="text-onSurface">
       <input
         ref={inputRef}
         type="file"
@@ -142,55 +140,52 @@ function SlideUpload() {
           onClick={handleClick}
           onDrop={handleDrop}
           onDragOver={handleDragOver}
-          className="border-2 border-dashed border-slate-200 rounded-lg p-6 text-center cursor-pointer hover:border-primary-400 hover:bg-primary-50/50 transition-colors"
+          className="border-2 border-dashed border-primaryContainer rounded-lg p-6 text-center cursor-pointer hover:border-primary hover:bg-primaryContainer/40 transition-colors"
         >
-          <svg className="w-10 h-10 mx-auto text-slate-300 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-10 h-10 mx-auto text-onSurface/30 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
           </svg>
-          <p className="text-sm text-slate-500">PDF 파일을 드래그하거나 클릭하세요</p>
-          <p className="text-xs text-slate-400 mt-1">PDF 파일</p>
+          <p className="text-sm text-onSurface/70">PDF 파일을 드래그하거나 클릭하세요</p>
+          <p className="text-xs text-onSurface/50 mt-1">업로드 즉시 번역이 시작됩니다</p>
         </div>
       ) : slideStatus === 'uploading' || slideStatus === 'processing' ? (
         <div className="text-center py-6">
           <div className="w-12 h-12 mx-auto mb-3 relative">
-            <svg className="animate-spin w-12 h-12 text-primary-500" fill="none" viewBox="0 0 24 24">
+            <svg className="animate-spin w-12 h-12 text-primary" fill="none" viewBox="0 0 24 24">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
             </svg>
           </div>
-          <p className="text-sm text-slate-600">
+          <p className="text-sm text-onSurface/80">
             {slideStatus === 'uploading' ? '업로드 중...' : '처리 중...'}
           </p>
           {slideStatus === 'processing' && uploadProgress > 0 && (
-            <p className="text-xs text-slate-400 mt-1">{uploadProgress}% 완료</p>
+            <p className="text-xs text-onSurface/50 mt-1">{uploadProgress}% 완료</p>
           )}
         </div>
       ) : slideStatus === 'ready' ? (
-        <div className="text-center py-4">
-          <div className="w-12 h-12 mx-auto mb-2 bg-green-100 rounded-full flex items-center justify-center">
-            <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="text-center py-2">
+          <div className="w-10 h-10 mx-auto mb-2 bg-emerald-100 rounded-full flex items-center justify-center">
+            <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
           </div>
-          <p className="text-sm text-green-600 font-medium">준비 완료</p>
+          <p className="text-sm text-emerald-600 font-medium">준비 완료</p>
           <button
             onClick={async () => {
               setSlideStatus('none')
               setSlideId(null)
-              // 재업로드 시 슬라이드 모드로 전환 (VLM 재로드 준비)
               if (modelMode === 'realtime') {
                 setModelMode('switching')
                 try {
                   await switchToSlideMode()
                   setModelMode('slide')
-                  console.log('[SlideUpload] 슬라이드 모드로 전환 완료')
-                } catch (err) {
-                  console.error('[SlideUpload] 모드 전환 실패:', err)
+                } catch {
                   setModelMode('idle')
                 }
               }
             }}
-            className="text-xs text-slate-400 hover:text-slate-600 mt-2"
+            className="text-xs text-onSurface/50 hover:text-onSurface mt-2"
           >
             다시 업로드
           </button>
@@ -198,7 +193,7 @@ function SlideUpload() {
       ) : null}
 
       {error && (
-        <p className="text-sm text-red-500 mt-2 text-center">{error}</p>
+        <p className="text-sm text-error mt-2 text-center">{error}</p>
       )}
     </div>
   )

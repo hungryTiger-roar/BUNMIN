@@ -32,11 +32,16 @@ export default {
         onSurface: "var(--color-on-surface)",
         onPrimary: "var(--color-on-primary)",
         error: "var(--color-error)",
-        
+
+        // 그라데이션 위에 띄우는 패널용 (ParticipantsPanel, 언어선택 팝업 등)
+        overlaySurface: "var(--color-overlay-surface)",
+        onOverlaySurface: "var(--color-on-overlay-surface)",
+        overlayBorder: "var(--color-overlay-border)",
+
         // Gradient Colors (포인트 컬러)
         gradientBlue: "var(--color-gradient-blue)",
         gradientPurple: "var(--color-gradient-purple)",
-        
+
         // Color.kt에 정의된 기타 정적 색상 (다크모드 영향 안 받는 색상들)
         findId: "var(--color-find-id)",
         purple80: "#D0BCFF",
@@ -48,6 +53,7 @@ export default {
       },
       fontFamily: {
         'special-gothic': ['"Special Gothic Expanded One"', 'sans-serif'],
+        'a2z': ['"A2z"', 'sans-serif'],
       },
       fontSize: {
         // Type.kt의 Typography 역할

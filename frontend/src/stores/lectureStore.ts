@@ -13,6 +13,25 @@ interface SlidePage {
   ocrText?: string
 }
 
+export interface ChatMessage {
+  id: string
+  sender: 'lecturer' | 'student'
+  name: string
+  text: string
+  timestamp: number
+  studentId?: string
+}
+
+export interface Participant {
+  id: string
+  name: string
+}
+
+export interface Participants {
+  lecturer: { name: string; connected: boolean } | null
+  students: Participant[]
+}
+
 type ModelMode = 'idle' | 'slide' | 'switching' | 'realtime'
 
 interface LectureState {
@@ -69,19 +88,26 @@ interface LectureState {
   setAudioOn: (on: boolean) => void
   setSubtitleOn: (on: boolean) => void
 
-  // 자막 설정 (커스터마이징)
-  subtitleSettings: {
-    fontSize: number
-    position: 'top' | 'bottom'
-    opacity: number
-  }
-  setSubtitleSettings: (settings: Partial<LectureState['subtitleSettings']>) => void
-
   // 실시간 데이터
   subtitles: Subtitle[]
 
   addSubtitle: (subtitle: Omit<Subtitle, 'id'>) => void
   clearSubtitles: () => void
+
+  // 채팅
+  chatMessages: ChatMessage[]
+  addChatMessage: (message: ChatMessage) => void
+  clearChatMessages: () => void
+
+  // 참여자
+  participants: Participants
+  setParticipants: (participants: Participants) => void
+
+  // 강의 제목 (강사가 설정) + 강의자료 파일명 (fallback)
+  lectureTitle: string
+  slideFilename: string
+  setLectureTitle: (title: string) => void
+  setSlideFilename: (filename: string) => void
 
   // 전체 초기화
   reset: () => void
@@ -105,12 +131,11 @@ const initialState = {
   viewMode: 'original' as const,
   isAudioOn: true,
   isSubtitleOn: true,
-  subtitleSettings: {
-    fontSize: 18,
-    position: 'bottom' as const,
-    opacity: 0.9,
-  },
   subtitles: [],
+  chatMessages: [] as ChatMessage[],
+  participants: { lecturer: null, students: [] } as Participants,
+  lectureTitle: '',
+  slideFilename: '',
 }
 
 export const useLectureStore = create<LectureState>((set, get) => ({
@@ -159,11 +184,6 @@ export const useLectureStore = create<LectureState>((set, get) => ({
   setAudioOn: (on) => set({ isAudioOn: on }),
   setSubtitleOn: (on) => set({ isSubtitleOn: on }),
 
-  // 자막 설정
-  setSubtitleSettings: (settings) => set((state) => ({
-    subtitleSettings: { ...state.subtitleSettings, ...settings }
-  })),
-
   // 실시간 데이터
   addSubtitle: (subtitle) => set((state) => ({
     subtitles: [
@@ -172,6 +192,19 @@ export const useLectureStore = create<LectureState>((set, get) => ({
     ]
   })),
   clearSubtitles: () => set({ subtitles: [] }),
+
+  // 채팅
+  addChatMessage: (message) => set((state) => ({
+    chatMessages: [...state.chatMessages.slice(-200), message],
+  })),
+  clearChatMessages: () => set({ chatMessages: [] }),
+
+  // 참여자
+  setParticipants: (participants) => set({ participants }),
+
+  // 강의 제목
+  setLectureTitle: (title) => set({ lectureTitle: title }),
+  setSlideFilename: (filename) => set({ slideFilename: filename }),
 
   // 전체 초기화
   reset: () => set(initialState),

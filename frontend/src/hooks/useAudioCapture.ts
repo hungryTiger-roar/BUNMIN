@@ -14,6 +14,9 @@ export function useAudioCapture({ onAudioData, chunkInterval = 2000 }: UseAudioC
   const streamRef = useRef<MediaStream | null>(null)
   const chunksRef = useRef<Float32Array[]>([])
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const gainNodeRef = useRef<GainNode | null>(null)
+  const gainValueRef = useRef<number>(1)  // 0 = mute, 1 = unity, 2 = +6dB
 
   const startCapture = useCallback(async () => {
     try {
@@ -35,16 +38,30 @@ export function useAudioCapture({ onAudioData, chunkInterval = 2000 }: UseAudioC
       audioContextRef.current = audioContext
 
       const source = audioContext.createMediaStreamSource(stream)
+
+      // 입력 게인 제어 — 사용자가 조절하는 볼륨이 analyser + ASR 양쪽에 모두 반영됨
+      const gainNode = audioContext.createGain()
+      gainNode.gain.value = gainValueRef.current
+      gainNodeRef.current = gainNode
+      source.connect(gainNode)
+
       const processor = audioContext.createScriptProcessor(4096, 1, 1)
       processorRef.current = processor
 
-      // 오디오 데이터 수집
+      // 실시간 레벨 측정용 analyser (게인 적용 후 기준)
+      const analyser = audioContext.createAnalyser()
+      analyser.fftSize = 2048
+      analyser.smoothingTimeConstant = 0.3
+      analyserRef.current = analyser
+      gainNode.connect(analyser)
+
+      // 오디오 데이터 수집 (게인 적용 후 기준)
       processor.onaudioprocess = (e) => {
         const inputData = e.inputBuffer.getChannelData(0)
         chunksRef.current.push(new Float32Array(inputData))
       }
 
-      source.connect(processor)
+      gainNode.connect(processor)
       processor.connect(audioContext.destination)
 
       // 주기적으로 오디오 전송
@@ -76,6 +93,16 @@ export function useAudioCapture({ onAudioData, chunkInterval = 2000 }: UseAudioC
       processorRef.current = null
     }
 
+    if (analyserRef.current) {
+      analyserRef.current.disconnect()
+      analyserRef.current = null
+    }
+
+    if (gainNodeRef.current) {
+      gainNodeRef.current.disconnect()
+      gainNodeRef.current = null
+    }
+
     if (audioContextRef.current) {
       audioContextRef.current.close()
       audioContextRef.current = null
@@ -91,11 +118,27 @@ export function useAudioCapture({ onAudioData, chunkInterval = 2000 }: UseAudioC
     console.log('[AudioCapture] 캡처 중지')
   }, [])
 
+  // 게인 설정 — 캡처 중이면 즉시 반영, 중지 상태면 다음 캡처 시작 시점에 적용
+  const setGain = useCallback((gain: number) => {
+    const clamped = Math.max(0, Math.min(4, gain))  // 0 ~ 4x 범위 안전하게 클램프
+    gainValueRef.current = clamped
+    if (gainNodeRef.current && audioContextRef.current) {
+      // 부드러운 전환으로 클릭/팝 잡음 방지
+      gainNodeRef.current.gain.setTargetAtTime(
+        clamped,
+        audioContextRef.current.currentTime,
+        0.02,
+      )
+    }
+  }, [])
+
   return {
     isCapturing,
     error,
     startCapture,
     stopCapture,
+    analyserRef,
+    setGain,
   }
 }
 
