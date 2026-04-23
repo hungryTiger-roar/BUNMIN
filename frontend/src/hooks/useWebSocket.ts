@@ -51,12 +51,15 @@ export function useWebSocket(url: string, role: Role = 'student') {
 
   const handleMessage = useCallback((data: WebSocketMessage) => {
     switch (data.type) {
-      case 'transcription':
+      case 'transcription': {
         // 번역 결과 수신
+        const outputTime = Date.now()
+        const inputTime = data.sentAt as number | undefined
         addSubtitle({
           original: data.original as string,
           translated: data.translated as string,
-          timestamp: Date.now(),
+          timestamp: outputTime,
+          inputTime,
         })
 
         // 오디오 재생 (잠금 해제된 경우에만)
@@ -64,6 +67,7 @@ export function useWebSocket(url: string, role: Role = 'student') {
           playAudio(data.audio as string)
         }
         break
+      }
 
       case 'slide_select':
         // 강의자가 슬라이드 선택
@@ -181,6 +185,7 @@ export function useWebSocket(url: string, role: Role = 'student') {
       reconnectTimeoutRef.current = undefined
     }
 
+    console.log('[WebSocket] 재연결 시도...')
     const socket = new WebSocket(url)
 
     socket.onopen = () => {
@@ -197,7 +202,6 @@ export function useWebSocket(url: string, role: Role = 'student') {
       setConnected(false)
 
       reconnectTimeoutRef.current = setTimeout(() => {
-        console.log('[WebSocket] 재연결 시도...')
         connect()
       }, 3000)
     }
@@ -218,25 +222,28 @@ export function useWebSocket(url: string, role: Role = 'student') {
     socketRef.current = socket
   }, [url, role, setConnected, handleMessage])
 
-  const playAudio = (base64Audio: string) => {
+  const playAudio = async (base64Audio: string) => {
+    if (!audioContextRef.current) return
+
+    if (audioContextRef.current.state === 'suspended') {
+      await audioContextRef.current.resume()
+    }
+
     const audioData = atob(base64Audio)
     const arrayBuffer = new ArrayBuffer(audioData.length)
     const view = new Uint8Array(arrayBuffer)
-
     for (let i = 0; i < audioData.length; i++) {
       view[i] = audioData.charCodeAt(i)
     }
 
-    const blob = new Blob([arrayBuffer], { type: 'audio/wav' })
-    const audioUrl = URL.createObjectURL(blob)
-    const audio = new Audio(audioUrl)
-
-    audio.play().catch((err) => {
+    try {
+      const audioBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer)
+      const source = audioContextRef.current.createBufferSource()
+      source.buffer = audioBuffer
+      source.connect(audioContextRef.current.destination)
+      source.start()
+    } catch (err) {
       console.error('[Audio] 재생 실패:', err)
-    })
-
-    audio.onended = () => {
-      URL.revokeObjectURL(audioUrl)
     }
   }
 
@@ -267,6 +274,8 @@ export function useWebSocket(url: string, role: Role = 'student') {
   useEffect(() => {
     return () => {
       disconnect()
+      audioContextRef.current?.close()
+      audioContextRef.current = null
     }
   }, [disconnect])
 

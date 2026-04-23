@@ -54,13 +54,17 @@ hiddenimports = [
     'soundfile',
     # ASR - CohereLabs/cohere-transcribe-03-2026
     'accelerate',
-    # NMT - tencent/HY-MT1.5-1.8B
+    # NMT-ASR - facebook/nllb-200-distilled-1.3B
     'sentencepiece',
     # TTS - Piper TTS
     'piper',
     # OCR - RapidOCR + Korean PP-OCRv4
     'rapidocr_onnxruntime',
     'PIL',
+    # Slide VLM (EasyOCR + Qwen3-VL + LoRA)
+    'easyocr',
+    'peft',
+    'bitsandbytes',
 ]
 
 hiddenimports += collect_submodules('starlette')

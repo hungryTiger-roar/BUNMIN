@@ -203,7 +203,7 @@ def eval_ocr_nmt() -> dict:
         return {"skipped": True, "reason": "no_image_files"}
 
     ocr_service = OCRService()
-    nmt_service = NMTService(model_name=ModelConfig.NMT_OCR_MODEL, device=ModelConfig.NMT_OCR_DEVICE, dtype=ModelConfig.NMT_OCR_DTYPE)
+    nmt_service = NMTService(model_name=ModelConfig.NMT_ASR_MODEL, device=ModelConfig.NMT_ASR_DEVICE, dtype=ModelConfig.NMT_ASR_DTYPE)
 
     cer_pairs = []
     ocr_latencies_ms = []
@@ -259,7 +259,7 @@ def eval_ocr_nmt() -> dict:
 
     result = {
         "ocr_model": ocr_service.mode,
-        "nmt_model": ModelConfig.NMT_OCR_MODEL,
+        "nmt_model": ModelConfig.NMT_ASR_MODEL,
         "quality": {
             "ocr_cer": round(cer_result["avg_cer"], 4),
             "pipeline_bleu": round(bleu_result["avg_bleu"] * 100, 2),

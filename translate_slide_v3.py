@@ -47,6 +47,9 @@ def get_vlm_model():
     if _vlm_model is not None:
         return _vlm_model, _vlm_processor
 
+    if not torch.cuda.is_available():
+        raise RuntimeError("VLM 번역에는 NVIDIA GPU(CUDA)가 필요합니다. nvidia-smi로 GPU를 확인하고, CUDA 버전 PyTorch(pip install torch --index-url https://download.pytorch.org/whl/cu124)를 설치하세요.")
+
     from transformers import AutoProcessor, AutoModelForImageTextToText, BitsAndBytesConfig
     from peft import PeftModel
 
@@ -142,7 +145,7 @@ def stage_ocr(image_path: str) -> list:
     import easyocr
 
     print("  OCR 모델 로드 중...")
-    reader = easyocr.Reader(['ko', 'en'], gpu=True)
+    reader = easyocr.Reader(['ko', 'en'], gpu=torch.cuda.is_available())
 
     print("  텍스트 영역 추출 중...")
     result = reader.readtext(image_path)
@@ -172,10 +175,10 @@ def stage_ocr(image_path: str) -> list:
 
     print(f"\n  총 {len(regions)}개 영역 감지")
 
-    # GPU 메모리 해제
     del reader
     gc.collect()
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     print("  GPU 메모리 해제 완료")
 
     return regions

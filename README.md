@@ -12,7 +12,7 @@
 | Frontend | React + TypeScript + Vite |
 | Backend | FastAPI + uvicorn |
 | 실시간 통신 | WebSocket |
-| AI | Cohere ASR, Tencent HY-MT, Piper TTS, RapidOCR |
+| AI | Cohere ASR, NLLB NMT, Qwen3-VL (슬라이드), Piper TTS, RapidOCR |
 | 데스크탑 (선택) | Electron |
 
 ---
@@ -59,13 +59,11 @@ HF_TOKEN=hf_xxxxxxxxxxxx
 
 ASR_MODEL=CohereLabs/cohere-transcribe-03-2026
 NMT_ASR_MODEL=facebook/nllb-200-distilled-1.3B
-NMT_OCR_MODEL=tencent/HY-MT1.5-1.8B
 TTS_MODEL=piper
 OCR_MODEL=rapidocr
 
 ASR_DEVICE=cuda
 NMT_ASR_DEVICE=cuda
-NMT_OCR_DEVICE=cuda
 TTS_DEVICE=cpu
 OCR_DEVICE=cpu
 ```
