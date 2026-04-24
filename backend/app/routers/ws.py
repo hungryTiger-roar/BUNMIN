@@ -4,7 +4,6 @@ WebSocket 라우터
 """
 import asyncio
 import base64
-import hashlib
 import io
 import re
 import wave
@@ -14,7 +13,6 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
 from app.routers import transcripts
-from app.routers.slides import get_page_ocr_text
 
 
 def _validate_audio(audio_bytes: bytes) -> tuple[bool, str]:
@@ -110,7 +108,6 @@ class ConnectionManager:
         self.is_lecture_started: bool = False
         self.is_paused: bool = False
         self.presentation_mode: str = "slide"  # 'slide' or 'screen'
-        self.last_screen_hash: Optional[str] = None
         self.current_session_id: Optional[str] = None  # 자막 저장 세션
         self._lock = asyncio.Lock()  # students 리스트 동시 접근 방지
         self._tasks: set[asyncio.Task] = set()  # 실행 중인 태스크 추적
@@ -448,19 +445,10 @@ async def process_audio(message: dict):
 
         print(f"[ASR  input ] {korean_text}", flush=True)
 
-        # 현재 슬라이드 페이지 OCR 텍스트를 컨텍스트로 활용 (0-indexed)
-        slide_context = ""
-        if manager.current_slide_id and manager.current_page:
-            slide_context = get_page_ocr_text(
-                manager.current_slide_id, manager.current_page - 1
-            )
-            if slide_context:
-                print(f"[NMT] 슬라이드 컨텍스트 사용: {slide_context[:50]}...")
-
         # NMT: 한국어 → 영어
         t_nmt = time.perf_counter()
         english_text = await asyncio.to_thread(
-            _nmt_service.translate, korean_text, "ko", "en", 512, slide_context
+            _nmt_service.translate, korean_text, "ko", "en", 512
         )
         t_nmt_done = time.perf_counter()
         print(f"[NMT  output] {english_text}", flush=True)
@@ -514,8 +502,6 @@ async def process_screen(message: dict):
     화면 캡처 처리
     - 화면을 수강자에게 전달
     - 슬라이드 모드: 사전 처리된 overlay 전송
-    - 순수 화면 공유 모드: 실시간 OCR + 번역 후 overlay 전송
-    - 화면이 바뀌지 않으면 OCR 재실행 생략
     """
     try:
         screen_b64 = message.get("data", "")
@@ -544,58 +530,6 @@ async def process_screen(message: dict):
                 })
             return
 
-        # 순수 화면 공유 모드: 실시간 OCR
-        if not _ocr_service or not _nmt_service:
-            return
-
-        image_bytes = base64.b64decode(screen_b64)
-        screen_hash = hashlib.md5(image_bytes).hexdigest()[:16]
-
-        # 화면이 바뀌지 않았으면 OCR 생략
-        if screen_hash == manager.last_screen_hash:
-            return
-        manager.last_screen_hash = screen_hash
-
-        # OCR + 번역 (블로킹 작업이므로 thread에서 실행)
-        ocr_results = await asyncio.to_thread(
-            _ocr_service.extract_with_positions, image_bytes
-        )
-
-        if not ocr_results:
-            return
-
-        overlay_items = []
-        texts = [item["text"] for item in ocr_results if item["text"].strip()]
-
-        if texts:
-            # NMT 배치 번역
-            translated_list = await asyncio.to_thread(
-                _nmt_service.translate_batch, texts
-            )
-            text_idx = 0
-            for item in ocr_results:
-                if not item["text"].strip():
-                    continue
-                raw_bbox = item["bbox"]
-                if raw_bbox is None:
-                    bbox = None
-                elif len(raw_bbox) == 4:
-                    bbox = [raw_bbox[0][0], raw_bbox[0][1], raw_bbox[2][0], raw_bbox[2][1]]
-                else:
-                    bbox = raw_bbox
-                overlay_items.append({
-                    "original": item["text"],
-                    "translated": translated_list[text_idx],
-                    "bbox": bbox,
-                    "confidence": item["confidence"],
-                })
-                text_idx += 1
-
-        if overlay_items:
-            await manager.broadcast_to_students({
-                "type": "overlay",
-                "items": overlay_items,
-            })
 
     except Exception as e:
         print(f"[WS] 화면 처리 오류: {e}")

@@ -30,7 +30,6 @@ load_dotenv(Path(__file__).parent / ".env")
 VLM_BASE_MODEL = os.environ.get("VLM_BASE_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
 VLM_LORA_PATH = Path(__file__).parent / os.environ.get("VLM_LORA_PATH", "models/qwen3/qwen3-vl-8b-lora-r64-e3-final")
 VLM_DEVICE = os.environ.get("VLM_DEVICE", "cuda")
-VLM_MAX_GPU_MEMORY = os.environ.get("VLM_MAX_GPU_MEMORY", "7GB")
 VLM_USE_4BIT = os.environ.get("VLM_USE_4BIT", "true").lower() == "true"
 
 # ============================================================
@@ -82,8 +81,8 @@ def get_vlm_model():
     _vlm_processor = AutoProcessor.from_pretrained(
         VLM_BASE_MODEL,  # Base 모델에서 processor 로드 (LoRA에는 processor 없음)
         trust_remote_code=True,
-        min_pixels=256 * 28 * 28,
-        max_pixels=512 * 28 * 28,
+        min_pixels=128 * 28 * 28,
+        max_pixels=256 * 28 * 28,
     )
 
     base_model = AutoModelForImageTextToText.from_pretrained(
@@ -260,8 +259,9 @@ Output format (one translation per line, same order):
 
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     inputs = processor(text=[text], images=[original_image], return_tensors="pt").to(model.device)
+    original_image.close()
 
-    with torch.no_grad():
+    with torch.inference_mode():
         outputs = model.generate(
             **inputs,
             max_new_tokens=500,
@@ -271,6 +271,10 @@ Output format (one translation per line, same order):
 
     input_len = inputs["input_ids"].shape[1]
     response = processor.decode(outputs[0][input_len:], skip_special_tokens=True).strip()
+
+    del inputs, outputs
+    gc.collect()
+    torch.cuda.empty_cache()
 
     print(f"\n  VLM 응답:\n{response[:300]}...")
 

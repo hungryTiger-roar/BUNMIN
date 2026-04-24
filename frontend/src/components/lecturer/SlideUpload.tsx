@@ -53,9 +53,6 @@ function SlideUpload() {
 
   // 처리 상태 확인
   const pollStatus = async (slideId: string) => {
-    const maxAttempts = 300 // 최대 10분 (페이지 많은 PDF 대응)
-    let attempts = 0
-
     const checkStatus = async () => {
       try {
         const response = await fetch(`${API_BASE}/slides/status/${slideId}`)
@@ -87,13 +84,7 @@ function SlideUpload() {
           setUploadProgress(Math.round((data.processed_pages / data.total_pages) * 100))
         }
 
-        attempts++
-        if (attempts < maxAttempts) {
-          setTimeout(checkStatus, 2000)
-        } else {
-          setError('처리 시간이 초과되었습니다.')
-          setSlideStatus('none')
-        }
+        setTimeout(checkStatus, 2000)
       } catch (err) {
         console.error('[SlideUpload] 상태 확인 실패:', err)
       }
