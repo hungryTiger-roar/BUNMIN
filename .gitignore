@@ -23,6 +23,8 @@ node_modules/
 
 # LoRA 모델은 예외 (번역용 파인튜닝 모델)
 !models/qwen3/**
+# HuggingFace 자동 생성 LFS 설정 파일 제외
+models/**/.gitattributes
 
 # TTS 자동 다운로드 모델 파일
 backend/app/services/models/
