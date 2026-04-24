@@ -117,12 +117,29 @@ async def upload_slide(
         "total_pages": 0,
         "processed_pages": 0,
         "error": None,
+        "filename": file.filename or f"{slide_id}.pdf",
     }
 
     # 백그라운드 처리 시작
     background_tasks.add_task(process_slide, slide_id, save_path)
 
     return {"slide_id": slide_id, "message": "업로드 완료, 처리 시작"}
+
+
+@router.get("/list")
+async def list_slides():
+    """업로드된 강의자료 전체 목록 — 수강자가 번역본 다운로드용으로 조회"""
+    items = []
+    for sid, info in slide_status.items():
+        translated_pdf = TRANSLATED_DIR / f"{sid}_translated.pdf"
+        items.append({
+            "slide_id": sid,
+            "filename": info.get("filename", f"{sid}.pdf"),
+            "status": info.get("status"),
+            "total_pages": info.get("total_pages", 0),
+            "has_translated": translated_pdf.exists(),
+        })
+    return {"items": items}
 
 
 @router.get("/status/{slide_id}")
@@ -177,7 +194,8 @@ async def get_pages(slide_id: str):
         )
         for page in slide_data[slide_id]
     ]
-    return {"pages": pages}
+    filename = slide_status.get(slide_id, {}).get("filename")
+    return {"pages": pages, "filename": filename}
 
 
 @router.get("/image/{slide_id}/{page_number}")
@@ -200,13 +218,41 @@ async def get_image(slide_id: str, page_number: int, translated: bool = False):
     return FileResponse(image_path, media_type="image/png")
 
 
+_FORBIDDEN_FILENAME_CHARS = set(r'\/:*?"<>|')
+
+
+def _safe_filename_stem(title: Optional[str], fallback_stem: str) -> str:
+    """다운로드용 파일명(확장자 제외) 생성 — title을 우선하되 공격 가능한 문자 제거."""
+    if not title:
+        return fallback_stem
+    cleaned = "".join(c for c in title if c not in _FORBIDDEN_FILENAME_CHARS).strip()
+    # 제어 문자 제거
+    cleaned = "".join(c for c in cleaned if c.isprintable())
+    if not cleaned:
+        return fallback_stem
+    return cleaned[:100]
+
+
 @router.get("/download/{slide_id}")
-async def download_slide(slide_id: str, type: str = "original"):
+async def download_slide(
+    slide_id: str,
+    type: str = "original",
+    title: Optional[str] = None,
+):
     """
     슬라이드 PDF 다운로드
     - type=original: 원본 PDF
-    - type=translated: 번역본 PDF (이미지들을 PDF로 변환)
+    - type=translated: 번역본 PDF
+    - title (optional): 강의 제목. 지정 시 파일명에 사용.
     """
+    stored_title = slide_status.get(slide_id, {}).get("filename", "")
+    fallback_stem_base = (
+        _safe_filename_stem(stored_title.removesuffix(".pdf"), f"강의자료_{slide_id}")
+        if stored_title
+        else f"강의자료_{slide_id}"
+    )
+    stem = _safe_filename_stem(title, fallback_stem_base)
+
     if type == "original":
         pdf_path = UPLOAD_DIR / f"{slide_id}.pdf"
         if not pdf_path.exists():
@@ -214,17 +260,15 @@ async def download_slide(slide_id: str, type: str = "original"):
         return FileResponse(
             pdf_path,
             media_type="application/pdf",
-            filename=f"강의자료_{slide_id}.pdf"
+            filename=f"{stem}.pdf",
         )
     elif type == "translated":
-        # 미리 생성된 번역 PDF 반환
         translated_pdf_path = TRANSLATED_DIR / f"{slide_id}_translated.pdf"
-
         if translated_pdf_path.exists():
             return FileResponse(
                 translated_pdf_path,
                 media_type="application/pdf",
-                filename=f"강의자료_번역본_{slide_id}.pdf"
+                filename=f"{stem}_번역본.pdf",
             )
         else:
             raise HTTPException(404, "번역본 PDF가 아직 생성되지 않았습니다. 처리 완료 후 다시 시도하세요.")

@@ -4,6 +4,9 @@ WebSocket 라우터
 """
 import asyncio
 import base64
+import hashlib
+import time
+import uuid
 import io
 import re
 import wave
@@ -102,13 +105,16 @@ class ConnectionManager:
 
     def __init__(self):
         self.lecturer: Optional[WebSocket] = None
+        self.lecturer_name: str = "professor"
         self.students: list[WebSocket] = []
+        self.student_info: dict[WebSocket, dict] = {}  # ws -> {id, name}
         self.current_slide_id: Optional[str] = None
         self.current_page: int = 1
         self.is_lecture_started: bool = False
         self.is_paused: bool = False
         self.presentation_mode: str = "slide"  # 'slide' or 'screen'
         self.current_session_id: Optional[str] = None  # 자막 저장 세션
+        self.lecture_title: str = ""  # 강사가 설정한 강의 제목
         self._lock = asyncio.Lock()  # students 리스트 동시 접근 방지
         self._tasks: set[asyncio.Task] = set()  # 실행 중인 태스크 추적
 
@@ -119,6 +125,8 @@ class ConnectionManager:
 
     def disconnect_lecturer(self):
         self.lecturer = None
+        self.lecturer_name = "professor"
+        self.lecture_title = ""
         # 강의 중 비정상 종료 — 자막 저장 마무리
         if self.is_lecture_started and self.current_session_id:
             ended_id = transcripts.end_session(self.current_session_id)
@@ -130,7 +138,26 @@ class ConnectionManager:
     def disconnect_student(self, websocket: WebSocket):
         if websocket in self.students:
             self.students.remove(websocket)
+        self.student_info.pop(websocket, None)
         print(f"[WS] 수강자 연결 해제 (남은 인원: {len(self.students)}명)")
+
+    def participants_payload(self) -> dict:
+        """참여자 목록 스냅샷"""
+        return {
+            "type": "participants",
+            "lecturer": {
+                "name": self.lecturer_name,
+                "connected": self.lecturer is not None,
+            },
+            "students": [
+                {
+                    "id": info["id"],
+                    "name": info["name"],
+                }
+                for ws, info in self.student_info.items()
+                if ws in self.students
+            ],
+        }
 
     async def broadcast_to_students(self, message: dict):
         """모든 수강자에게 메시지 전송 (Lock으로 동시 접근 보호)"""
@@ -151,12 +178,25 @@ class ConnectionManager:
                         self.students.remove(ws)
                         print(f"[WS] 수강자 연결 해제 (남은 인원: {len(self.students)}명)")
 
+    async def broadcast_all(self, message: dict):
+        """강의자 + 모든 수강자에게 전송 (채팅용)"""
+        await self.broadcast_to_students(message)
+        if self.lecturer is not None:
+            try:
+                await self.lecturer.send_json(message)
+            except Exception:
+                self.disconnect_lecturer()
+
     async def broadcast_student_count(self):
         """현재 접속 중인 수강자 수를 모든 수강자에게 전송"""
         await self.broadcast_to_students({
             "type": "student_count",
             "count": len(self.students),
         })
+
+    async def broadcast_participants(self):
+        """참여자 목록을 강의자 + 모든 수강자에게 전송"""
+        await self.broadcast_all(self.participants_payload())
 
 
 manager = ConnectionManager()
@@ -220,6 +260,7 @@ async def websocket_pipeline(websocket: WebSocket):
             return
 
         role = init_msg.get("role")
+        name = (init_msg.get("name") or "").strip()
 
         if role == "lecturer":
             client_host = websocket.client.host if websocket.client else ""
@@ -234,15 +275,36 @@ async def websocket_pipeline(websocket: WebSocket):
                 await websocket.close(code=4409, reason="lecturer already connected")
                 return
             manager.lecturer = websocket
-            print("[WS] 강의자 연결됨")
+            manager.lecturer_name = name or "professor"
+            print(f"[WS] 강의자 연결됨 (이름: {manager.lecturer_name})")
             await websocket.send_json({"type": "registered", "role": "lecturer"})
+            if manager.lecture_title:
+                await websocket.send_json({
+                    "type": "lecture_title",
+                    "title": manager.lecture_title,
+                })
+            await manager.broadcast_participants()
             await run_with_heartbeat(handle_lecturer(websocket), websocket)
 
         elif role == "student":
+            student_id = str(uuid.uuid4())
+            student_name = name or f"Guest{len(manager.students) + 1}"
             manager.students.append(websocket)
-            print(f"[WS] 수강자 연결됨 (총 {len(manager.students)}명)")
-            await websocket.send_json({"type": "registered", "role": "student"})
+            manager.student_info[websocket] = {"id": student_id, "name": student_name}
+            print(f"[WS] 수강자 연결됨 (이름: {student_name}, 총 {len(manager.students)}명)")
+            await websocket.send_json({
+                "type": "registered",
+                "role": "student",
+                "id": student_id,
+                "name": student_name,
+            })
+            if manager.lecture_title:
+                await websocket.send_json({
+                    "type": "lecture_title",
+                    "title": manager.lecture_title,
+                })
             await manager.broadcast_student_count()
+            await manager.broadcast_participants()
             # 현재 강의 상태 즉시 전송
             if manager.is_lecture_started:
                 await websocket.send_json({
@@ -271,9 +333,11 @@ async def websocket_pipeline(websocket: WebSocket):
     except WebSocketDisconnect:
         if role == "lecturer":
             manager.disconnect_lecturer()
+            await manager.broadcast_participants()
         elif role == "student":
             manager.disconnect_student(websocket)
             await manager.broadcast_student_count()
+            await manager.broadcast_participants()
 
 
 async def handle_lecturer(websocket: WebSocket):
@@ -376,8 +440,40 @@ async def handle_lecturer(websocket: WebSocket):
                     "mode": manager.presentation_mode,
                 })
 
+            elif msg_type == "chat_message":
+                text = (message.get("text") or "").strip()
+                if not text:
+                    continue
+                await manager.broadcast_all({
+                    "type": "chat_message",
+                    "id": str(uuid.uuid4()),
+                    "sender": "lecturer",
+                    "name": manager.lecturer_name,
+                    "text": text,
+                    "timestamp": int(time.time() * 1000),
+                })
+
+            elif msg_type == "lecture_title":
+                title = (message.get("title") or "").strip()
+                manager.lecture_title = title
+                print(f"[WS] 강의 제목 설정: {title!r}")
+                await manager.broadcast_all({
+                    "type": "lecture_title",
+                    "title": title,
+                })
+
+            elif msg_type == "lecturer_name":
+                new_name = (message.get("name") or "").strip() or "professor"
+                manager.lecturer_name = new_name
+                print(f"[WS] 강사 이름 변경: {new_name}")
+                await manager.broadcast_participants()
+
+            elif msg_type == "participants_request":
+                await websocket.send_json(manager.participants_payload())
+
     except WebSocketDisconnect:
         manager.disconnect_lecturer()
+        await manager.broadcast_participants()
 
 
 async def handle_student(websocket: WebSocket):
@@ -393,9 +489,28 @@ async def handle_student(websocket: WebSocket):
             elif msg_type == "pong":
                 pass  # heartbeat 응답 확인
 
+            elif msg_type == "chat_message":
+                text = (message.get("text") or "").strip()
+                if not text:
+                    continue
+                info = manager.student_info.get(websocket, {})
+                await manager.broadcast_all({
+                    "type": "chat_message",
+                    "id": str(uuid.uuid4()),
+                    "sender": "student",
+                    "name": info.get("name", "익명"),
+                    "student_id": info.get("id"),
+                    "text": text,
+                    "timestamp": int(time.time() * 1000),
+                })
+
+            elif msg_type == "participants_request":
+                await websocket.send_json(manager.participants_payload())
+
     except WebSocketDisconnect:
         manager.disconnect_student(websocket)
         await manager.broadcast_student_count()
+        await manager.broadcast_participants()
 
 
 async def process_audio(message: dict):

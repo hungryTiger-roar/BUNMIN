@@ -25,6 +25,8 @@ node_modules/
 !models/qwen3/**
 # LoRA 모델 내 HuggingFace 캐시는 제외
 models/qwen3/**/.cache/
+# HuggingFace 자동 생성 LFS 설정 파일 제외
+models/**/.gitattributes
 
 # TTS 자동 다운로드 모델 파일
 backend/app/services/models/

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLectureStore } from '@/stores/lectureStore'
+import { usePreferencesStore } from '@/stores/preferencesStore'
 import { API_BASE } from '@/lib/api'
 
 interface WebSocketMessage {
@@ -29,11 +30,19 @@ export function useWebSocket(url: string, role: Role = 'student') {
     setPresentationMode,
     setCurrentScreen,
     setStudentCount,
+    addChatMessage,
+    setParticipants,
+    setLectureTitle,
+    setSlideFilename,
     studentName,
   } = useLectureStore()
 
-  const studentNameRef = useRef(studentName)
-  useEffect(() => { studentNameRef.current = studentName }, [studentName])
+  const lecturerName = usePreferencesStore((s) => s.lecturerName)
+
+  const registerNameRef = useRef(role === 'lecturer' ? lecturerName : studentName)
+  useEffect(() => {
+    registerNameRef.current = role === 'lecturer' ? lecturerName : studentName
+  }, [role, lecturerName, studentName])
 
   // 슬라이드 페이지 로드
   const loadSlidePages = useCallback(async (slideId: string) => {
@@ -43,11 +52,14 @@ export function useWebSocket(url: string, role: Role = 'student') {
 
       const data = await response.json()
       setSlidePages(data.pages)
+      if (typeof data.filename === 'string') {
+        setSlideFilename(data.filename)
+      }
       setSlideStatus('ready')
     } catch (err) {
       console.error('[WebSocket] 슬라이드 로드 실패:', err)
     }
-  }, [setSlidePages, setSlideStatus])
+  }, [setSlidePages, setSlideStatus, setSlideFilename])
 
   const handleMessage = useCallback((data: WebSocketMessage) => {
     switch (data.type) {
@@ -156,6 +168,31 @@ export function useWebSocket(url: string, role: Role = 'student') {
         setStudentCount(data.count as number)
         break
 
+      case 'chat_message':
+        // 채팅 메시지 수신
+        addChatMessage({
+          id: (data.id as string) || crypto.randomUUID(),
+          sender: data.sender as 'lecturer' | 'student',
+          name: data.name as string,
+          text: data.text as string,
+          timestamp: (data.timestamp as number) || Date.now(),
+          studentId: data.student_id as string | undefined,
+        })
+        break
+
+      case 'participants':
+        // 참여자 목록
+        setParticipants({
+          lecturer: data.lecturer as { name: string; connected: boolean } | null,
+          students: (data.students as { id: string; name: string }[]) || [],
+        })
+        break
+
+      case 'lecture_title':
+        // 강의 제목 (강사가 설정)
+        setLectureTitle((data.title as string) || '')
+        break
+
       case 'registered':
         // 역할 등록 확인
         console.log('[WebSocket] 역할 등록 완료:', data.role)
@@ -164,13 +201,33 @@ export function useWebSocket(url: string, role: Role = 'student') {
       default:
         console.log('[WebSocket] 알 수 없는 메시지:', data.type)
     }
-  }, [role, addSubtitle, setSlideId, setSlideStatus, setCurrentPage, setLectureStarted, setPaused, setPresentationMode, setCurrentScreen, loadSlidePages])
+  }, [role, addSubtitle, setSlideId, setSlideStatus, setCurrentPage, setLectureStarted, setPaused, setPresentationMode, setCurrentScreen, setStudentCount, addChatMessage, setParticipants, setLectureTitle, loadSlidePages])
 
   const send = useCallback((data: object) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
       socketRef.current.send(JSON.stringify(data))
     } else {
       console.warn('[WebSocket] 연결되지 않음')
+    }
+  }, [])
+
+  const sendChat = useCallback((text: string) => {
+    const trimmed = text.trim()
+    if (!trimmed) return
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ type: 'chat_message', text: trimmed }))
+    }
+  }, [])
+
+  const sendLectureTitle = useCallback((title: string) => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ type: 'lecture_title', title }))
+    }
+  }, [])
+
+  const sendLecturerName = useCallback((name: string) => {
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ type: 'lecturer_name', name }))
     }
   }, [])
 
@@ -190,8 +247,10 @@ export function useWebSocket(url: string, role: Role = 'student') {
 
     socket.onopen = () => {
       console.log('[WebSocket] 연결됨')
-      socket.send(JSON.stringify({ type: 'register', role, name: studentNameRef.current }))
-      console.log(`[WebSocket] 역할 등록: ${role}`)
+      socket.send(JSON.stringify({ type: 'register', role, name: registerNameRef.current }))
+      // 참여자 목록 최신화 요청 (register broadcast를 혹시라도 놓친 경우 대비)
+      socket.send(JSON.stringify({ type: 'participants_request' }))
+      console.log(`[WebSocket] 역할 등록: ${role} (이름: ${registerNameRef.current || '(기본값)'})`)
       setIsConnected(true)
       setConnected(true)
     }
@@ -285,6 +344,9 @@ export function useWebSocket(url: string, role: Role = 'student') {
     connect,
     disconnect,
     send,
+    sendChat,
+    sendLectureTitle,
+    sendLecturerName,
     unlockAudio,
   }
 }
