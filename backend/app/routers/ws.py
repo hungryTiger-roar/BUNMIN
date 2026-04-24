@@ -161,6 +161,10 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+# GPU 동시 접근 방지 — ASR·NMT 모두 GPU를 사용하므로 한 번에 하나의 발화만 처리
+# 경합 발생 시 44s~253s 지연이 확인된 문제 대응
+_gpu_semaphore = asyncio.Semaphore(1)
+
 PING_INTERVAL = 20  # 서버 → 클라이언트 ping 주기 (초)
 PING_TIMEOUT  = 10  # pong 미응답 허용 시간 (초)
 
@@ -398,6 +402,9 @@ async def process_audio(message: dict):
     """
     오디오 처리 파이프라인
     오디오 → ASR → NMT → TTS → 수강자 전송
+
+    GPU 세마포어: ASR·NMT(GPU) 구간만 직렬화, TTS(CPU)는 세마포어 밖에서 실행
+    → TTS 중에 다음 발화가 GPU를 바로 사용 가능
     """
     if not all([_asr_service, _nmt_service, _tts_service]):
         print("[WS] 서비스가 초기화되지 않았습니다")
@@ -426,37 +433,43 @@ async def process_audio(message: dict):
         try:
             with wave.open(io.BytesIO(audio_bytes)) as _w:
                 _dur = _w.getnframes() / _w.getframerate()
-            print(f"[INPUT] 오디오 수신: {len(audio_bytes) / 1024:.1f}KB, {_dur:.2f}s → ASR 시작", flush=True)
+            print(f"[INPUT] 오디오 수신: {len(audio_bytes) / 1024:.1f}KB, {_dur:.2f}s → GPU 대기 중", flush=True)
         except Exception:
-            print(f"[INPUT] 오디오 수신: {len(audio_bytes) / 1024:.1f}KB → ASR 시작", flush=True)
+            print(f"[INPUT] 오디오 수신: {len(audio_bytes) / 1024:.1f}KB → GPU 대기 중", flush=True)
 
-        # ASR: 음성 → 한국어 텍스트
-        t_asr = time.perf_counter()
-        korean_text = await asyncio.to_thread(
-            _asr_service.transcribe, audio_bytes
-        )
-        t_asr_done = time.perf_counter()
+        # GPU 경합 방지: ASR·NMT GPU 작업은 한 번에 하나만 실행
+        # TTS는 CPU(Piper)이므로 세마포어 밖에서 실행 → TTS 중 다음 발화가 GPU 사용 가능
+        async with _gpu_semaphore:
+            print(f"[GPU] 세마포어 획득 → ASR 시작", flush=True)
 
-        # Layer 2-B: ASR 결과 텍스트 품질 검증
-        ok, reason = _validate_asr_text(korean_text)
-        if not ok:
-            print(f"[필터-텍스트] {reason} → 스킵")
-            return
+            # ASR: 음성 → 한국어 텍스트
+            t_asr = time.perf_counter()
+            korean_text = await asyncio.to_thread(
+                _asr_service.transcribe, audio_bytes
+            )
+            t_asr_done = time.perf_counter()
 
-        print(f"[ASR  input ] {korean_text}", flush=True)
+            # Layer 2-B: ASR 결과 텍스트 품질 검증
+            ok, reason = _validate_asr_text(korean_text)
+            if not ok:
+                print(f"[필터-텍스트] {reason} → 스킵")
+                return
 
-        # NMT: 한국어 → 영어
-        t_nmt = time.perf_counter()
-        english_text = await asyncio.to_thread(
-            _nmt_service.translate, korean_text, "ko", "en", 512
-        )
-        t_nmt_done = time.perf_counter()
-        print(f"[NMT  output] {english_text}", flush=True)
+            print(f"[ASR  input ] {korean_text}", flush=True)
+
+            # NMT: 한국어 → 영어
+            t_nmt = time.perf_counter()
+            english_text = await asyncio.to_thread(
+                _nmt_service.translate, korean_text, "ko", "en", 512
+            )
+            t_nmt_done = time.perf_counter()
+            print(f"[NMT  output] {english_text}", flush=True)
+            print(f"[GPU] 세마포어 해제 → 다음 발화 GPU 사용 가능", flush=True)
 
         if not english_text.strip():
             return
 
-        # TTS: 영어 텍스트 → 음성 (실패해도 자막은 전송)
+        # TTS: 영어 텍스트 → 음성 (CPU, 세마포어 밖 — 동시에 다음 발화 GPU 처리 가능)
         t_tts = time.perf_counter()
         audio_output_b64 = None
         try:
@@ -486,7 +499,8 @@ async def process_audio(message: dict):
 
         t_end = time.perf_counter()
         print(
-            f"[LATENCY] ASR={t_asr_done - t_asr:.2f}s | "
+            f"[LATENCY] 대기={t_asr - t_start:.2f}s | "
+            f"ASR={t_asr_done - t_asr:.2f}s | "
             f"NMT={t_nmt_done - t_nmt:.2f}s | "
             f"TTS={t_tts_done - t_tts:.2f}s | "
             f"전체={t_end - t_start:.2f}s",
