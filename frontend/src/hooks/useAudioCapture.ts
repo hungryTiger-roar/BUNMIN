@@ -9,14 +9,25 @@ declare global {
 
 interface UseAudioCaptureOptions {
   onAudioData: (audioBlob: Blob) => void
+  chunkInterval?: number // chunkInterval 옵션 추가 (기본값 제공 목적)
 }
 
-export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
+export function useAudioCapture({ onAudioData, chunkInterval = 1000 }: UseAudioCaptureOptions) {
   const [isCapturing, setIsCapturing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const vadRef = useRef<any>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const chunksRef = useRef<Float32Array[]>([])
+  const intervalRef = useRef<NodeJS.Timeout | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const gainNodeRef = useRef<GainNode | null>(null)
+  const gainValueRef = useRef<number>(1)  // 0 = mute, 1 = unity, 2 = +6dB
   const keepAliveRef = useRef<NodeJS.Timeout | null>(null)
+  
+  // 누락된 Ref 추가
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const processorRef = useRef<ScriptProcessorNode | null>(null)
+
   const onAudioDataRef = useRef(onAudioData)
   onAudioDataRef.current = onAudioData
 
@@ -85,7 +96,7 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
           }
 
           // RMS 에너지: 너무 조용하면 빈 구간이 VAD를 통과한 것
-          const rms = Math.sqrt(audio.reduce((sum, s) => sum + s * s, 0) / audio.length)
+          const rms = Math.sqrt(audio.reduce((sum: number, s: number) => sum + s * s, 0) / audio.length)
           if (rms < 0.005) {
             console.log(`[VAD] 에너지 너무 낮음 (rms=${rms.toFixed(4)}) → 스킵`)
             return
@@ -100,6 +111,48 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
       })
 
       streamRef.current = stream
+
+      // Web Audio API 설정
+      const audioContext = new AudioContext({ sampleRate: 16000 })
+      audioContextRef.current = audioContext
+
+      const source = audioContext.createMediaStreamSource(stream)
+
+      // 입력 게인 제어 — 사용자가 조절하는 볼륨이 analyser + ASR 양쪽에 모두 반영됨
+      const gainNode = audioContext.createGain()
+      gainNode.gain.value = gainValueRef.current
+      gainNodeRef.current = gainNode
+      source.connect(gainNode)
+
+      const processor = audioContext.createScriptProcessor(4096, 1, 1)
+      processorRef.current = processor
+
+      // 실시간 레벨 측정용 analyser (게인 적용 후 기준)
+      const analyser = audioContext.createAnalyser()
+      analyser.fftSize = 2048
+      analyser.smoothingTimeConstant = 0.3
+      analyserRef.current = analyser
+      gainNode.connect(analyser)
+
+      // 오디오 데이터 수집 (게인 적용 후 기준)
+      processor.onaudioprocess = (e) => {
+        const inputData = e.inputBuffer.getChannelData(0)
+        chunksRef.current.push(new Float32Array(inputData))
+      }
+
+      gainNode.connect(processor)
+      processor.connect(audioContext.destination)
+
+      // 주기적으로 오디오 전송
+      intervalRef.current = setInterval(() => {
+        if (chunksRef.current.length > 0) {
+          const audioData = mergeChunks(chunksRef.current)
+          const wavBlob = float32ToWav(audioData, 16000) // createWavBlob 대신 하단의 float32ToWav 사용
+          onAudioDataRef.current(wavBlob)
+          chunksRef.current = []
+        }
+      }, chunkInterval)
+
       vadRef.current = vad
       vad.start()
       startKeepAlive(vad)
@@ -109,9 +162,40 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
       console.error('[AudioCapture] 시작 실패:', err)
       setError('마이크 접근 권한이 필요합니다.')
     }
-  }, [])
+  }, [chunkInterval])
 
   const stopCapture = useCallback(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+
+    if (processorRef.current) {
+      processorRef.current.disconnect()
+      processorRef.current = null
+    }
+
+    if (analyserRef.current) {
+      analyserRef.current.disconnect()
+      analyserRef.current = null
+    }
+
+    if (gainNodeRef.current) {
+      gainNodeRef.current.disconnect()
+      gainNodeRef.current = null
+    }
+
+    if (audioContextRef.current) {
+      audioContextRef.current.close()
+      audioContextRef.current = null
+    }
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
+    }
+
+    chunksRef.current = []
     stopKeepAlive()
     vadRef.current?.pause()
     stopStream()
@@ -119,12 +203,40 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
     console.log('[AudioCapture] 캡처 중지')
   }, [])
 
+  // 게인 설정 — 캡처 중이면 즉시 반영, 중지 상태면 다음 캡처 시작 시점에 적용
+  const setGain = useCallback((gain: number) => {
+    const clamped = Math.max(0, Math.min(4, gain))  // 0 ~ 4x 범위 안전하게 클램프
+    gainValueRef.current = clamped
+    if (gainNodeRef.current && audioContextRef.current) {
+      // 부드러운 전환으로 클릭/팝 잡음 방지
+      gainNodeRef.current.gain.setTargetAtTime(
+        clamped,
+        audioContextRef.current.currentTime,
+        0.02,
+      )
+    }
+  }, [])
+
   return {
     isCapturing,
     error,
     startCapture,
     stopCapture,
+    analyserRef,
+    setGain,
   }
+}
+
+// Float32Array 배열을 하나로 합치는 헬퍼 함수 추가
+function mergeChunks(chunks: Float32Array[]): Float32Array {
+  const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0)
+  const result = new Float32Array(totalLength)
+  let offset = 0
+  for (const chunk of chunks) {
+    result.set(chunk, offset)
+    offset += chunk.length
+  }
+  return result
 }
 
 function float32ToWav(samples: Float32Array, sampleRate: number): Blob {

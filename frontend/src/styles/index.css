@@ -3,102 +3,106 @@
 @tailwind utilities;
 
 @font-face {
-  font-family: 'Pretendard';
-  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-Thin.woff2') format('woff2');
-  font-weight: 100;
+  font-family: 'Pretendard Variable';
+  font-weight: 45 920;
+  font-style: normal;
   font-display: swap;
+  src: url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/variable/woff2/PretendardVariable.woff2') format('woff2-variations');
 }
 
 @font-face {
-  font-family: 'Pretendard';
-  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-ExtraLight.woff2') format('woff2');
-  font-weight: 200;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Pretendard';
-  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-Light.woff2') format('woff2');
-  font-weight: 300;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Pretendard';
-  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-Regular.woff2') format('woff2');
-  font-weight: 400;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Pretendard';
-  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-Medium.woff2') format('woff2');
-  font-weight: 500;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Pretendard';
-  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-SemiBold.woff2') format('woff2');
+  font-family: 'A2z';
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2601-6@1.0/에이투지체-6SemiBold.woff2') format('woff2');
   font-weight: 600;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Pretendard';
-  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-Bold.woff2') format('woff2');
-  font-weight: 700;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Pretendard';
-  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-ExtraBold.woff2') format('woff2');
-  font-weight: 800;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'Pretendard';
-  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/pretendard@1.0/Pretendard-Black.woff2') format('woff2');
-  font-weight: 900;
   font-display: swap;
 }
 
 @layer base {
   :root {
-    /* Light Mode Colors (LightColorScheme) */
-    --color-primary: #6495EB;
-    --color-secondary: #1F1B17;
-    --color-tertiary: #1F1B17;
-    --color-primary-container: #F1EEE9;
-    --color-background: #FBFBFB;
-    --color-on-background: #1F1B17;
-    --color-surface: #FFFFFF;
-    --color-on-surface: #1F1B17;
+    /* ---- Light Mode ---- cool-toned palette harmonizing with the blue-purple gradient */
+    --color-primary: #6495EB;          /* 브랜드 블루 (gradient-blue 계열) */
     --color-on-primary: #FFFFFF;
-    --color-error: #B3261E;
+    --color-primary-container: #E8EDFB; /* 연한 블루-라벤더 */
 
-    /* Gradient Colors */
+    --color-secondary: #2A2F4A;        /* 쿨 다크 네이비 (본문 텍스트용) */
+    --color-tertiary: #4A4F6B;         /* 쿨 미디엄 (보조 텍스트/아이콘) */
+
+    --color-background: #F7F8FC;       /* 쿨 오프화이트 */
+    --color-on-background: #2A2F4A;
+
+    --color-surface: #FFFFFF;          /* 화이트 서피스 */
+    --color-on-surface: #2A2F4A;
+
+    --color-error: #E53E3E;
+
+    /* Gradient (브랜드) */
     --color-gradient-blue: #7DB3FF;
     --color-gradient-purple: #C0A4D6;
 
-    /* Theme에 매핑되지 않았지만 Color.kt에 선언된 공통/기타 색상 */
+    /* 그라데이션 위에 띄우는 패널용 중간톤 네이비 (ParticipantsPanel 등) */
+    --color-overlay-surface: #2E3257;
+    --color-on-overlay-surface: #F0F1FA;
+    --color-overlay-border: #454A78;
+
     --color-find-id: #2E2E2E;
   }
 
   .dark {
-    /* Dark Mode Colors (DarkColorScheme) */
-    --color-primary: #6495EB; /* LoginButton (Light/Dark 동일) */
-    --color-secondary: #E9E3DC;
-    --color-tertiary: #E9E3DC;
-    --color-primary-container: #2A262B;
-    --color-background: #151214;
-    --color-on-background: #E9E3DC;
-    --color-surface: #1F1B1D;
-    --color-on-surface: #E9E3DC;
-    --color-on-primary: #FFFFFF; /* LightSurfaceColor 사용 */
-    --color-error: #F2B8B5;
+    /* ---- Dark Mode ---- deep navy/purple */
+    --color-primary: #7DA9F5;
+    --color-on-primary: #0F1228;
+    --color-primary-container: #2D3259;
+
+    --color-secondary: #E8E9F5;
+    --color-tertiary: #B0B4D6;
+
+    --color-background: #13152C;       /* 깊은 네이비 */
+    --color-on-background: #E8E9F5;
+
+    --color-surface: #1E2142;          /* 배경보다 약간 밝은 네이비 */
+    --color-on-surface: #E8E9F5;
+
+    --color-error: #F87171;
+
+    --color-overlay-surface: #252A52;
+    --color-on-overlay-surface: #E8E9F5;
+    --color-overlay-border: #3E4475;
+  }
+
+  /* ---- Gradient Mode ---- 움직이는 하늘-보라 배경 + 글래스 서피스
+     primary-container는 rgba(255,255,255,0.25)로 두어 bg-primaryContainer/60 = ~15% glass가
+     되도록 함 (기존 bg-white/15 룩 유지). */
+  html.theme-gradient {
+    --color-background: transparent;
+    --color-on-background: #FFFFFF;
+
+    --color-surface: rgba(255, 255, 255, 0.1);
+    --color-on-surface: #FFFFFF;
+
+    --color-primary-container: rgba(255, 255, 255, 0.25);
+    --color-secondary: #FFFFFF;
+    --color-tertiary: #FFFFFF;
+
+    --color-overlay-border: rgba(255, 255, 255, 0.2);
+  }
+
+  html.theme-gradient body {
+    background: linear-gradient(
+      to right,
+      var(--color-gradient-blue) 0%,
+      var(--color-gradient-purple) 25%,
+      var(--color-gradient-blue) 50%,
+      var(--color-gradient-purple) 75%,
+      var(--color-gradient-blue) 100%
+    );
+    background-size: 800% 800%;
+    animation: gradient-shift 15s linear infinite;
+    min-height: 100vh;
+  }
+
+  @keyframes gradient-shift {
+    0% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
   }
 }
 
@@ -109,26 +113,37 @@
 }
 
 body {
-  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Pretendard Variable', 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background-color: var(--color-background);
   color: var(--color-on-background);
 }
 
-/* 스크롤바 스타일 */
+/* 스크롤바 스타일 — 배경 위에서 튀지 않도록 subtle하게 */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--color-primary-container);
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
   background: var(--color-tertiary);
   border-radius: 3px;
+  opacity: 0.5;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-primary);
+}
+
+/* 스크롤바 완전 숨김 (스크롤 기능은 유지) */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;  /* IE/Edge */
+  scrollbar-width: none;     /* Firefox */
 }

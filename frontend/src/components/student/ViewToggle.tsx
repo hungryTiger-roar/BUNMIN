@@ -4,23 +4,23 @@ function ViewToggle() {
   const { viewMode, setViewMode } = useLectureStore()
 
   return (
-    <div className="flex bg-slate-700 rounded-lg p-1">
+    <div className="flex bg-white/15 rounded-lg p-1">
       <button
         onClick={() => setViewMode('original')}
-        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+        className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
           viewMode === 'original'
-            ? 'bg-slate-600 text-white'
-            : 'text-slate-400 hover:text-white'
+            ? 'bg-white text-gray-900'
+            : 'text-onPrimary/70 hover:text-onPrimary'
         }`}
       >
         원본
       </button>
       <button
         onClick={() => setViewMode('translated')}
-        className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+        className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
           viewMode === 'translated'
-            ? 'bg-blue-500 text-white'
-            : 'text-slate-400 hover:text-white'
+            ? 'bg-primary text-onPrimary'
+            : 'text-onPrimary/70 hover:text-onPrimary'
         }`}
       >
         번역
