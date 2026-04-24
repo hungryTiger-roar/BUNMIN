@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { API_BASE } from '@/lib/api'
 
-const MODEL_KEYS = ['asr', 'nmt_asr', 'nmt_ocr', 'tts', 'ocr'] as const
+const MODEL_KEYS = ['asr', 'nmt_asr', 'tts', 'ocr'] as const
 type ModelKey = typeof MODEL_KEYS[number]
 
 interface ModelEntry {
@@ -15,7 +15,6 @@ interface ModelEntry {
 const DEFAULT_MODELS: Record<ModelKey, ModelEntry> = {
   asr:     { status: 'pending', progress: 0, label: 'ASR (음성인식)', desc: '로딩 중...' },
   nmt_asr: { status: 'pending', progress: 0, label: 'NMT-ASR (실시간 번역)', desc: '로딩 중...' },
-  nmt_ocr: { status: 'pending', progress: 0, label: 'NMT-OCR (슬라이드 번역)', desc: '로딩 중...' },
   tts:     { status: 'pending', progress: 0, label: 'TTS (음성합성)', desc: '로딩 중...' },
   ocr:     { status: 'pending', progress: 0, label: 'OCR (문자인식)', desc: '로딩 중...' },
 }
@@ -44,6 +43,13 @@ function StatusIcon({ status }: { status: ModelEntry['status'] }) {
       </svg>
     )
   }
+  if (status === 'skipped') {
+    return (
+      <svg className="w-5 h-5 text-slate-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+      </svg>
+    )
+  }
   // pending
   return <div className="w-5 h-5 rounded-full border-2 border-slate-600 shrink-0" />
 }
@@ -51,6 +57,7 @@ function StatusIcon({ status }: { status: ModelEntry['status'] }) {
 function ModelCard({ entry }: { entry: ModelEntry }) {
   const isDone = entry.status === 'done'
   const isActive = entry.status === 'loading'
+  const isSkipped = entry.status === 'skipped'
 
   return (
     <div className={`rounded-lg p-3 border transition-colors duration-300 ${
@@ -58,13 +65,15 @@ function ModelCard({ entry }: { entry: ModelEntry }) {
         ? 'bg-emerald-900/20 border-emerald-700/40'
         : isActive
         ? 'bg-blue-900/20 border-blue-700/40'
+        : isSkipped
+        ? 'bg-slate-800/30 border-slate-700/20'
         : 'bg-slate-800/50 border-slate-700/40'
     }`}>
       <div className="flex items-center gap-2 mb-2">
         <StatusIcon status={entry.status} />
         <div className="flex-1 min-w-0">
           <p className={`text-sm font-medium leading-none ${
-            isDone ? 'text-emerald-300' : isActive ? 'text-white' : 'text-slate-500'
+            isDone ? 'text-emerald-300' : isActive ? 'text-white' : isSkipped ? 'text-slate-600' : 'text-slate-500'
           }`}>
             {entry.label}
           </p>

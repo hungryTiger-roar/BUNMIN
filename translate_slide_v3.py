@@ -47,6 +47,9 @@ def get_vlm_model():
     if _vlm_model is not None:
         return _vlm_model, _vlm_processor
 
+    if not torch.cuda.is_available():
+        raise RuntimeError("VLM 번역에는 NVIDIA GPU(CUDA)가 필요합니다. nvidia-smi로 GPU를 확인하고, CUDA 버전 PyTorch(pip install torch --index-url https://download.pytorch.org/whl/cu124)를 설치하세요.")
+
     from transformers import AutoProcessor, AutoModelForImageTextToText, BitsAndBytesConfig
     from peft import PeftModel
 
@@ -77,7 +80,7 @@ def get_vlm_model():
         }
 
     _vlm_processor = AutoProcessor.from_pretrained(
-        str(VLM_LORA_PATH),
+        VLM_BASE_MODEL,  # Base 모델에서 processor 로드 (LoRA에는 processor 없음)
         trust_remote_code=True,
         min_pixels=256 * 28 * 28,
         max_pixels=512 * 28 * 28,
@@ -142,7 +145,7 @@ def stage_ocr(image_path: str) -> list:
     import easyocr
 
     print("  OCR 모델 로드 중...")
-    reader = easyocr.Reader(['ko', 'en'], gpu=True)
+    reader = easyocr.Reader(['ko', 'en'], gpu=torch.cuda.is_available())
 
     print("  텍스트 영역 추출 중...")
     result = reader.readtext(image_path)
@@ -172,44 +175,30 @@ def stage_ocr(image_path: str) -> list:
 
     print(f"\n  총 {len(regions)}개 영역 감지")
 
-    # GPU 메모리 해제
     del reader
     gc.collect()
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     print("  GPU 메모리 해제 완료")
 
     return regions
 
 
 # ============================================================
-# 2단계: 영역별 번역 - Qwen3-VL
+# 2단계: 번역 - 전체 이미지 + OCR 텍스트 활용
 # ============================================================
 def stage_translate(image_path: str, regions: list) -> list:
-    """각 영역을 개별적으로 번역"""
+    """전체 슬라이드 맥락 + OCR 텍스트로 번역 (환각 방지)"""
     print("\n" + "=" * 60)
-    print("[2/3] 번역: 영역별 개별 번역 (Qwen3-VL)")
+    print("[2/3] 번역: 전체 슬라이드 맥락 + OCR 텍스트 (Qwen3-VL)")
     print("=" * 60)
 
-    # 전역 모델 사용 (싱글톤)
-    model, processor = get_vlm_model()
-    print("  모델 준비 완료 (캐시됨)")
-
-    original_image = Image.open(image_path).convert("RGB")
-
-    PROMPT = """Translate Korean text to English. Rules:
-- TRANSLATE Korean words to English meanings (not romanization)
-- Keep numbers exactly as-is: "01" stays "01", "04" stays "04"
-- Keep English text unchanged
-- Keep symbols as-is: "X", "@", etc.
-- IT/loanwords: "목업" → "Mockup", "데모" → "Demo"
-- DO NOT add quotation marks around the translation
-- Output ONLY the translation, nothing else"""
-
+    # 번역할 텍스트 필터링
+    to_translate = []
     for i, region in enumerate(regions):
-        # 스킵 조건 체크
         if region.get("skip_translate", False):
             region["english"] = region["ocr_text"]
-            print(f"  [{i+1}/{len(regions)}] 스킵 (영어/숫자): '{region['ocr_text'][:15]}'")
+            print(f"  [{i+1}] 스킵 (영어/숫자): '{region['ocr_text'][:20]}'")
             continue
 
         bbox = region["bbox"]
@@ -220,51 +209,99 @@ def stage_translate(image_path: str, regions: list) -> list:
         MIN_AREA = 500
         if width * height < MIN_AREA:
             region["english"] = region["ocr_text"]
-            print(f"  [{i+1}/{len(regions)}] 스킵 (작음): '{region['ocr_text'][:15]}'")
+            print(f"  [{i+1}] 스킵 (작음): '{region['ocr_text'][:20]}'")
             continue
 
-        # 여백 추가해서 crop
-        padding = 10
-        crop_box = (
-            max(0, x_min - padding),
-            max(0, y_min - padding),
-            min(original_image.width, x_max + padding),
-            min(original_image.height, y_max + padding)
+        to_translate.append((i, region))
+
+    if not to_translate:
+        print("  번역할 텍스트 없음")
+        return regions
+
+    print(f"\n  번역 대상: {len(to_translate)}개 텍스트")
+
+    # 전역 모델 사용
+    model, processor = get_vlm_model()
+    print("  모델 준비 완료 (캐시됨)")
+
+    # 전체 슬라이드 이미지 로드
+    original_image = Image.open(image_path).convert("RGB")
+
+    # OCR 텍스트 목록 생성
+    text_list = "\n".join([f"{idx+1}. {region['ocr_text']}" for idx, (_, region) in enumerate(to_translate)])
+
+    PROMPT = f"""This is a Korean lecture slide. Below are Korean texts extracted by OCR.
+Translate each text to English.
+
+Korean texts:
+{text_list}
+
+Rules:
+- Translate Korean to English meanings (not romanization)
+- Keep numbers as-is: "01" stays "01"
+- Keep English words unchanged
+- IT terms: "목업"→"Mockup", "데모"→"Demo", "알고리즘"→"Algorithm"
+- University names: "명지대학교"→"Myongji University"
+
+Output format (one translation per line, same order):
+1. [English translation]
+2. [English translation]
+..."""
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image"},
+                {"type": "text", "text": PROMPT},
+            ],
+        },
+    ]
+
+    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = processor(text=[text], images=[original_image], return_tensors="pt").to(model.device)
+
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=500,
+            temperature=0.3,
+            do_sample=True,
         )
-        cropped = original_image.crop(crop_box)
 
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image"},
-                    {"type": "text", "text": PROMPT},
-                ],
-            },
-        ]
+    input_len = inputs["input_ids"].shape[1]
+    response = processor.decode(outputs[0][input_len:], skip_special_tokens=True).strip()
 
-        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = processor(text=[text], images=[cropped], return_tensors="pt").to(model.device)
+    print(f"\n  VLM 응답:\n{response[:300]}...")
 
-        with torch.no_grad():
-            outputs = model.generate(
-                **inputs,
-                max_new_tokens=100,
-                temperature=0.3,
-                do_sample=True,
-            )
+    # 응답 파싱
+    lines = response.strip().split("\n")
+    translations = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # "1. Translation" 형태에서 번역만 추출
+        if line and line[0].isdigit() and "." in line:
+            parts = line.split(".", 1)
+            if len(parts) > 1:
+                trans = parts[1].strip().strip('"\'')
+                translations.append(trans)
+        else:
+            # 숫자 없이 바로 번역만 있는 경우
+            translations.append(line.strip('"\''))
 
-        input_len = inputs["input_ids"].shape[1]
-        translation = processor.decode(outputs[0][input_len:], skip_special_tokens=True).strip()
+    # 번역 결과 매핑
+    for idx, (region_idx, region) in enumerate(to_translate):
+        if idx < len(translations):
+            region["english"] = translations[idx]
+            print(f"  [{region_idx+1}] '{region['ocr_text'][:15]}' → '{translations[idx][:30]}'")
+        else:
+            # 번역 실패 시 원본 유지
+            region["english"] = region["ocr_text"]
+            print(f"  [{region_idx+1}] '{region['ocr_text'][:15]}' → (번역 실패, 원본 유지)")
 
-        # 불필요한 따옴표 제거
-        translation = translation.strip('"\'')
-
-        region["english"] = translation
-        print(f"  [{i+1}/{len(regions)}] '{region['ocr_text'][:15]}' → '{translation[:30]}'")
-
-    # 모델은 전역 캐시 유지 (해제 안 함)
-    print(f"\n  {len(regions)}개 영역 번역 완료")
+    print(f"\n  {len(to_translate)}개 영역 번역 완료")
 
     return regions
 

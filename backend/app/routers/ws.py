@@ -7,11 +7,70 @@ import base64
 import hashlib
 import time
 import uuid
+import io
+import re
+import wave
 from typing import Optional
+import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
 from app.routers import transcripts
+from app.routers.slides import get_page_ocr_text
+
+
+def _validate_audio(audio_bytes: bytes) -> tuple[bool, str]:
+    """WAV 오디오 사전 검증 — ASR 실행 전 노이즈 차단"""
+    try:
+        with wave.open(io.BytesIO(audio_bytes)) as wav:
+            frames = wav.getnframes()
+            rate = wav.getframerate()
+            duration = frames / rate
+            raw = wav.readframes(frames)
+
+        # 0.3초 미만은 노이즈 버스트
+        if duration < 0.3:
+            return False, f"발화 너무 짧음 ({duration:.2f}s)"
+
+        samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        rms = float(np.sqrt(np.mean(samples ** 2)))
+
+        # RMS 에너지가 너무 낮으면 빈 구간
+        if rms < 0.005:
+            return False, f"에너지 너무 낮음 (rms={rms:.4f})"
+
+        return True, ""
+    except Exception:
+        return True, ""  # 파싱 실패 시 ASR에 넘겨서 판단
+
+
+def _validate_asr_text(text: str) -> tuple[bool, str]:
+    """ASR 결과 텍스트 품질 검증 — 노이즈·환각 탐지"""
+    text = text.strip()
+
+    if not text:
+        return False, "빈 문자열"
+
+    # 공백 제거 후 2자 미만은 의미 없을 가능성 높음
+    if len(text.replace(" ", "")) < 2:
+        return False, f"너무 짧음: '{text}'"
+
+    # 절대 길이 초과 → 긴 오디오에서 ASR 환각 (실제 발화로 불가능한 길이)
+    if len(text) > 200:
+        return False, f"텍스트 너무 긺 ({len(text)}자) → ASR 환각 의심"
+
+    # 연속 문자 반복 → ASR 환각 (예: "네네네네", "하하하하")
+    if re.search(r"(.{1,3})\1{3,}", text):
+        return False, f"반복 패턴 감지: '{text[:30]}...'"
+
+    # 단어 레벨 반복 → 쉼표·공백 구분된 환각 (예: "개그장, 개그장, 개그장, ...")
+    words = [w for w in re.split(r"[\s,]+", text) if w]
+    if len(words) >= 8:
+        unique_ratio = len(set(words)) / len(words)
+        if unique_ratio < 0.3:
+            return False, f"단어 반복률 과다 ({unique_ratio:.0%}) → ASR 환각 의심"
+
+    return True, ""
 
 router = APIRouter(prefix="/ws", tags=["WebSocket"])
 
@@ -58,6 +117,13 @@ class ConnectionManager:
         self.last_screen_hash: Optional[str] = None
         self.current_session_id: Optional[str] = None  # 자막 저장 세션
         self.lecture_title: str = ""  # 강사가 설정한 강의 제목
+        self._lock = asyncio.Lock()  # students 리스트 동시 접근 방지
+        self._tasks: set[asyncio.Task] = set()  # 실행 중인 태스크 추적
+
+    def track_task(self, task: asyncio.Task):
+        """태스크 등록 — 완료 시 자동 제거"""
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     def disconnect_lecturer(self):
         self.lecturer = None
@@ -96,17 +162,23 @@ class ConnectionManager:
         }
 
     async def broadcast_to_students(self, message: dict):
-        """모든 수강자에게 메시지 전송"""
+        """모든 수강자에게 메시지 전송 (Lock으로 동시 접근 보호)"""
+        async with self._lock:
+            students_snapshot = list(self.students)
+
         disconnected = []
-        for student in self.students:
+        for student in students_snapshot:
             try:
                 await student.send_json(message)
             except Exception:
                 disconnected.append(student)
 
-        # 끊어진 연결 제거
-        for ws in disconnected:
-            self.disconnect_student(ws)
+        if disconnected:
+            async with self._lock:
+                for ws in disconnected:
+                    if ws in self.students:
+                        self.students.remove(ws)
+                        print(f"[WS] 수강자 연결 해제 (남은 인원: {len(self.students)}명)")
 
     async def broadcast_all(self, message: dict):
         """강의자 + 모든 수강자에게 전송 (채팅용)"""
@@ -273,8 +345,6 @@ async def handle_lecturer(websocket: WebSocket):
             message = await websocket.receive_json()
             msg_type = message.get("type")
 
-            print(f"[WS] 강의자 메시지: {msg_type}")
-
             if msg_type == "ping":
                 await websocket.send_json({"type": "pong"})
 
@@ -282,7 +352,10 @@ async def handle_lecturer(websocket: WebSocket):
                 pass  # heartbeat 응답 확인
 
             elif msg_type == "audio":
-                await process_audio(message)
+                audio_size = len(message.get("audio", "")) * 3 // 4 // 1024
+                print(f"[WS] 오디오 수신 ({audio_size}KB) → 처리 태스크 시작", flush=True)
+                task = asyncio.create_task(process_audio(message))
+                manager.track_task(task)
 
             elif msg_type == "screen":
                 print(f"[WS] 화면 데이터 수신, 수강자 수: {len(manager.students)}")
@@ -447,7 +520,13 @@ async def process_audio(message: dict):
         print("[WS] 서비스가 초기화되지 않았습니다")
         return
 
+    import time
     try:
+        t_start = time.perf_counter()
+
+        # 프론트엔드 전송 타임스탬프 (ms, echo back용)
+        sent_at = message.get("sentAt")
+
         # Base64 디코딩 (프론트엔드는 'audio' 키 사용)
         audio_b64 = message.get("audio", "") or message.get("data", "")
         if not audio_b64:
@@ -455,30 +534,65 @@ async def process_audio(message: dict):
             return
         audio_bytes = base64.b64decode(audio_b64)
 
+        # Layer 2-A: ASR 실행 전 오디오 품질 검증
+        ok, reason = _validate_audio(audio_bytes)
+        if not ok:
+            print(f"[필터-오디오] {reason} → 스킵")
+            return
+
+        try:
+            with wave.open(io.BytesIO(audio_bytes)) as _w:
+                _dur = _w.getnframes() / _w.getframerate()
+            print(f"[INPUT] 오디오 수신: {len(audio_bytes) / 1024:.1f}KB, {_dur:.2f}s → ASR 시작", flush=True)
+        except Exception:
+            print(f"[INPUT] 오디오 수신: {len(audio_bytes) / 1024:.1f}KB → ASR 시작", flush=True)
+
         # ASR: 음성 → 한국어 텍스트
+        t_asr = time.perf_counter()
         korean_text = await asyncio.to_thread(
             _asr_service.transcribe, audio_bytes
         )
+        t_asr_done = time.perf_counter()
 
-        if not korean_text.strip():
+        # Layer 2-B: ASR 결과 텍스트 품질 검증
+        ok, reason = _validate_asr_text(korean_text)
+        if not ok:
+            print(f"[필터-텍스트] {reason} → 스킵")
             return
 
-        print(f"[ASR] {korean_text}")
+        print(f"[ASR  input ] {korean_text}", flush=True)
+
+        # 현재 슬라이드 페이지 OCR 텍스트를 컨텍스트로 활용 (0-indexed)
+        slide_context = ""
+        if manager.current_slide_id and manager.current_page:
+            slide_context = get_page_ocr_text(
+                manager.current_slide_id, manager.current_page - 1
+            )
+            if slide_context:
+                print(f"[NMT] 슬라이드 컨텍스트 사용: {slide_context[:50]}...")
 
         # NMT: 한국어 → 영어
+        t_nmt = time.perf_counter()
         english_text = await asyncio.to_thread(
-            _nmt_service.translate, korean_text
+            _nmt_service.translate, korean_text, "ko", "en", 512, slide_context
         )
-        print(f"[NMT] {english_text}")
+        t_nmt_done = time.perf_counter()
+        print(f"[NMT  output] {english_text}", flush=True)
 
         if not english_text.strip():
             return
 
-        # TTS: 영어 텍스트 → 음성
-        audio_output = await asyncio.to_thread(
-            _tts_service.synthesize, english_text
-        )
-        audio_output_b64 = base64.b64encode(audio_output).decode()
+        # TTS: 영어 텍스트 → 음성 (실패해도 자막은 전송)
+        t_tts = time.perf_counter()
+        audio_output_b64 = None
+        try:
+            audio_output = await asyncio.to_thread(
+                _tts_service.synthesize, english_text
+            )
+            audio_output_b64 = base64.b64encode(audio_output).decode()
+        except Exception as tts_err:
+            print(f"[TTS] 합성 실패, 자막만 전송: {tts_err}")
+        t_tts_done = time.perf_counter()
 
         # 자막 파일에 append (세션 진행 중일 때만)
         if manager.current_session_id:
@@ -486,13 +600,24 @@ async def process_audio(message: dict):
                 manager.current_session_id, korean_text, english_text
             )
 
-        # 수강자에게 전송 (프론트엔드는 'transcription' 타입 기대)
+        # 수강자에게 전송 (audio 없으면 자막만)
         await manager.broadcast_to_students({
             "type": "transcription",
             "original": korean_text,
             "translated": english_text,
             "audio": audio_output_b64,
+            "sentAt": sent_at,
         })
+        print(f"[OUTPUT] 수강자 전송 완료: '{english_text[:60]}'", flush=True)
+
+        t_end = time.perf_counter()
+        print(
+            f"[LATENCY] ASR={t_asr_done - t_asr:.2f}s | "
+            f"NMT={t_nmt_done - t_nmt:.2f}s | "
+            f"TTS={t_tts_done - t_tts:.2f}s | "
+            f"전체={t_end - t_start:.2f}s",
+            flush=True,
+        )
 
     except Exception as e:
         print(f"[WS] 오디오 처리 오류: {e}")

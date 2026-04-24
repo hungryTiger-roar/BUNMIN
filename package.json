@@ -6,7 +6,8 @@
   "description": "Aunion AI - Korean Lecture Real-time Translation",
   "author": "Aunion Team",
   "scripts": {
-    "dev": "concurrently --kill-others-on-fail -n backend,frontend -c blue,green \"python backend/run.py\" \"wait-on http://localhost:8000/health && npm run dev --prefix frontend\"",
+    "setup": "npm install --prefix frontend && conda run --no-capture-output -n aunion pip uninstall torch torchvision -y && conda run --no-capture-output -n aunion pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124 && conda run --no-capture-output -n aunion pip install -r backend/requirements.txt",
+    "dev": "concurrently --kill-others-on-fail -n backend,frontend -c blue,green \"conda run --no-capture-output -n aunion python backend/run.py\" \"wait-on http://localhost:8000/health && npm run dev --prefix frontend\"",
     "electron:dev": "concurrently \"npm run dev --prefix frontend\" \"wait-on http://localhost:3000 && cross-env NODE_ENV=development electron frontend/.\"",
     "electron:build": "npm run build --prefix frontend && electron-builder --config electron-builder.json"
   },

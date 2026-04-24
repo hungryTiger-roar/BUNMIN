@@ -18,6 +18,9 @@ import MicButton from '@/components/lecturer/MicButton'
 import CursorSpotlight from '@/components/lecturer/CursorSpotlight'
 import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
 
+// SubtitleDisplay 컴포넌트 임포트 누락으로 추가 (파일 경로 확인 필요)
+import SubtitleDisplay from '@/components/common/SubtitleDisplay'
+
 const ASPECT_OPTIONS: { value: AspectRatio; label: string; className: string }[] = [
   { value: '16/9', label: '16:9', className: 'aspect-[16/9]' },
   { value: '4/3', label: '4:3', className: 'aspect-[4/3]' },
@@ -136,7 +139,7 @@ function Lecturer() {
     const base64 = btoa(
       new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
     )
-    send({ type: 'audio', audio: base64, sample_rate: 16000 })
+    send({ type: 'audio', audio: base64, sample_rate: 16000, sentAt: Date.now() })
   }, [send])
 
   const handleScreenData = useCallback((imageData: string) => {
@@ -758,6 +761,12 @@ function Lecturer() {
               </div>
             )}
 
+            {/* 실시간 자막 (메인 뷰 하단 또는 적절한 위치) */}
+            <div className="bg-white rounded-xl p-4 shadow-sm">
+              <h3 className="text-sm font-medium text-slate-500 mb-3">실시간 자막</h3>
+              <SubtitleDisplay subtitles={subtitles} maxItems={3} />
+            </div>
+
             {/* 하단 바 — 왼쪽: 모드 / 오른쪽: 강의 시작 — 슬라이드와 같은 폭으로 정렬 */}
             <div
               className="flex items-center justify-between gap-4 flex-shrink-0 mx-auto max-w-full"
@@ -841,10 +850,83 @@ function Lecturer() {
         {/* 사이드바 */}
         <aside className="w-80 flex-shrink-0 flex flex-col gap-3 overflow-hidden min-h-0">
           <div className="flex-1 overflow-y-auto scrollbar-hide space-y-3 min-h-0">
-            {/* 마이크 카드 */}
+            
+            {/* 강의 컨트롤 카드 추가 */}
+            <div className="bg-white rounded-xl p-4 shadow-sm space-y-3">
+              <h3 className="text-sm font-medium text-slate-500 mb-3">강의 컨트롤</h3>
+
+              {/* 마이크 */}
+              <button
+                onClick={toggleMic}
+                disabled={!isConnected || !isLectureStarted}
+                className={`w-full py-3 px-4 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 ${
+                  isMicOn
+                    ? 'bg-green-500 hover:bg-green-600 text-white'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                } disabled:opacity-50 disabled:cursor-not-allowed`}
+              >
+                {isMicOn ? (
+                  <>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                    </svg>
+                    마이크 ON
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+                    </svg>
+                    마이크 OFF
+                  </>
+                )}
+              </button>
+
+              {/* 안내 메시지 */}
+              {!isLectureStarted && (
+                <p className="text-xs text-slate-400 text-center">
+                  강의를 시작하면 마이크를 사용할 수 있습니다
+                </p>
+              )}
+            </div>
+
+            {/* 수강자 초대 링크 카드 추가 */}
+            {shareUrl && (
+              <div className="bg-white rounded-xl p-4 shadow-sm">
+                <h3 className="text-sm font-medium text-slate-500 mb-3">수강자 초대 링크</h3>
+                <p className="text-xs text-slate-400 break-all bg-slate-50 rounded-lg px-3 py-2 mb-2">
+                  {shareUrl}
+                </p>
+                <button
+                  onClick={() => {
+                    if (navigator.clipboard?.writeText) {
+                      navigator.clipboard.writeText(shareUrl)
+                    } else {
+                      const el = document.createElement('textarea')
+                      el.value = shareUrl
+                      document.body.appendChild(el)
+                      el.select()
+                      document.execCommand('copy')
+                      document.body.removeChild(el)
+                    }
+                    setCopied(true)
+                    setTimeout(() => setCopied(false), 2000)
+                  }}
+                  className={`w-full py-2 rounded-lg text-sm font-medium transition-colors ${
+                    copied
+                      ? 'bg-green-500 text-white'
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  {copied ? '복사됨' : '링크 복사'}
+                </button>
+              </div>
+            )}
+
+            {/* 기존 마이크/오디오 카드 */}
             <div className="bg-surface text-onSurface rounded-xl p-4 shadow-sm">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold">마이크</h3>
+                <h3 className="text-sm font-semibold">오디오 테스트</h3>
                 <span
                   className={`text-xs font-medium ${
                     isMicOn ? 'text-emerald-600' : 'text-onSurface/50'
@@ -865,7 +947,7 @@ function Lecturer() {
 
               {!isLectureStarted && (
                 <p className="text-[11px] text-onSurface/60 text-center mb-3">
-                  강의 시작 전에도 마이크 테스트 가능
+                  강의 시작 전 오디오 테스트
                 </p>
               )}
 
@@ -898,10 +980,9 @@ function Lecturer() {
                   <span>200%</span>
                 </div>
               </div>
-
             </div>
 
-            {/* 마우스 포인터 카드 — 마이크 아래 */}
+            {/* 마우스 포인터 카드 */}
             <div className="bg-surface text-onSurface rounded-xl p-4 shadow-sm">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-semibold">마우스 포인터</h3>
@@ -953,7 +1034,7 @@ function Lecturer() {
               />
             </div>
 
-            {/* 자료 다운로드 (준비완료 시 컴팩트 카드) */}
+            {/* 자료 다운로드 */}
             {slideStatus === 'ready' && slideId && (
               <div className="bg-surface text-onSurface rounded-xl p-3 shadow-sm">
                 <div className="flex items-center justify-between mb-2">

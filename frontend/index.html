@@ -5,12 +5,17 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Aunion AI - 실시간 강의 번역</title>
+    
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Special+Gothic+Expanded+One&display=swap"
     />
+    
+    <script src="/ort.all.min.js"></script>
+    <script>window.ort.env.wasm.numThreads = 1;</script>
+    <script src="/vad-bundle.min.js"></script>
   </head>
   <body>
     <div id="root"></div>

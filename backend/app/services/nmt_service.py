@@ -76,24 +76,26 @@ class NMTService:
         source_lang: str = "ko",
         target_lang: str = "en",
         max_length: int = 512,
+        context: str = "",
     ) -> str:
         if self.model is None or not text.strip():
             return ""
         try:
             if self._causal:
-                return self._translate_causal(text, target_lang, max_length)
+                return self._translate_causal(text, target_lang, max_length, context)
             else:
-                return self._translate_seq2seq(text, source_lang, target_lang, max_length)
+                return self._translate_seq2seq(text, source_lang, target_lang, max_length, context)
         except Exception as e:
             print(f"[NMT] 번역 오류: {e}")
             return ""
 
-    def _translate_causal(self, text: str, target_lang: str, max_length: int) -> str:
+    def _translate_causal(self, text: str, target_lang: str, max_length: int, context: str = "") -> str:
         import torch
         tgt = self._CAUSAL_LANG_MAP.get(target_lang, "English")
+        context_block = f"Slide content for context:\n{context[:300]}\n\n" if context.strip() else ""
         messages = [{
             "role": "user",
-            "content": f"Translate the following segment into {tgt}, without additional explanation.\n\n{text}",
+            "content": f"{context_block}Translate the following segment into {tgt}, without additional explanation.\n\n{text}",
         }]
         prompt = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
@@ -111,11 +113,12 @@ class NMTService:
             )
         return self.tokenizer.decode(outputs[0][input_len:], skip_special_tokens=True).strip()
 
-    def _translate_seq2seq(self, text: str, source_lang: str, target_lang: str, max_length: int) -> str:
+    def _translate_seq2seq(self, text: str, source_lang: str, target_lang: str, max_length: int, context: str = "") -> str:
         import torch
         src = self._NLLB_LANG_MAP.get(source_lang, "kor_Hang")
         tgt = self._NLLB_LANG_MAP.get(target_lang, "eng_Latn")
 
+        # NLLB는 seq2seq 모델 — 입력 전체를 번역하므로 컨텍스트를 텍스트로 붙이면 안 됨
         self.tokenizer.src_lang = src
         inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
