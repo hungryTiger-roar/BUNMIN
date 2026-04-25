@@ -76,17 +76,12 @@ def _dtype(device: str) -> str:
     return "float16" if device == "cuda" else "float32"
 
 
-def _asr_dtype(device: str) -> str:
-    # bfloat16 required: model uses -1e9 as attention mask fill which overflows float16
-    return "bfloat16" if device == "cuda" else "float32"
-
-
 class ModelConfig:
-    ASR_MODEL  = os.environ.get("ASR_MODEL",  "CohereLabs/cohere-transcribe-03-2026")
+    ASR_MODEL  = os.environ.get("ASR_MODEL",  "ghost613/faster-whisper-large-v3-turbo-korean")
     ASR_DEVICE = _resolve_device("ASR_DEVICE", "asr")
-    ASR_DTYPE  = _asr_dtype(ASR_DEVICE)
+    ASR_DTYPE  = _dtype(ASR_DEVICE)  # faster-whisper는 compute_type을 ASRService 내부에서 결정
 
-    NMT_ASR_MODEL  = os.environ.get("NMT_ASR_MODEL", "facebook/nllb-200-distilled-1.3B")
+    NMT_ASR_MODEL  = os.environ.get("NMT_ASR_MODEL", "Helsinki-NLP/opus-mt-ko-en")
     NMT_ASR_DEVICE = _resolve_device("NMT_ASR_DEVICE", "nmt_asr")
     NMT_ASR_DTYPE  = os.environ.get("NMT_ASR_DTYPE", _dtype(NMT_ASR_DEVICE))
 
