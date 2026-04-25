@@ -610,6 +610,19 @@ async def process_audio(message: dict):
         })
         print(f"[OUTPUT] 수강자 전송 완료: '{english_text[:60]}'", flush=True)
 
+        # 강의자에게도 자막 전송 (오디오 없이 — 강의자는 TTS 재생 불필요)
+        if manager.lecturer:
+            try:
+                await manager.lecturer.send_json({
+                    "type": "transcription",
+                    "original": korean_text,
+                    "translated": english_text,
+                    "audio": None,
+                    "sentAt": sent_at,
+                })
+            except Exception:
+                pass
+
         t_end = time.perf_counter()
         print(
             f"[LATENCY] ASR={t_asr_done - t_asr:.2f}s | "

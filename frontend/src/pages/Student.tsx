@@ -13,9 +13,9 @@ import ParticipantsPanel from '@/components/common/ParticipantsPanel'
 import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
 
 const SUBTITLE_LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
-  { value: 'off', label: '모두 끄기' },
-  { value: 'ko', label: '한국어' },
-  { value: 'en', label: 'English' },
+  { value: 'off', label: '끄기' },
+  { value: 'ko', label: '한국어 (Korean)' },
+  { value: 'en', label: '영어 (English)' },
   { value: 'both', label: '둘 다' },
   { value: 'de', label: '독일어 (Deutsch)' },
   { value: 'es', label: '스페인어 (Español)' },
@@ -68,6 +68,7 @@ function subtitleStyleToCss(style: SubtitleStyle): CSSProperties {
       // 순수 하얀 빛 할로 — 단계적 블러 레이어
       return {
         textShadow: [
+          '0 0 8px rgba(0,0,0,0.8)',
           '0 0 8px rgba(255, 255, 255, 0.95)',
           '0 0 16px rgba(255, 255, 255, 0.75)',
           '0 0 28px rgba(255, 255, 255, 0.5)',
@@ -75,7 +76,7 @@ function subtitleStyleToCss(style: SubtitleStyle): CSSProperties {
         ].join(', '),
       }
     default:
-      return { textShadow: '0 2px 4px rgba(0,0,0,0.6)' }
+      return { color: 'black' }
   }
 }
 
@@ -380,13 +381,15 @@ function Student() {
                   ...subtitleStyleToCss(subtitleSettings.style),
                 }}
               >
-                <p className="font-medium leading-snug">{latestSubtitle.translated}</p>
+                <p className="font-medium leading-snug">
+                  {subtitleLang === 'en' ? latestSubtitle.translated : latestSubtitle.original}
+                </p>
                 {showBothSubs && (
                   <p
                     className="mt-1 leading-snug opacity-80"
                     style={{ fontSize: `${Math.max(12, subtitleSettings.fontSize - 4)}px` }}
                   >
-                    {latestSubtitle.original}
+                    {latestSubtitle.translated}
                   </p>
                 )}
               </div>

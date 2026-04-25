@@ -18,9 +18,6 @@ import MicButton from '@/components/lecturer/MicButton'
 import CursorSpotlight from '@/components/lecturer/CursorSpotlight'
 import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
 
-// SubtitleDisplay 컴포넌트 임포트 누락으로 추가 (파일 경로 확인 필요)
-import SubtitleDisplay from '@/components/common/SubtitleDisplay'
-
 const ASPECT_OPTIONS: { value: AspectRatio; label: string; className: string }[] = [
   { value: '16/9', label: '16:9', className: 'aspect-[16/9]' },
   { value: '4/3', label: '4:3', className: 'aspect-[4/3]' },
@@ -32,6 +29,17 @@ const STYLE_LABEL: Record<SubtitleStyle, string> = {
   outline: '테두리',
   glow: '글로우',
 }
+
+type LecturerLang = 'off' | 'ko' | 'en' | 'de' | 'es' | 'ru'
+
+const LANG_OPTIONS: { value: LecturerLang; label: string }[] = [
+  { value: 'off', label: '끄기 (Off)' },
+  { value: 'ko', label: '한국어 (Korean)' },
+  { value: 'en', label: '영어 (English)' },
+  { value: 'de', label: '독일어 (Deutsch)' },
+  { value: 'es', label: '스페인어 (Español)' },
+  { value: 'ru', label: '러시아어 (Русский)' },
+]
 
 const SPOTLIGHT_PRESETS = [
   '#60A5FA', // sky blue
@@ -60,13 +68,15 @@ function subtitleStyleToCss(style: SubtitleStyle): CSSProperties {
     case 'glow':
       return {
         textShadow: [
+          '0 0 8px rgba(0,0,0,0.8)',
           '0 0 8px rgba(255, 255, 255, 0.95)',
           '0 0 16px rgba(255, 255, 255, 0.75)',
           '0 0 28px rgba(255, 255, 255, 0.5)',
+          '0 0 40px rgba(255, 255, 255, 0.35)',
         ].join(', '),
       }
     default:
-      return { textShadow: '0 2px 4px rgba(0,0,0,0.6)' }
+      return { color: 'black'}
   }
 }
 
@@ -81,6 +91,9 @@ function Lecturer() {
   const [chatInput, setChatInput] = useState('')
   const [showParticipants, setShowParticipants] = useState(false)
   const [showSubtitleSettings, setShowSubtitleSettings] = useState(false)
+  const [showLangPanel, setShowLangPanel] = useState(false)
+  const [primaryLang, setPrimaryLang] = useState<LecturerLang>('en')
+  const [secondaryLang, setSecondaryLang] = useState<LecturerLang>('ko')
   const [spotlightEnabled, setSpotlightEnabled] = useState(false)
   const [spotlightColor, setSpotlightColor] = useState(SPOTLIGHT_PRESETS[0])
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -303,7 +316,15 @@ function Lecturer() {
   const effectiveListenVolume = listenMuted ? 0 : listenVolume
 
   // 슬라이드 박스 내부에 공통으로 들어가는 자막 오버레이
-  const subtitleOverlay = latestSubtitle ? (
+  const primaryText = !latestSubtitle || primaryLang === 'off' ? null
+    : primaryLang === 'ko' ? latestSubtitle.original
+    : latestSubtitle.translated
+
+  const secondaryText = !latestSubtitle || secondaryLang === 'off' ? null
+    : secondaryLang === 'ko' ? latestSubtitle.original
+    : latestSubtitle.translated
+
+  const subtitleOverlay = (primaryText || secondaryText) ? (
     <div
       className={`absolute left-1/2 -translate-x-1/2 max-w-[85%] px-4 text-center text-white pointer-events-none z-10 ${
         subtitleSettings.position === 'top' ? 'top-6' : 'bottom-20'
@@ -314,13 +335,15 @@ function Lecturer() {
         ...subtitleStyleToCss(subtitleSettings.style),
       }}
     >
-      <p className="font-medium leading-snug">{latestSubtitle.translated}</p>
-      <p
-        className="mt-1 opacity-80 leading-snug"
-        style={{ fontSize: `${Math.max(11, subtitleSettings.fontSize - 5)}px` }}
-      >
-        {latestSubtitle.original}
-      </p>
+      {primaryText && <p className="font-medium leading-snug">{primaryText}</p>}
+      {secondaryText && (
+        <p
+          className="mt-1 opacity-75 leading-snug"
+          style={{ fontSize: `${Math.max(11, subtitleSettings.fontSize - 5)}px` }}
+        >
+          {secondaryText}
+        </p>
+      )}
     </div>
   ) : null
 
@@ -382,10 +405,31 @@ function Lecturer() {
         ))}
       </div>
 
+      {/* 자막 언어 선택 */}
+      <button
+        type="button"
+        onClick={() => {
+          setShowLangPanel((v) => !v)
+          setShowSubtitleSettings(false)
+        }}
+        className={`p-2 rounded-lg transition-colors ${
+          showLangPanel ? 'bg-white text-gray-900' : 'bg-black/60 text-white hover:bg-black/80'
+        }`}
+        aria-label="언어 선택"
+        title="언어 선택"
+      >
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+        </svg>
+      </button>
+
       {/* 자막 설정 */}
       <button
         type="button"
-        onClick={() => setShowSubtitleSettings((v) => !v)}
+        onClick={() => {
+          setShowSubtitleSettings((v) => !v)
+          setShowLangPanel(false)
+        }}
         className={`p-2 rounded-lg transition-colors ${
           showSubtitleSettings
             ? 'bg-white text-gray-900'
@@ -492,6 +536,39 @@ function Lecturer() {
       {subtitleOverlay}
       {bottomControlBar}
       {subtitleSettingsPopover}
+      {/* 자막 언어 선택 팝업 */}
+      {showLangPanel && (
+        <>
+          <div
+            className="absolute inset-0 bg-black/40 z-40"
+            onClick={() => setShowLangPanel(false)}
+          />
+          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[min(90%,480px)] bg-black/80 backdrop-blur-md text-white rounded-xl shadow-2xl p-6">
+            <div className="grid grid-cols-2 gap-0">
+              <LangColumn
+                title="자막"
+                value={primaryLang}
+                onChange={setPrimaryLang}
+              />
+              <div className="border-l border-white/20 pl-6">
+                <LangColumn
+                  title="두번째 자막"
+                  value={secondaryLang}
+                  onChange={setSecondaryLang}
+                />
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowLangPanel(false)}
+              className="absolute top-3 right-3 w-7 h-7 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10"
+              aria-label="닫기"
+            >
+              ✕
+            </button>
+          </div>
+        </>
+      )}
     </>
   )
 
@@ -663,7 +740,7 @@ function Lecturer() {
                         }}
                         placeholder={
                           slideFilename.replace(/\.pdf$/i, '') ||
-                          '미기재 시 업로드한 파일명 사용'
+                          '미기재 시 업로드한 파일명으로 표기됩니다.'
                         }
                         className="w-full px-3 py-2.5 bg-primaryContainer/40 border border-primaryContainer rounded-lg text-sm text-onSurface placeholder-onSurface/40 focus:outline-none focus:ring-2 focus:ring-primary"
                         maxLength={80}
@@ -761,12 +838,6 @@ function Lecturer() {
               </div>
             )}
 
-            {/* 실시간 자막 (메인 뷰 하단 또는 적절한 위치) */}
-            <div className="bg-white rounded-xl p-4 shadow-sm">
-              <h3 className="text-sm font-medium text-slate-500 mb-3">실시간 자막</h3>
-              <SubtitleDisplay subtitles={subtitles} maxItems={3} />
-            </div>
-
             {/* 하단 바 — 왼쪽: 모드 / 오른쪽: 강의 시작 — 슬라이드와 같은 폭으로 정렬 */}
             <div
               className="flex items-center justify-between gap-4 flex-shrink-0 mx-auto max-w-full"
@@ -851,78 +922,6 @@ function Lecturer() {
         <aside className="w-80 flex-shrink-0 flex flex-col gap-3 overflow-hidden min-h-0">
           <div className="flex-1 overflow-y-auto scrollbar-hide space-y-3 min-h-0">
             
-            {/* 강의 컨트롤 카드 추가 */}
-            <div className="bg-white rounded-xl p-4 shadow-sm space-y-3">
-              <h3 className="text-sm font-medium text-slate-500 mb-3">강의 컨트롤</h3>
-
-              {/* 마이크 */}
-              <button
-                onClick={toggleMic}
-                disabled={!isConnected || !isLectureStarted}
-                className={`w-full py-3 px-4 rounded-lg font-medium transition-colors flex items-center justify-center gap-2 ${
-                  isMicOn
-                    ? 'bg-green-500 hover:bg-green-600 text-white'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                } disabled:opacity-50 disabled:cursor-not-allowed`}
-              >
-                {isMicOn ? (
-                  <>
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                    </svg>
-                    마이크 ON
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                    </svg>
-                    마이크 OFF
-                  </>
-                )}
-              </button>
-
-              {/* 안내 메시지 */}
-              {!isLectureStarted && (
-                <p className="text-xs text-slate-400 text-center">
-                  강의를 시작하면 마이크를 사용할 수 있습니다
-                </p>
-              )}
-            </div>
-
-            {/* 수강자 초대 링크 카드 추가 */}
-            {shareUrl && (
-              <div className="bg-white rounded-xl p-4 shadow-sm">
-                <h3 className="text-sm font-medium text-slate-500 mb-3">수강자 초대 링크</h3>
-                <p className="text-xs text-slate-400 break-all bg-slate-50 rounded-lg px-3 py-2 mb-2">
-                  {shareUrl}
-                </p>
-                <button
-                  onClick={() => {
-                    if (navigator.clipboard?.writeText) {
-                      navigator.clipboard.writeText(shareUrl)
-                    } else {
-                      const el = document.createElement('textarea')
-                      el.value = shareUrl
-                      document.body.appendChild(el)
-                      el.select()
-                      document.execCommand('copy')
-                      document.body.removeChild(el)
-                    }
-                    setCopied(true)
-                    setTimeout(() => setCopied(false), 2000)
-                  }}
-                  className={`w-full py-2 rounded-lg text-sm font-medium transition-colors ${
-                    copied
-                      ? 'bg-green-500 text-white'
-                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                  }`}
-                >
-                  {copied ? '복사됨' : '링크 복사'}
-                </button>
-              </div>
-            )}
-
             {/* 기존 마이크/오디오 카드 */}
             <div className="bg-surface text-onSurface rounded-xl p-4 shadow-sm">
               <div className="flex items-center justify-between mb-3">
@@ -1160,6 +1159,39 @@ function Lecturer() {
           )}
         </aside>
       </div>
+    </div>
+  )
+}
+
+interface LangColumnProps {
+  title: string
+  value: LecturerLang
+  onChange: (v: LecturerLang) => void
+}
+
+function LangColumn({ title, value, onChange }: LangColumnProps) {
+  return (
+    <div>
+      <h3 className="text-lg font-semibold mb-4">{title}</h3>
+      <ul className="space-y-2">
+        {LANG_OPTIONS.map((opt) => {
+          const selected = value === opt.value
+          return (
+            <li key={opt.value}>
+              <button
+                type="button"
+                onClick={() => onChange(opt.value)}
+                className={`w-full text-left flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors ${
+                  selected ? 'text-white' : 'text-white/60 hover:text-white/90 hover:bg-white/5'
+                }`}
+              >
+                <span className={`w-4 text-sm ${selected ? 'opacity-100' : 'opacity-0'}`}>✓</span>
+                <span className={selected ? 'font-medium' : ''}>{opt.label}</span>
+              </button>
+            </li>
+          )
+        })}
+      </ul>
     </div>
   )
 }
