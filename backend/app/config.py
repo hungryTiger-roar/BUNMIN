@@ -88,7 +88,7 @@ class ModelConfig:
 
     NMT_ASR_MODEL  = os.environ.get("NMT_ASR_MODEL", "facebook/nllb-200-distilled-1.3B")
     NMT_ASR_DEVICE = _resolve_device("NMT_ASR_DEVICE", "nmt_asr")
-    NMT_ASR_DTYPE  = _dtype(NMT_ASR_DEVICE)
+    NMT_ASR_DTYPE  = os.environ.get("NMT_ASR_DTYPE", _dtype(NMT_ASR_DEVICE))
 
     TTS_MODEL  = os.environ.get("TTS_MODEL",  "piper")
     TTS_DEVICE = _resolve_device("TTS_DEVICE", "tts")

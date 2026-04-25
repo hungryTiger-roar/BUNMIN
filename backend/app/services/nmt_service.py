@@ -2,6 +2,7 @@
 NMT (Neural Machine Translation) 서비스
 한국어 → 영어 번역
 - NLLB 계열: AutoModelForSeq2SeqLM (facebook/nllb-*)
+- Helsinki 계열: MarianMTModel (Helsinki-NLP/opus-mt-*)
 """
 
 
@@ -13,10 +14,11 @@ class NMTService:
         "ja": "jpn_Jpan",
     }
 
-    def __init__(self, model_name: str = "facebook/nllb-200-distilled-1.3B", device: str = "cpu", dtype: str = "float32"):
+    def __init__(self, model_name: str = "Helsinki-NLP/opus-mt-ko-en", device: str = "cpu", dtype: str = "float32"):
         self.model_name = model_name
         self.device = "cuda:0" if device == "cuda" else device
         self.dtype = dtype
+        self._is_nllb = "nllb" in model_name.lower()
         self.model = None
         self.tokenizer = None
         self._load_model()
@@ -32,7 +34,7 @@ class NMTService:
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             self.model = AutoModelForSeq2SeqLM.from_pretrained(
                 self.model_name,
-                dtype=self._torch_dtype(),
+                torch_dtype=self._torch_dtype(),
                 device_map=self.device,
             )
             self.model.eval()
@@ -51,20 +53,26 @@ class NMTService:
             return ""
         try:
             import torch
-            src = self._LANG_MAP.get(source_lang, "kor_Hang")
-            tgt = self._LANG_MAP.get(target_lang, "eng_Latn")
 
-            self.tokenizer.src_lang = src
             inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
-            tgt_lang_id = self.tokenizer.convert_tokens_to_ids(tgt)
+            generate_kwargs = dict(
+                **inputs,
+                max_length=max_length,
+                num_beams=1,
+            )
+
+            if self._is_nllb:
+                # NLLB: src_lang 설정 + forced_bos_token_id로 출력 언어 지정
+                src = self._LANG_MAP.get(source_lang, "kor_Hang")
+                tgt = self._LANG_MAP.get(target_lang, "eng_Latn")
+                self.tokenizer.src_lang = src
+                generate_kwargs["forced_bos_token_id"] = self.tokenizer.convert_tokens_to_ids(tgt)
+
             with torch.no_grad():
-                outputs = self.model.generate(
-                    **inputs,
-                    forced_bos_token_id=tgt_lang_id,
-                    max_length=max_length,
-                )
+                outputs = self.model.generate(**generate_kwargs)
+
             return self.tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
         except Exception as e:
             print(f"[NMT] 번역 오류: {e}")
