@@ -164,13 +164,15 @@ class ConnectionManager:
         async with self._lock:
             students_snapshot = list(self.students)
 
-        disconnected = []
-        for student in students_snapshot:
-            try:
-                await student.send_json(message)
-            except Exception:
-                disconnected.append(student)
+        results = await asyncio.gather(
+            *[student.send_json(message) for student in students_snapshot],
+            return_exceptions=True,
+        )
 
+        disconnected = [
+            ws for ws, result in zip(students_snapshot, results)
+            if isinstance(result, Exception)
+        ]
         if disconnected:
             async with self._lock:
                 for ws in disconnected:
@@ -201,28 +203,41 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# GPU 동시 접근 방지 — ASR·NMT 모두 GPU를 사용하므로 한 번에 하나의 발화만 처리
-# 경합 발생 시 44s~253s 지연이 확인된 문제 대응
-_gpu_semaphore = asyncio.Semaphore(1)
+# ASR: GPU 직렬화 (단일 모델 인스턴스, 동시 호출 방지)
+_asr_semaphore = asyncio.Semaphore(1)
+# NMT: CPU 모델 인스턴스 보호 (PyTorch generate() 비thread-safe)
+_nmt_semaphore = asyncio.Semaphore(1)
+_MAX_QUEUED_AUDIO = 2   # ASR 대기 큐 최대 발화 수 — 초과 시 신규 발화 스킵
+_queued_audio_count = 0  # 현재 ASR 세마포어 대기 중인 발화 수
+_utterance_seq = 0       # 발화 순서 번호 (프론트 순서 보장용)
 
 PING_INTERVAL = 20  # 서버 → 클라이언트 ping 주기 (초)
 PING_TIMEOUT  = 10  # pong 미응답 허용 시간 (초)
 
 
-async def heartbeat(websocket: WebSocket):
-    """서버 → 클라이언트 주기적 ping 전송"""
+async def heartbeat(websocket: WebSocket, pong_event: asyncio.Event | None = None):
+    """서버 → 클라이언트 주기적 ping 전송, pong_event 제공 시 타임아웃 감지"""
     while websocket.client_state == WebSocketState.CONNECTED:
         await asyncio.sleep(PING_INTERVAL)
         try:
+            if pong_event:
+                pong_event.clear()
             await websocket.send_json({"type": "ping"})
+            if pong_event:
+                try:
+                    await asyncio.wait_for(pong_event.wait(), timeout=PING_TIMEOUT)
+                except asyncio.TimeoutError:
+                    print(f"[WS] pong 미응답 → 좀비 연결 강제 종료")
+                    await websocket.close()
+                    break
         except Exception:
             break
 
 
-async def run_with_heartbeat(handler, websocket: WebSocket):
+async def run_with_heartbeat(handler, websocket: WebSocket, pong_event: asyncio.Event | None = None):
     """핸들러 종료 시 heartbeat도 함께 취소"""
     handler_task   = asyncio.ensure_future(handler)
-    heartbeat_task = asyncio.ensure_future(heartbeat(websocket))
+    heartbeat_task = asyncio.ensure_future(heartbeat(websocket, pong_event))
 
     done, pending = await asyncio.wait(
         [handler_task, heartbeat_task],
@@ -325,7 +340,8 @@ async def websocket_pipeline(websocket: WebSocket):
                     await websocket.send_json({
                         "type": "lecture_pause",
                     })
-            await run_with_heartbeat(handle_student(websocket), websocket)
+            pong_event = asyncio.Event()
+            await run_with_heartbeat(handle_student(websocket, pong_event), websocket, pong_event)
 
         else:
             await websocket.close(code=4001, reason="올바른 역할이 아닙니다")
@@ -355,12 +371,12 @@ async def handle_lecturer(websocket: WebSocket):
 
             elif msg_type == "audio":
                 audio_size = len(message.get("audio", "")) * 3 // 4 // 1024
-                print(f"[WS] 오디오 수신 ({audio_size}KB) → 처리 태스크 시작", flush=True)
+                # print(f"[WS] 오디오 수신 ({audio_size}KB) → 처리 태스크 시작", flush=True)
                 task = asyncio.create_task(process_audio(message))
                 manager.track_task(task)
 
             elif msg_type == "screen":
-                print(f"[WS] 화면 데이터 수신, 수강자 수: {len(manager.students)}")
+                # print(f"[WS] 화면 데이터 수신, 수강자 수: {len(manager.students)}")
                 await process_screen(message)
 
             elif msg_type == "slide_select":
@@ -476,7 +492,7 @@ async def handle_lecturer(websocket: WebSocket):
         await manager.broadcast_participants()
 
 
-async def handle_student(websocket: WebSocket):
+async def handle_student(websocket: WebSocket, pong_event: asyncio.Event | None = None):
     """수강자 메시지 처리 (주로 수신만 함)"""
     try:
         while True:
@@ -487,7 +503,8 @@ async def handle_student(websocket: WebSocket):
                 await websocket.send_json({"type": "pong"})
 
             elif msg_type == "pong":
-                pass  # heartbeat 응답 확인
+                if pong_event:
+                    pong_event.set()
 
             elif msg_type == "chat_message":
                 text = (message.get("text") or "").strip()
@@ -515,76 +532,77 @@ async def handle_student(websocket: WebSocket):
 
 async def process_audio(message: dict):
     """
-    오디오 처리 파이프라인
-    오디오 → ASR → NMT → TTS → 수강자 전송
+    오디오 처리 파이프라인: 오디오 → ASR(GPU) → NMT(CPU) → TTS(CPU) → 수강자 전송
 
-    GPU 세마포어: ASR·NMT(GPU) 구간만 직렬화, TTS(CPU)는 세마포어 밖에서 실행
-    → TTS 중에 다음 발화가 GPU를 바로 사용 가능
+    - _asr_semaphore: ASR GPU 직렬화 (한 번에 하나의 발화만 GPU 사용)
+    - _nmt_semaphore: NMT CPU 모델 보호 (ASR 해제 직후 다음 발화 ASR 시작 가능)
+    - seq: 발화 순서 번호 (NMT 처리 시간 편차로 인한 순서 역전 대응)
+    - 큐 포화 방지: _MAX_QUEUED_AUDIO 초과 또는 6s 이상 대기 시 스킵
     """
+    global _queued_audio_count, _utterance_seq
+
     if not all([_asr_service, _nmt_service, _tts_service]):
         print("[WS] 서비스가 초기화되지 않았습니다")
         return
 
-    import time
     try:
         t_start = time.perf_counter()
-
-        # 프론트엔드 전송 타임스탬프 (ms, echo back용)
         sent_at = message.get("sentAt")
 
-        # Base64 디코딩 (프론트엔드는 'audio' 키 사용)
         audio_b64 = message.get("audio", "") or message.get("data", "")
         if not audio_b64:
-            print("[WS] 오디오 데이터 없음")
             return
         audio_bytes = base64.b64decode(audio_b64)
 
-        # Layer 2-A: ASR 실행 전 오디오 품질 검증
         ok, reason = _validate_audio(audio_bytes)
         if not ok:
-            print(f"[필터-오디오] {reason} → 스킵")
             return
 
-        try:
-            with wave.open(io.BytesIO(audio_bytes)) as _w:
-                _dur = _w.getnframes() / _w.getframerate()
-            print(f"[INPUT] 오디오 수신: {len(audio_bytes) / 1024:.1f}KB, {_dur:.2f}s → GPU 대기 중", flush=True)
-        except Exception:
-            print(f"[INPUT] 오디오 수신: {len(audio_bytes) / 1024:.1f}KB → GPU 대기 중", flush=True)
+        # ASR 큐 포화 방지: 이미 충분한 발화가 대기 중이면 신규 발화 스킵
+        if _queued_audio_count >= _MAX_QUEUED_AUDIO:
+            print(f"[QUEUE] ASR 대기 포화 ({_queued_audio_count}개) → 스킵", flush=True)
+            return
 
-        # GPU 경합 방지: ASR·NMT GPU 작업은 한 번에 하나만 실행
-        # TTS는 CPU(Piper)이므로 세마포어 밖에서 실행 → TTS 중 다음 발화가 GPU 사용 가능
-        async with _gpu_semaphore:
-            print(f"[GPU] 세마포어 획득 → ASR 시작", flush=True)
+        _queued_audio_count += 1
+        _utterance_seq += 1
+        seq = _utterance_seq
+        t_enqueue = time.perf_counter()
 
-            # ASR: 음성 → 한국어 텍스트
+        # Phase 1: ASR — GPU 직렬화
+        async with _asr_semaphore:
+            _queued_audio_count -= 1
+
+            wait_s = time.perf_counter() - t_enqueue
+            if wait_s > 6.0:
+                print(f"[QUEUE] seq={seq} 대기 {wait_s:.1f}s → stale 스킵", flush=True)
+                return
+
             t_asr = time.perf_counter()
             korean_text = await asyncio.to_thread(
                 _asr_service.transcribe, audio_bytes
             )
             t_asr_done = time.perf_counter()
 
-            # Layer 2-B: ASR 결과 텍스트 품질 검증
             ok, reason = _validate_asr_text(korean_text)
             if not ok:
-                print(f"[필터-텍스트] {reason} → 스킵")
                 return
 
-            print(f"[ASR  input ] {korean_text}", flush=True)
+            print(f"[ASR  seq={seq}] {korean_text}", flush=True)
 
-            # NMT: 한국어 → 영어
-            t_nmt = time.perf_counter()
+        # _asr_semaphore 해제 → 다음 발화 ASR이 즉시 GPU 사용 가능
+        # Phase 2: NMT — CPU, 모델 인스턴스 보호
+        t_nmt = time.perf_counter()
+        async with _nmt_semaphore:
             english_text = await asyncio.to_thread(
                 _nmt_service.translate, korean_text, "ko", "en", 512
             )
-            t_nmt_done = time.perf_counter()
-            print(f"[NMT  output] {english_text}", flush=True)
-            print(f"[GPU] 세마포어 해제 → 다음 발화 GPU 사용 가능", flush=True)
+        t_nmt_done = time.perf_counter()
+        print(f"[NMT  seq={seq}] {english_text}", flush=True)
 
         if not english_text.strip():
             return
 
-        # TTS: 영어 텍스트 → 음성 (CPU, 세마포어 밖 — 동시에 다음 발화 GPU 처리 가능)
+        # Phase 3: TTS — CPU, 세마포어 없음
         t_tts = time.perf_counter()
         audio_output_b64 = None
         try:
@@ -593,32 +611,29 @@ async def process_audio(message: dict):
             )
             audio_output_b64 = base64.b64encode(audio_output).decode()
         except Exception as tts_err:
-            print(f"[TTS] 합성 실패, 자막만 전송: {tts_err}")
+            print(f"[TTS] seq={seq} 합성 실패, 자막만 전송: {tts_err}")
         t_tts_done = time.perf_counter()
 
-        # 자막 파일에 append (세션 진행 중일 때만)
         if manager.current_session_id:
             transcripts.append_segment(
                 manager.current_session_id, korean_text, english_text
             )
 
-        # 수강자에게 전송 (audio 없으면 자막만)
         await manager.broadcast_to_students({
             "type": "transcription",
+            "seq": seq,
             "original": korean_text,
             "translated": english_text,
             "audio": audio_output_b64,
             "sentAt": sent_at,
         })
-        print(f"[OUTPUT] 수강자 전송 완료: '{english_text[:60]}'", flush=True)
 
-        t_end = time.perf_counter()
         print(
-            f"[LATENCY] 대기={t_asr - t_start:.2f}s | "
+            f"[LATENCY] seq={seq} | 대기={t_asr - t_start:.2f}s | "
             f"ASR={t_asr_done - t_asr:.2f}s | "
             f"NMT={t_nmt_done - t_nmt:.2f}s | "
             f"TTS={t_tts_done - t_tts:.2f}s | "
-            f"전체={t_end - t_start:.2f}s",
+            f"전체={t_tts_done - t_start:.2f}s",
             flush=True,
         )
 
