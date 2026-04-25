@@ -1,61 +1,50 @@
 """
 ASR (Automatic Speech Recognition) 서비스
 음성 → 한국어 텍스트 변환
-CohereLabs/cohere-transcribe-03-2026 (transformers, GPU: bfloat16 / CPU: float32)
+faster-whisper (CTranslate2) 기반
+- condition_on_previous_text=False: 이전 발화 컨텍스트 무시 → hallucination 차단
+- vad_filter=True: 무음 구간 자동 필터
 """
 import io
 import numpy as np
 
 
-def _normalize_device(device: str) -> str:
-    """'cuda' → 'cuda:0' 정규화"""
-    return "cuda:0" if device == "cuda" else device
-
-
 class ASRService:
-    def __init__(self, model_name: str = "CohereLabs/cohere-transcribe-03-2026", device: str = "cpu", dtype: str = "float32"):
+    def __init__(self, model_name: str = "ghost613/faster-whisper-large-v3-turbo-korean", device: str = "cpu", dtype: str = "float32"):
         self.model_name = model_name
-        self.device = _normalize_device(device)
-        self.dtype = dtype
-        self.processor = None
+        # faster-whisper는 "cuda:0" 대신 "cuda"만 받음
+        self.device = "cuda" if device in ("cuda", "cuda:0") else "cpu"
+        # dtype 대신 compute_type 사용 (bfloat16 미지원 → float16으로 대체)
+        self.compute_type = "float16" if self.device == "cuda" else "float32"
         self.model = None
         self._load_model()
 
-    def _torch_dtype(self):
-        import torch
-        return {"float16": torch.float16, "bfloat16": torch.bfloat16}.get(self.dtype, torch.float32)
-
     def _load_model(self):
         try:
-            import torch
-            from transformers import AutoProcessor, AutoModelForSpeechSeq2Seq
-
-            self.processor = AutoProcessor.from_pretrained(
-                self.model_name, trust_remote_code=True
-            )
-            self.model = AutoModelForSpeechSeq2Seq.from_pretrained(
+            from faster_whisper import WhisperModel
+            self.model = WhisperModel(
                 self.model_name,
-                torch_dtype=self._torch_dtype(),
-                device_map=self.device,
-                trust_remote_code=True,
+                device=self.device,
+                compute_type=self.compute_type,
             )
-            self.model.eval()
-            print(f"[ASR] {self.model_name} 로드 완료 ({self.dtype}, {self.device})")
+            print(f"[ASR] {self.model_name} 로드 완료 ({self.compute_type}, {self.device})")
         except ImportError as e:
-            raise RuntimeError(f"패키지 임포트 실패: {e}")
+            raise RuntimeError(
+                f"faster-whisper 패키지가 필요합니다: pip install faster-whisper\n{e}"
+            )
 
     def transcribe(self, audio_bytes: bytes, language: str = "ko") -> str:
         if self.model is None:
             return ""
         try:
             audio_array = self._bytes_to_array(audio_bytes)
-            results = self.model.transcribe(
-                processor=self.processor,
+            segments, _ = self.model.transcribe(
+                audio_array,
                 language=language,
-                audio_arrays=[audio_array],
-                sample_rates=[16000],
+                condition_on_previous_text=False,  # 이전 발화 컨텍스트 무시 → hallucination 차단
+                vad_filter=True,                   # 무음 구간 자동 필터
             )
-            return results[0].strip() if results else ""
+            return "".join(s.text for s in segments).strip()
         except Exception as e:
             import traceback
             print(f"[ASR] 오류: {e}")
