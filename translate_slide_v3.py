@@ -31,6 +31,7 @@ VLM_BASE_MODEL = os.environ.get("VLM_BASE_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
 VLM_LORA_PATH = Path(__file__).parent / os.environ.get("VLM_LORA_PATH", "models/qwen3/qwen3-vl-8b-lora-r64-e3-final")
 VLM_DEVICE = os.environ.get("VLM_DEVICE", "cuda")
 VLM_USE_4BIT = os.environ.get("VLM_USE_4BIT", "true").lower() == "true"
+VLM_MAX_GPU_MEMORY = os.environ.get("VLM_MAX_GPU_MEMORY", "6GB")
 
 # ============================================================
 # 전역 모델 (싱글톤) - 한 번만 로드
