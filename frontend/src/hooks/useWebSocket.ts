@@ -34,6 +34,7 @@ export function useWebSocket(url: string, role: Role = 'student') {
     setParticipants,
     setLectureTitle,
     setSlideFilename,
+    setSessionId,
     studentName,
   } = useLectureStore()
 
@@ -111,11 +112,18 @@ export function useWebSocket(url: string, role: Role = 'student') {
         console.log('[WebSocket] 강의 시작')
         break
 
+      case 'session_started':
+        // 강의자: 강의 시작 시 자막 세션 ID 수신
+        if (data.session_id) setSessionId(data.session_id as string)
+        break
+
       case 'lecture_end':
         // 강의 종료
         setLectureStarted(false)
         setPaused(false)
         setCurrentScreen(null)
+        // 수강자: 강의 종료 메시지에 포함된 세션 ID 저장
+        if (data.session_id) setSessionId(data.session_id as string)
         console.log('[WebSocket] 강의 종료')
         break
 

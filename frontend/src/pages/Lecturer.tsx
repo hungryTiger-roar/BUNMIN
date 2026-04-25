@@ -94,6 +94,7 @@ function Lecturer() {
   const [showLangPanel, setShowLangPanel] = useState(false)
   const [primaryLang, setPrimaryLang] = useState<LecturerLang>('en')
   const [secondaryLang, setSecondaryLang] = useState<LecturerLang>('ko')
+  const [showTranscriptModal, setShowTranscriptModal] = useState(false)
   const [spotlightEnabled, setSpotlightEnabled] = useState(false)
   const [spotlightColor, setSpotlightColor] = useState(SPOTLIGHT_PRESETS[0])
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -117,6 +118,7 @@ function Lecturer() {
     studentCount,
     lectureTitle,
     slideFilename,
+    sessionId,
     setLectureTitle,
     setMicOn,
     setLectureStarted,
@@ -263,6 +265,7 @@ function Lecturer() {
     setLectureStarted(false)
     setPaused(false)
     send({ type: 'lecture_end', slide_id: slideId })
+    setShowTranscriptModal(true)
   }
 
   const handleExit = () => {
@@ -582,6 +585,39 @@ function Lecturer() {
     >
       {/* Cursor spotlight (global overlay) */}
       <CursorSpotlight enabled={spotlightEnabled} color={spotlightColor} />
+
+      {/* 자막 다운로드 모달 */}
+      {showTranscriptModal && sessionId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-surface rounded-2xl shadow-2xl p-6 w-[min(90%,400px)] flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-onSurface">강의 자막 저장</h2>
+              <button
+                type="button"
+                onClick={() => setShowTranscriptModal(false)}
+                className="w-7 h-7 rounded-full flex items-center justify-center text-onSurface/60 hover:bg-black/10 transition-colors"
+              >✕</button>
+            </div>
+            <p className="text-sm text-onSurface/70">강의 중 인식된 자막을 파일로 다운로드합니다.</p>
+            <div className="flex flex-col gap-2">
+              <a
+                href={`${API_BASE}/transcripts/${sessionId}/download?format=txt`}
+                download
+                className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-primary text-onPrimary font-medium hover:opacity-90 transition-opacity"
+              >
+                <span>📄</span> TXT 다운로드
+              </a>
+              <a
+                href={`${API_BASE}/transcripts/${sessionId}/download?format=srt`}
+                download
+                className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-primaryContainer text-onPrimaryContainer font-medium hover:opacity-90 transition-opacity"
+              >
+                <span>🎬</span> SRT 다운로드
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 헤더 */}
       <header className="flex items-center justify-between gap-3 px-4 py-3 bg-surface border-b border-primaryContainer flex-shrink-0">
