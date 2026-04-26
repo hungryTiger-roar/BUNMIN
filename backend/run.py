@@ -98,6 +98,23 @@ sys.excepthook = _exception_hook
 # ── 실제 앱 기동 ─────────────────────────────────────────────────────
 try:
     write_log("[INFO] uvicorn / app 임포트 시작...")
+
+    # CUDA 진단
+    try:
+        import torch
+        cuda_available = torch.cuda.is_available()
+        write_log(f"[CUDA] torch.cuda.is_available(): {cuda_available}")
+        write_log(f"[CUDA] PyTorch version: {torch.__version__}")
+        if cuda_available:
+            write_log(f"[CUDA] CUDA version: {torch.version.cuda}")
+            write_log(f"[CUDA] GPU count: {torch.cuda.device_count()}")
+            write_log(f"[CUDA] GPU name: {torch.cuda.get_device_name(0)}")
+        else:
+            write_log(f"[CUDA] WARNING: CUDA not available! VLM translation will fail.")
+            print("[WARNING] CUDA not available! VLM translation will fail.", flush=True)
+    except Exception as e:
+        write_log(f"[CUDA] Error checking CUDA: {e}")
+
     import uvicorn
     from app.main import app
     write_log("[INFO] 임포트 성공, uvicorn 기동 중...")
