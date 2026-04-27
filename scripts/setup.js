@@ -33,6 +33,19 @@ console.log('  완료')
 // 2. 프론트엔드 npm 패키지
 step(2, 6, '프론트엔드 npm 패키지 설치...')
 run('npm install --prefix frontend')
+
+// VAD(음성 감지) onnx 모델 파일 복사
+console.log('  VAD 모델 파일 복사 중...')
+const vadSrc = path.join(ROOT, 'frontend/node_modules/@ricky0123/vad-web/dist')
+const vadDest = path.join(ROOT, 'frontend/public')
+const vadFiles = ['silero_vad_legacy.onnx', 'silero_vad_v5.onnx']
+vadFiles.forEach(file => {
+  const src = path.join(vadSrc, file)
+  const dest = path.join(vadDest, file)
+  if (fs.existsSync(src)) {
+    fs.copyFileSync(src, dest)
+  }
+})
 console.log('  완료')
 
 // 3. .env 파일
