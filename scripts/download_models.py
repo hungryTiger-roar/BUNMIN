@@ -15,10 +15,9 @@ from huggingface_hub import snapshot_download
 import requests
 
 # ─── HF 캐시 경로를 백엔드와 동일하게 설정 ────────────────────────────────────
-# backend/app/config.py 가 HF_HOME = <project_root>/backend/cache/huggingface 로 설정하므로
-# 다운로드 스크립트도 같은 경로를 사용해야 서버 시작 시 재다운로드를 방지할 수 있다.
 _PROJECT_ROOT = Path(__file__).parent.parent
 _HF_HOME = _PROJECT_ROOT / "backend" / "cache" / "huggingface"
+_HF_HOME.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("HF_HOME", str(_HF_HOME))
 
 # 모델 저장 경로

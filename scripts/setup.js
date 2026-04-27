@@ -58,7 +58,6 @@ console.log('  완료')
 // 2. 프론트엔드 npm 패키지
 step(2, TOTAL, '프론트엔드 npm 패키지 설치...')
 run('npm install --prefix frontend')
-console.log('  완료')
 
 // 2-a. VAD ONNX 모델 복사 (*.onnx는 .gitignore에 포함 → clone 후 없음)
 //      node_modules/@ricky0123/vad-web/dist/ → frontend/public/
