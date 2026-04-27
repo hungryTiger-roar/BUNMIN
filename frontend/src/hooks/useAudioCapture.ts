@@ -9,10 +9,9 @@ declare global {
 
 interface UseAudioCaptureOptions {
   onAudioData: (audioBlob: Blob) => void
-  chunkInterval?: number // chunkInterval 옵션 추가 (기본값 제공 목적)
 }
 
-export function useAudioCapture({ onAudioData, chunkInterval = 1000 }: UseAudioCaptureOptions) {
+export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
   const [isCapturing, setIsCapturing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const vadRef = useRef<any>(null)
@@ -135,7 +134,7 @@ export function useAudioCapture({ onAudioData, chunkInterval = 1000 }: UseAudioC
       console.error('[AudioCapture] 시작 실패:', err)
       setError('마이크 접근 권한이 필요합니다.')
     }
-  }, [chunkInterval])
+  }, [])
 
   const stopCapture = useCallback(() => {
     if (analyserRef.current) {
@@ -187,18 +186,6 @@ export function useAudioCapture({ onAudioData, chunkInterval = 1000 }: UseAudioC
     analyserRef,
     setGain,
   }
-}
-
-// Float32Array 배열을 하나로 합치는 헬퍼 함수 추가
-function mergeChunks(chunks: Float32Array[]): Float32Array {
-  const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0)
-  const result = new Float32Array(totalLength)
-  let offset = 0
-  for (const chunk of chunks) {
-    result.set(chunk, offset)
-    offset += chunk.length
-  }
-  return result
 }
 
 function float32ToWav(samples: Float32Array, sampleRate: number): Blob {
