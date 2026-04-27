@@ -110,6 +110,10 @@ interface LectureState {
   setLectureTitle: (title: string) => void
   setSlideFilename: (filename: string) => void
 
+  // 자막 다운로드용 세션 ID
+  sessionId: string | null
+  setSessionId: (id: string | null) => void
+
   // 전체 초기화
   reset: () => void
 }
@@ -137,6 +141,7 @@ const initialState = {
   participants: { lecturer: null, students: [] } as Participants,
   lectureTitle: '',
   slideFilename: '',
+  sessionId: null,
 }
 
 export const useLectureStore = create<LectureState>((set, get) => ({
@@ -210,6 +215,9 @@ export const useLectureStore = create<LectureState>((set, get) => ({
   // 강의 제목
   setLectureTitle: (title) => set({ lectureTitle: title }),
   setSlideFilename: (filename) => set({ slideFilename: filename }),
+
+  // 자막 세션 ID
+  setSessionId: (id) => set({ sessionId: id }),
 
   // 전체 초기화
   reset: () => set(initialState),

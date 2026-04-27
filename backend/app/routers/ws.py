@@ -628,6 +628,18 @@ async def process_audio(message: dict):
             "sentAt": sent_at,
         })
 
+        # 강의자에게도 자막 전송 (오디오 없이 — 강의자는 TTS 재생 불필요)
+        if manager.lecturer:
+            try:
+                await manager.lecturer.send_json({
+                    "type": "transcription",
+                    "original": korean_text,
+                    "translated": english_text,
+                    "audio": None,
+                    "sentAt": sent_at,
+                })
+            except Exception:
+                pass
         print(
             f"[LATENCY] seq={seq} | 대기={t_asr - t_start:.2f}s | "
             f"ASR={t_asr_done - t_asr:.2f}s | "
