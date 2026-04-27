@@ -9,13 +9,21 @@ HuggingFace Hub에서 필요한 모델들을 미리 다운로드합니다.
     pip install huggingface_hub requests
 """
 
+import os
 from pathlib import Path
 from huggingface_hub import snapshot_download
 import requests
 
+# ─── HF 캐시 경로를 백엔드와 동일하게 설정 ────────────────────────────────────
+# backend/app/config.py 가 HF_HOME = <project_root>/backend/cache/huggingface 로 설정하므로
+# 다운로드 스크립트도 같은 경로를 사용해야 서버 시작 시 재다운로드를 방지할 수 있다.
+_PROJECT_ROOT = Path(__file__).parent.parent
+_HF_HOME = _PROJECT_ROOT / "backend" / "cache" / "huggingface"
+os.environ.setdefault("HF_HOME", str(_HF_HOME))
+
 # 모델 저장 경로
-MODELS_DIR = Path(__file__).parent.parent / "models"
-TTS_MODEL_DIR = Path(__file__).parent.parent / "backend" / "app" / "services" / "models"
+MODELS_DIR = _PROJECT_ROOT / "models"
+TTS_MODEL_DIR = _PROJECT_ROOT / "backend" / "app" / "services" / "models"
 
 # ============================================
 # 다운로드할 모델 목록
@@ -43,11 +51,12 @@ ASR_MODEL = {
     "size": "~3GB",
 }
 
-# NMT 모델 (실시간 번역)
+# NMT 모델 (실시간 번역) — CTranslate2 변환 대상
 NMT_MODEL = {
-    "repo_id": "facebook/nllb-200-distilled-1.3B",
-    "description": "NMT 실시간 번역 모델",
-    "size": "~2.5GB",
+    "repo_id": "Helsinki-NLP/opus-mt-ko-en",
+    "local_dir": MODELS_DIR / "opus-mt-ct2",
+    "description": "NMT 실시간 번역 모델 (CTranslate2 int8)",
+    "size": "~150MB",
 }
 
 # TTS 모델 (음성 합성) - Piper
@@ -59,17 +68,11 @@ TTS_MODEL = {
     "size": "~60MB",
 }
 
-# RapidOCR 한국어 모델 (슬라이드 OCR)
+# RapidOCR 한국어 모델 — ocr_service.py가 hf_hub_download로 사용하는 실제 모델
 RAPIDOCR_KOREAN = {
-    "repo_id": "monkt/paddleocr-onnx",
-    "files": [
-        "detection/v3/det.onnx",
-        "languages/korean/rec.onnx",
-        "languages/korean/dict.txt",
-    ],
-    "local_dir": MODELS_DIR / "rapidocr_korean",
-    "description": "RapidOCR 한국어 모델",
-    "size": "~50MB",
+    "repo_id": "cycloneboy/korean_PP-OCRv4_rec_infer",
+    "description": "RapidOCR 한국어 모델 (PP-OCRv4)",
+    "size": "~20MB",
 }
 
 # Surya OCR 모델 (Transformer 기반, 고정확도)
@@ -109,7 +112,6 @@ def download_to_local(model: dict, step: str) -> bool:
         snapshot_download(
             repo_id=model["repo_id"],
             local_dir=str(model["local_dir"]),
-            local_dir_use_symlinks=False,
         )
         print(f"✓ {model['description']} 다운로드 완료!")
         return True
@@ -117,34 +119,6 @@ def download_to_local(model: dict, step: str) -> bool:
         print(f"✗ {model['description']} 다운로드 실패: {e}")
         return False
 
-
-def download_rapidocr_korean(model: dict, step: str) -> bool:
-    """RapidOCR 한국어 모델 다운로드"""
-    from huggingface_hub import hf_hub_download
-
-    print(f"\n[{step}] {model['description']} ({model['size']})")
-    print(f"      저장소: {model['repo_id']}")
-    print(f"      경로: {model['local_dir']}")
-    print("-" * 60)
-
-    try:
-        model["local_dir"].mkdir(parents=True, exist_ok=True)
-
-        for fname in model["files"]:
-            print(f"  다운로드 중: {fname}")
-            hf_hub_download(
-                repo_id=model["repo_id"],
-                filename=fname,
-                local_dir=str(model["local_dir"]),
-                local_dir_use_symlinks=False,
-            )
-            print(f"  ✓ {fname} 완료")
-
-        print(f"✓ {model['description']} 다운로드 완료!")
-        return True
-    except Exception as e:
-        print(f"✗ {model['description']} 다운로드 실패: {e}")
-        return False
 
 
 def download_surya_ocr(model: dict, step: str) -> bool:
@@ -179,6 +153,57 @@ def download_surya_ocr(model: dict, step: str) -> bool:
         return True  # 선택적이므로 실패로 처리하지 않음
     except Exception as e:
         print(f"✗ {model['description']} 다운로드 실패: {e}")
+        return False
+
+
+def _find_ct2_converter() -> str:
+    """conda 환경 내 ct2-transformers-converter 실행 파일 경로 반환.
+    sys.executable 기준 Scripts(Win) / bin(Linux) 디렉토리를 먼저 탐색하고,
+    없으면 PATH에서 찾도록 이름만 반환."""
+    import sys
+    scripts_dir = Path(sys.executable).parent
+    for name in ["ct2-transformers-converter.exe", "ct2-transformers-converter"]:
+        candidate = scripts_dir / name
+        if candidate.exists():
+            return str(candidate)
+    return "ct2-transformers-converter"
+
+
+def convert_nmt_ct2(model: dict, step: str) -> bool:
+    """Helsinki opus-mt 모델을 CTranslate2 int8 포맷으로 변환"""
+    import subprocess
+
+    print(f"\n[{step}] {model['description']} ({model['size']})")
+    print(f"      저장소: {model['repo_id']}")
+    print(f"      경로: {model['local_dir']}")
+    print("-" * 60)
+
+    if model["local_dir"].exists():
+        print(f"✓ 이미 변환됨 → 스킵")
+        return True
+
+    try:
+        print("CTranslate2 변환 중 (int8 양자화)...")
+        model["local_dir"].parent.mkdir(parents=True, exist_ok=True)
+        converter = _find_ct2_converter()
+        subprocess.run(
+            [
+                converter,
+                "--model", model["repo_id"],
+                "--output_dir", str(model["local_dir"]),
+                "--quantization", "int8",
+                "--force",
+            ],
+            check=True,
+        )
+        print(f"✓ {model['description']} 변환 완료!")
+        return True
+    except FileNotFoundError:
+        print(f"✗ ct2-transformers-converter 를 찾을 수 없습니다.")
+        print(f"  ctranslate2 패키지가 설치됐는지 확인: pip install ctranslate2")
+        return False
+    except Exception as e:
+        print(f"✗ {model['description']} 변환 실패: {e}")
         return False
 
 
@@ -226,7 +251,7 @@ def main():
     print(f"  5. {TTS_MODEL['description']} ({TTS_MODEL['size']})")
     print(f"  6. {RAPIDOCR_KOREAN['description']} ({RAPIDOCR_KOREAN['size']})")
     print(f"  7. {SURYA_OCR['description']} ({SURYA_OCR['size']})")
-    print(f"\n총 예상 용량: ~24GB (최초 1회만 다운로드)")
+    print(f"\n총 예상 용량: ~22GB (최초 1회만 다운로드)")
 
     results = []
 
@@ -239,14 +264,14 @@ def main():
     # 3. ASR 모델
     results.append(("ASR", download_to_cache(ASR_MODEL, "3/7")))
 
-    # 4. NMT 모델
-    results.append(("NMT", download_to_cache(NMT_MODEL, "4/7")))
+    # 4. NMT 모델 (CTranslate2 변환)
+    results.append(("NMT", convert_nmt_ct2(NMT_MODEL, "4/7")))
 
     # 5. TTS 모델
     results.append(("TTS", download_tts(TTS_MODEL, "5/7")))
 
-    # 6. RapidOCR 한국어 모델
-    results.append(("RapidOCR Korean", download_rapidocr_korean(RAPIDOCR_KOREAN, "6/7")))
+    # 6. RapidOCR 한국어 모델 (HF 캐시에 저장 — ocr_service.py의 hf_hub_download와 동일 경로)
+    results.append(("RapidOCR Korean", download_to_cache(RAPIDOCR_KOREAN, "6/7")))
 
     # 7. Surya OCR 모델 (Transformer 기반)
     results.append(("Surya OCR", download_surya_ocr(SURYA_OCR, "7/7")))

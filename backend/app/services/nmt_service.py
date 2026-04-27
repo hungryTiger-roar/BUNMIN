@@ -1,46 +1,99 @@
 """
 NMT (Neural Machine Translation) 서비스
 한국어 → 영어 번역
-- NLLB 계열: AutoModelForSeq2SeqLM (facebook/nllb-*)
-- Helsinki 계열: MarianMTModel (Helsinki-NLP/opus-mt-*)
+
+우선순위:
+1. CTranslate2 (models/opus-mt-ct2/ 존재 시) — CPU 3~5배 가속, int8 양자화
+2. HuggingFace transformers 폴백 — ctranslate2 미설치 또는 변환 전 상태
 """
+import subprocess
+from pathlib import Path
+
+_CT2_MODEL_DIR = Path(__file__).parent.parent.parent.parent / "models" / "opus-mt-ct2"
 
 
 class NMTService:
-    _LANG_MAP = {
-        "ko": "kor_Hang",
-        "en": "eng_Latn",
-        "zh": "zho_Hans",
-        "ja": "jpn_Jpan",
-    }
-
     def __init__(self, model_name: str = "Helsinki-NLP/opus-mt-ko-en", device: str = "cpu", dtype: str = "float32"):
         self.model_name = model_name
-        self.device = "cuda:0" if device == "cuda" else device
+        self.device = "cuda" if device in ("cuda", "cuda:0") else "cpu"
         self.dtype = dtype
-        self._is_nllb = "nllb" in model_name.lower()
-        self.model = None
-        self.tokenizer = None
-        self._load_model()
+        self._mode = None  # "ct2" | "hf"
+
+        # CT2 → HF 순으로 시도
+        if self._try_load_ct2():
+            self._mode = "ct2"
+        else:
+            self._load_hf()
+            self._mode = "hf"
+
+    # ── CTranslate2 ─────────────────────────────────────────────────────────
+
+    def _try_load_ct2(self) -> bool:
+        try:
+            import ctranslate2  # noqa: F401
+        except ImportError:
+            print("[NMT] ctranslate2 미설치 → HuggingFace 폴백 (npm run setup으로 설치 가능)")
+            return False
+
+        try:
+            import ctranslate2
+            import sentencepiece as spm
+
+            if not _CT2_MODEL_DIR.exists():
+                self._convert_model()
+
+            self._ct2 = ctranslate2.Translator(
+                str(_CT2_MODEL_DIR),
+                device=self.device,
+                inter_threads=2,
+            )
+            self._sp_src = spm.SentencePieceProcessor()
+            self._sp_src.Load(str(_CT2_MODEL_DIR / "source.spm"))
+            self._sp_tgt = spm.SentencePieceProcessor()
+            self._sp_tgt.Load(str(_CT2_MODEL_DIR / "target.spm"))
+
+            print(f"[NMT] CTranslate2 opus-mt-ko-en 로드 완료 ({self.device}, int8)")
+            return True
+        except Exception as e:
+            print(f"[NMT] CTranslate2 로드 실패 → HuggingFace 폴백: {e}")
+            return False
+
+    def _convert_model(self):
+        print(f"[NMT] CTranslate2 변환 중: {self.model_name} → {_CT2_MODEL_DIR}")
+        _CT2_MODEL_DIR.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [
+                "ct2-transformers-converter",
+                "--model", self.model_name,
+                "--output_dir", str(_CT2_MODEL_DIR),
+                "--quantization", "int8",
+                "--force",
+            ],
+            check=True,
+        )
+        print("[NMT] 변환 완료!")
+
+    # ── HuggingFace 폴백 ─────────────────────────────────────────────────────
 
     def _torch_dtype(self):
         import torch
         return {"float16": torch.float16, "bfloat16": torch.bfloat16}.get(self.dtype, torch.float32)
 
-    def _load_model(self):
+    def _load_hf(self):
         try:
             from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            self.model = AutoModelForSeq2SeqLM.from_pretrained(
+            self._hf_tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self._hf_model = AutoModelForSeq2SeqLM.from_pretrained(
                 self.model_name,
                 torch_dtype=self._torch_dtype(),
                 device_map=self.device,
             )
-            self.model.eval()
-            print(f"[NMT] {self.model_name} 로드 완료 ({self.dtype}, {self.device})")
+            self._hf_model.eval()
+            print(f"[NMT] HuggingFace {self.model_name} 로드 완료 ({self.dtype}, {self.device})")
         except ImportError as e:
             raise RuntimeError(f"필요한 패키지가 설치되지 않았습니다: {e}")
+
+    # ── 공통 번역 인터페이스 ─────────────────────────────────────────────────
 
     def translate(
         self,
@@ -49,34 +102,34 @@ class NMTService:
         target_lang: str = "en",
         max_length: int = 512,
     ) -> str:
-        if self.model is None or not text.strip():
+        if not text.strip():
             return ""
         try:
-            import torch
-
-            inputs = self.tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-            inputs = {k: v.to(self.device) for k, v in inputs.items()}
-
-            generate_kwargs = dict(
-                **inputs,
-                max_length=max_length,
-                num_beams=1,
-            )
-
-            if self._is_nllb:
-                # NLLB: src_lang 설정 + forced_bos_token_id로 출력 언어 지정
-                src = self._LANG_MAP.get(source_lang, "kor_Hang")
-                tgt = self._LANG_MAP.get(target_lang, "eng_Latn")
-                self.tokenizer.src_lang = src
-                generate_kwargs["forced_bos_token_id"] = self.tokenizer.convert_tokens_to_ids(tgt)
-
-            with torch.no_grad():
-                outputs = self.model.generate(**generate_kwargs)
-
-            return self.tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+            if self._mode == "ct2":
+                return self._translate_ct2(text)
+            else:
+                return self._translate_hf(text, max_length)
         except Exception as e:
             print(f"[NMT] 번역 오류: {e}")
             return ""
+
+    def _translate_ct2(self, text: str) -> str:
+        tokens = self._sp_src.Encode(text, out_type=str)
+        max_decoding_length = max(30, len(tokens) * 2)
+        results = self._ct2.translate_batch(
+            [tokens],
+            max_decoding_length=max_decoding_length,
+            beam_size=1,
+        )
+        return self._sp_tgt.Decode(results[0].hypotheses[0]).strip()
+
+    def _translate_hf(self, text: str, max_length: int) -> str:
+        import torch
+        inputs = self._hf_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        with torch.no_grad():
+            outputs = self._hf_model.generate(**inputs, max_length=max_length, num_beams=1)
+        return self._hf_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
 
     def translate_batch(
         self,

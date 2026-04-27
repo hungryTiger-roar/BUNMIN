@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ASR → MT → TTS 파이프라인 최적화 가이드</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', 'Apple SD Gothic Neo', sans-serif;
+      font-size: 14px;
+      line-height: 1.7;
+      color: #1a1a2e;
+      background: #f8f9fc;
+      padding: 40px 20px;
+    }
+
+    .page {
+      max-width: 860px;
+      margin: 0 auto;
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 4px 32px rgba(0,0,0,0.08);
+      overflow: hidden;
+    }
+
+    /* 헤더 */
+    .cover {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      color: #fff;
+      padding: 52px 48px 44px;
+    }
+    .cover .badge {
+      display: inline-block;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      border-radius: 20px;
+      padding: 4px 14px;
+      font-size: 12px;
+      letter-spacing: 0.05em;
+      margin-bottom: 18px;
+    }
+    .cover h1 {
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1.3;
+      margin-bottom: 14px;
+    }
+    .cover .subtitle {
+      font-size: 15px;
+      opacity: 0.75;
+      margin-bottom: 32px;
+    }
+    .pipeline-bar {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .pipeline-bar .step {
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 8px;
+      padding: 8px 18px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .pipeline-bar .arrow {
+      font-size: 16px;
+      opacity: 0.6;
+    }
+
+    /* 본문 */
+    .body {
+      padding: 40px 48px 56px;
+    }
+
+    /* 섹션 타이틀 */
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 20px;
+      font-weight: 700;
+      color: #0f3460;
+      margin: 40px 0 20px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #e8edf5;
+    }
+    .section-title:first-child { margin-top: 0; }
+    .section-title .icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+    .icon-red { background: #fff0f0; }
+    .icon-blue { background: #f0f4ff; }
+
+    /* 서브섹션 */
+    .sub-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin: 24px 0 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .sub-title .tag {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: #e8f0fe;
+      color: #1a73e8;
+    }
+    .sub-title .tag-green {
+      background: #e6f4ea;
+      color: #137333;
+    }
+
+    /* 번호 배지 */
+    .num {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: #0f3460;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    p { margin-bottom: 10px; color: #333; }
+
+    /* 코드 블록 */
+    pre {
+      background: #1e1e2e;
+      color: #cdd6f4;
+      border-radius: 10px;
+      padding: 18px 20px;
+      font-family: 'Consolas', 'D2Coding', monospace;
+      font-size: 12.5px;
+      line-height: 1.6;
+      overflow-x: auto;
+      margin: 10px 0 16px;
+    }
+    .kw { color: #cba6f7; }   /* keyword */
+    .fn { color: #89b4fa; }   /* function */
+    .st { color: #a6e3a1; }   /* string */
+    .cm { color: #6c7086; }   /* comment */
+    .nm { color: #fab387; }   /* number */
+    .op { color: #89dceb; }   /* operator/special */
+
+    /* 인라인 코드 */
+    code {
+      background: #f0f4ff;
+      color: #0f3460;
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-family: 'Consolas', 'D2Coding', monospace;
+      font-size: 12.5px;
+    }
+
+    /* 설명 박스 */
+    .desc-box {
+      background: #f8f9fc;
+      border-left: 4px solid #0f3460;
+      border-radius: 0 8px 8px 0;
+      padding: 12px 16px;
+      margin: 8px 0 16px;
+      font-size: 13.5px;
+      color: #444;
+    }
+    .desc-box.warn {
+      border-color: #f59e0b;
+      background: #fffbeb;
+    }
+
+    /* 우선순위 테이블 */
+    .priority-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0 8px;
+      font-size: 13.5px;
+    }
+    .priority-table th {
+      background: #0f3460;
+      color: #fff;
+      padding: 10px 14px;
+      text-align: left;
+      font-weight: 600;
+    }
+    .priority-table th:first-child { border-radius: 8px 0 0 0; }
+    .priority-table th:last-child { border-radius: 0 8px 0 0; }
+    .priority-table td {
+      padding: 10px 14px;
+      border-bottom: 1px solid #e8edf5;
+      color: #333;
+    }
+    .priority-table tr:last-child td { border-bottom: none; }
+    .priority-table tr:nth-child(even) td { background: #f8f9fc; }
+
+    .badge-easy   { display:inline-block; padding:2px 10px; border-radius:10px; font-size:11px; font-weight:600; background:#e6f4ea; color:#137333; }
+    .badge-medium { display:inline-block; padding:2px 10px; border-radius:10px; font-size:11px; font-weight:600; background:#fff8e1; color:#f57f17; }
+    .badge-hard   { display:inline-block; padding:2px 10px; border-radius:10px; font-size:11px; font-weight:600; background:#fce8e6; color:#c5221f; }
+
+    /* 구분선 */
+    hr { border: none; border-top: 1px solid #e8edf5; margin: 32px 0; }
+
+    /* 하단 */
+    .footer {
+      background: #f8f9fc;
+      border-top: 1px solid #e8edf5;
+      padding: 18px 48px;
+      font-size: 12px;
+      color: #888;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    /* 가장 확실한 방법 카드 */
+    .best-section {
+      background: linear-gradient(135deg, #0f3460 0%, #16213e 100%);
+      border-radius: 12px;
+      padding: 28px 32px;
+      margin: 0 0 36px;
+      color: #fff;
+    }
+    .best-section .best-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.3);
+      border-radius: 20px;
+      padding: 3px 12px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      margin-bottom: 16px;
+    }
+    .best-section h3 {
+      font-size: 17px;
+      font-weight: 700;
+      margin-bottom: 18px;
+      opacity: 0.95;
+    }
+    .best-cards {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+    .best-card {
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 10px;
+      padding: 18px 20px;
+    }
+    .best-card .card-tag {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      opacity: 0.65;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+    }
+    .best-card .card-title {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .best-card .card-desc {
+      font-size: 12.5px;
+      opacity: 0.8;
+      line-height: 1.6;
+    }
+    .best-card .card-highlight {
+      display: inline-block;
+      margin-top: 10px;
+      background: rgba(255,255,255,0.15);
+      border-radius: 6px;
+      padding: 3px 10px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .best-card.card-red { border-color: rgba(239,68,68,0.4); }
+    .best-card.card-blue { border-color: rgba(96,165,250,0.4); }
+
+    @media print {
+      body { background: #fff; padding: 0; }
+      .page { box-shadow: none; border-radius: 0; }
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- 커버 -->
+  <div class="cover">
+    <div class="badge">Aunion AI · 파이프라인 최적화</div>
+    <h1>ASR → MT → TTS<br>할루시네이션 감소 &amp; 속도 향상 가이드</h1>
+    <p class="subtitle">실시간 한국어 강의 번역 파이프라인 품질·성능 개선 방안</p>
+    <div class="pipeline-bar">
+      <div class="step">🎙️ ASR<br><small>faster-whisper</small></div>
+      <div class="arrow">→</div>
+      <div class="step">🌐 MT<br><small>Helsinki opus-mt</small></div>
+      <div class="arrow">→</div>
+      <div class="step">🔊 TTS<br><small>Piper</small></div>
+    </div>
+  </div>
+
+  <!-- 본문 -->
+  <div class="body">
+
+    <!-- ─── 가장 확실한 방법 ─── -->
+    <div class="best-section">
+      <div class="best-label">⭐ 가장 확실한 방법</div>
+      <h3>효과와 근거가 가장 명확한 핵심 2가지</h3>
+      <div class="best-cards">
+        <div class="best-card card-red">
+          <div class="card-tag">🚫 할루시네이션 감소</div>
+          <div class="card-title">세그먼트 신뢰도 필터링</div>
+          <div class="card-desc">
+            faster-whisper가 자체 계산하는 <code style="background:rgba(255,255,255,0.15);color:#fff;border-radius:4px;padding:1px 5px;">no_speech_prob</code>·<code style="background:rgba(255,255,255,0.15);color:#fff;border-radius:4px;padding:1px 5px;">avg_logprob</code>을 활용해 무음·잡음 구간의 환각을 직접 차단합니다. 모델 교체 없이 코드 5줄로 즉시 적용 가능하며 근본 원인을 차단하는 방식입니다.
+          </div>
+          <div class="card-highlight">난이도 낮음 · 즉시 적용 가능</div>
+        </div>
+        <div class="best-card card-blue">
+          <div class="card-tag">⚡ 속도 향상</div>
+          <div class="card-title">CTranslate2 MT 변환</div>
+          <div class="card-desc">
+            Helsinki opus-mt 모델을 CTranslate2 포맷으로 변환하면 CPU 추론 속도가 <strong style="color:#93c5fd;">3~5배</strong> 향상됩니다. 현재 파이프라인에서 MT가 CPU 병목 구간이라 효과가 압도적이며, int8 양자화 적용 시 모델 크기도 절반으로 줄어듭니다.
+          </div>
+          <div class="card-highlight">CPU 추론 3~5배 · 최대 효과</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── 1. 할루시네이션 ─── -->
+    <div class="section-title">
+      <div class="icon icon-red">🚫</div>
+      할루시네이션 감소
+    </div>
+
+    <!-- ASR -->
+    <div class="sub-title">
+      <span class="num">1</span>
+      세그먼트 신뢰도 필터링 (ASR)
+      <span class="tag">asr_service.py</span>
+      <span class="tag tag-green">쉬움</span>
+    </div>
+    <div class="desc-box">
+      faster-whisper는 세그먼트마다 <code>no_speech_prob</code>(무음 확률)과 <code>avg_logprob</code>(평균 로그 확률)을 제공합니다.
+      현재 코드는 이를 무시하고 전체를 합치는데, 임계값 필터를 추가하면 잡음·무음 구간의 환각을 제거할 수 있습니다.
+    </div>
+<pre><span class="cm"># asr_service.py — transcribe() 내부</span>
+segments, _ = self.model.transcribe(audio_array, ...)
+
+result_texts = []
+<span class="kw">for</span> seg <span class="kw">in</span> segments:
+    <span class="kw">if</span> seg.no_speech_prob <span class="op">&gt;</span> <span class="nm">0.6</span>:   <span class="cm"># 무음/잡음 구간 제거</span>
+        <span class="kw">continue</span>
+    <span class="kw">if</span> seg.avg_logprob <span class="op">&lt;</span> <span class="nm">-0.8</span>:     <span class="cm"># 확신 낮은 추론 제거</span>
+        <span class="kw">continue</span>
+    result_texts.append(seg.text)
+
+<span class="kw">return</span> <span class="st">""</span>.join(result_texts).strip()</pre>
+
+    <div class="sub-title">
+      <span class="num">2</span>
+      VAD 파라미터 튜닝 (ASR)
+      <span class="tag">asr_service.py</span>
+      <span class="tag tag-green">쉬움</span>
+    </div>
+    <div class="desc-box">
+      VAD(Voice Activity Detection)의 무음 판단 기준을 조정해 발화 경계를 더 정확히 감지합니다.
+    </div>
+<pre>segments, _ = self.model.transcribe(
+    audio_array,
+    vad_filter=<span class="kw">True</span>,
+    vad_parameters=<span class="fn">dict</span>(
+        min_silence_duration_ms=<span class="nm">300</span>,  <span class="cm"># 무음 판단 기준 (ms)</span>
+        speech_pad_ms=<span class="nm">200</span>,            <span class="cm"># 발화 앞뒤 여유 구간</span>
+    ),
+)</pre>
+
+    <div class="sub-title">
+      <span class="num">3</span>
+      반복 억제 패널티 (MT)
+      <span class="tag">nmt_service.py</span>
+      <span class="tag tag-green">쉬움</span>
+    </div>
+    <div class="desc-box">
+      번역 모델이 같은 단어를 반복하는 루프 환각에 대응합니다. <code>repetition_penalty</code>와 <code>no_repeat_ngram_size</code>로 억제할 수 있습니다.
+    </div>
+<pre>generate_kwargs = <span class="fn">dict</span>(
+    <span class="op">**</span>inputs,
+    max_length=max_length,
+    num_beams=<span class="nm">1</span>,
+    repetition_penalty=<span class="nm">1.3</span>,    <span class="cm"># 반복 단어 생성 억제</span>
+    no_repeat_ngram_size=<span class="nm">3</span>,     <span class="cm"># 3-gram 반복 차단</span>
+)</pre>
+
+    <hr />
+
+    <!-- ─── 2. 속도 ─── -->
+    <div class="section-title">
+      <div class="icon icon-blue">⚡</div>
+      속도 향상
+    </div>
+
+    <div class="sub-title">
+      <span class="num">4</span>
+      beam_size 축소 (ASR)
+      <span class="tag">asr_service.py</span>
+      <span class="tag tag-green">쉬움</span>
+    </div>
+    <div class="desc-box">
+      기본값 <code>beam_size=5</code>를 <code>1</code>(greedy decoding)로 줄이면 품질 손실은 거의 없으면서 ASR 속도가 약 <strong>30% 향상</strong>됩니다.
+    </div>
+<pre>segments, _ = self.model.transcribe(
+    audio_array,
+    beam_size=<span class="nm">1</span>,  <span class="cm"># greedy — 품질 거의 동일, ~30% 속도 향상</span>
+    ...
+)</pre>
+
+    <div class="sub-title">
+      <span class="num">5</span>
+      동적 max_new_tokens (MT)
+      <span class="tag">nmt_service.py</span>
+      <span class="tag tag-green">쉬움</span>
+    </div>
+    <div class="desc-box">
+      <code>max_length=512</code>는 입력+출력 합계를 제한해 긴 입력일수록 출력 예산이 줄어드는 문제가 있습니다.
+      <code>max_new_tokens</code>로 교체하고 입력 토큰 수 기반으로 동적 산정하면 짧은 문장에서 불필요한 탐색이 사라집니다.
+    </div>
+<pre><span class="cm"># 입력 토큰 수 기반으로 출력 예산 동적 산정</span>
+<span class="cm"># 한국어→영어는 토큰 수가 보통 1.5~2배로 증가</span>
+input_token_len = inputs[<span class="st">"input_ids"</span>].shape[<span class="nm">1</span>]
+max_new_tokens = <span class="fn">max</span>(<span class="nm">30</span>, input_token_len <span class="op">*</span> <span class="nm">2</span>)
+
+generate_kwargs = <span class="fn">dict</span>(
+    <span class="op">**</span>inputs,
+    max_new_tokens=max_new_tokens,
+    num_beams=<span class="nm">1</span>,
+)</pre>
+
+    <div class="sub-title">
+      <span class="num">6</span>
+      NMT + TTS 결과 캐시 (파이프라인)
+      <span class="tag">ws.py</span>
+      <span class="tag" style="background:#fff0e6;color:#c44f00;">중간</span>
+    </div>
+    <div class="desc-box">
+      강의에서 반복되는 표현("예를 들어", "다음 슬라이드")은 MT+TTS를 건너뛰고 캐시에서 즉시 응답합니다.
+      LRU 방식으로 최신 100개를 유지합니다.
+    </div>
+<pre><span class="kw">from</span> collections <span class="kw">import</span> OrderedDict
+
+_cache: OrderedDict = OrderedDict()
+CACHE_MAX = <span class="nm">100</span>
+
+<span class="kw">def</span> <span class="fn">cache_get</span>(key):
+    <span class="kw">if</span> key <span class="kw">in</span> _cache:
+        _cache.move_to_end(key)
+        <span class="kw">return</span> _cache[key]
+    <span class="kw">return None</span>
+
+<span class="kw">def</span> <span class="fn">cache_put</span>(key, value):
+    _cache[key] = value
+    _cache.move_to_end(key)
+    <span class="kw">if</span> <span class="fn">len</span>(_cache) <span class="op">&gt;</span> CACHE_MAX:
+        _cache.popitem(last=<span class="kw">False</span>)
+
+<span class="cm"># process_audio() 내부 — ASR 이후</span>
+cached = <span class="fn">cache_get</span>(korean_text)
+<span class="kw">if</span> cached:
+    english_text, audio_bytes = cached
+<span class="kw">else</span>:
+    english_text = <span class="kw">await</span> asyncio.to_thread(_nmt_service.translate, ...)
+    audio_bytes  = <span class="kw">await</span> asyncio.to_thread(_tts_service.synthesize, ...)
+    <span class="fn">cache_put</span>(korean_text, (english_text, audio_bytes))</pre>
+
+    <div class="sub-title">
+      <span class="num">7</span>
+      CTranslate2로 MT 변환
+      <span class="tag">nmt_service.py</span>
+      <span class="badge-hard">어려움</span>
+    </div>
+    <div class="desc-box">
+      Helsinki opus-mt 모델을 CTranslate2 포맷으로 변환하면 CPU 추론 속도가 <strong>3~5배</strong> 향상됩니다.
+      모델 변환과 라이브러리 교체가 필요합니다.
+    </div>
+<pre><span class="cm"># 1. 모델 변환 (최초 1회)</span>
+pip install ctranslate2
+ct2-opus-mt-converter \
+    --model Helsinki-NLP/opus-mt-ko-en \
+    --output_dir models/opus-mt-ct2 \
+    --quantization int8  <span class="cm"># 크기 절반, 속도 추가 향상</span>
+
+<span class="cm"># 2. nmt_service.py 교체</span>
+<span class="kw">import</span> ctranslate2, sentencepiece
+
+translator = ctranslate2.Translator(
+    <span class="st">"models/opus-mt-ct2"</span>,
+    device=<span class="st">"cpu"</span>,
+    inter_threads=<span class="nm">2</span>,
+)
+sp = sentencepiece.SentencePieceProcessor()
+sp.Load(<span class="st">"models/opus-mt-ct2/source.spm"</span>)</pre>
+
+    <hr />
+
+    <!-- 우선순위 테이블 -->
+    <div class="section-title">
+      <div class="icon" style="background:#f0f8f0;">📊</div>
+      우선순위 요약
+    </div>
+
+    <table class="priority-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>방법</th>
+          <th>대상</th>
+          <th>예상 효과</th>
+          <th>난이도</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1</td>
+          <td>세그먼트 신뢰도 필터</td>
+          <td>ASR</td>
+          <td>할루시네이션 감소</td>
+          <td><span class="badge-easy">쉬움</span></td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td>beam_size = 1</td>
+          <td>ASR</td>
+          <td>~30% 속도 향상</td>
+          <td><span class="badge-easy">쉬움</span></td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td>동적 max_new_tokens</td>
+          <td>MT</td>
+          <td>짧은 문장 10~20% 가속</td>
+          <td><span class="badge-easy">쉬움</span></td>
+        </tr>
+        <tr>
+          <td>4</td>
+          <td>반복 억제 패널티</td>
+          <td>MT</td>
+          <td>반복 환각 감소</td>
+          <td><span class="badge-easy">쉬움</span></td>
+        </tr>
+        <tr>
+          <td>5</td>
+          <td>VAD 파라미터 튜닝</td>
+          <td>ASR</td>
+          <td>경계 정확도 향상</td>
+          <td><span class="badge-easy">쉬움</span></td>
+        </tr>
+        <tr>
+          <td>6</td>
+          <td>NMT+TTS 결과 캐시</td>
+          <td>파이프라인</td>
+          <td>반복 발화 즉시 응답</td>
+          <td><span class="badge-medium">중간</span></td>
+        </tr>
+        <tr>
+          <td>7</td>
+          <td>CTranslate2 변환</td>
+          <td>MT</td>
+          <td>CPU 추론 3~5배 가속</td>
+          <td><span class="badge-hard">어려움</span></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="desc-box warn" style="margin-top:20px;">
+      💡 <strong>추천 적용 순서:</strong> beam_size=1 → 동적 max_new_tokens → 세그먼트 필터 → 반복 억제 패널티 순으로 적용하면 코드 변경 최소화로 가장 큰 효과를 얻을 수 있습니다.
+    </div>
+
+  </div>
+
+  <div class="footer">
+    <span>Aunion AI — ASR·MT·TTS 파이프라인 최적화 가이드</span>
+    <span>2026.04.27</span>
+  </div>
+</div>
+</body>
+</html>

@@ -29,15 +29,15 @@ def set_ocr_service(service):
 
 
 # 슬라이드 저장 경로
-UPLOAD_DIR = Path("uploads/slides")
+UPLOAD_DIR = _REPO_DIR / "uploads" / "slides"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 # 이미지 저장 경로 (원본)
-IMAGES_DIR = Path("uploads/images")
+IMAGES_DIR = _REPO_DIR / "uploads" / "images"
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 # 번역된 이미지 저장 경로
-TRANSLATED_DIR = Path("uploads/translated")
+TRANSLATED_DIR = _REPO_DIR / "uploads" / "translated"
 TRANSLATED_DIR.mkdir(parents=True, exist_ok=True)
 
 # 처리 상태 저장 (메모리, 실제 서비스에서는 Redis 사용 권장)
@@ -327,6 +327,11 @@ async def process_slide(slide_id: str, pdf_path: Path):
 
             slide_status[slide_id]["processed_pages"] = i + 1
 
+        # VLM 모델 언로드 (GPU 메모리 해제 — ASR과 VRAM 경합 방지)
+        if vlm_available:
+            print(f"[Slides] VLM 번역 완료, 모델 언로드...")
+            await asyncio.to_thread(unload_vlm_model)
+
         # 번역된 이미지들을 PDF로 변환
         print(f"[Slides] {slide_id} 번역 PDF 생성 중...")
         try:
@@ -362,6 +367,13 @@ async def process_slide(slide_id: str, pdf_path: Path):
         slide_status[slide_id]["status"] = "failed"
         slide_status[slide_id]["error"] = str(e)
         print(f"[Slides] {slide_id} 처리 실패: {e}")
+        # 예외 발생 시에도 VLM 언로드 보장
+        try:
+            from translate_slide_v3 import unload_vlm_model, unload_surya_models
+            await asyncio.to_thread(unload_vlm_model)
+            await asyncio.to_thread(unload_surya_models)
+        except Exception:
+            pass
 
 
 def pdf_to_images(pdf_path: Path) -> list[bytes]:

@@ -28,6 +28,20 @@ class ASRService:
                 compute_type=self.compute_type,
             )
             print(f"[ASR] {self.model_name} 로드 완료 ({self.compute_type}, {self.device})")
+            if self.device == "cuda":
+                try:
+                    import torch
+                    if torch.cuda.is_available():
+                        vram_used = torch.cuda.memory_allocated() / 1024 ** 3
+                        vram_total = torch.cuda.get_device_properties(0).total_memory / 1024 ** 3
+                        vram_free = vram_total - vram_used
+                        print(
+                            f"[ASR] VRAM 사용량: {vram_used:.2f}GB / 잔량: {vram_free:.2f}GB "
+                            f"(전체: {vram_total:.2f}GB)",
+                            flush=True,
+                        )
+                except Exception:
+                    pass
         except ImportError as e:
             raise RuntimeError(
                 f"faster-whisper 패키지가 필요합니다: pip install faster-whisper\n{e}"

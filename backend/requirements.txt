@@ -6,6 +6,9 @@ uvicorn[standard]>=0.27.0
 python-multipart>=0.0.6
 websockets>=12.0
 
+# CTranslate2 (MT 고속 추론 엔진 — HuggingFace 대비 CPU 3~5배 가속)
+ctranslate2>=4.0.0
+
 # AI/ML Core
 numpy>=1.24.0,<2.0.0  # unbabel-comet, paddlex 호환성
 # torch, torchvision은 npm run setup에서 CUDA 버전으로 설치 (requirements.txt에서 제외)
@@ -19,6 +22,7 @@ bitsandbytes>=0.46.1
 python-dotenv>=1.0.0
 
 # ASR (음성 인식)
+faster-whisper>=1.0.3
 soundfile>=0.12.0
 librosa>=0.10.0
 

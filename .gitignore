@@ -24,6 +24,7 @@ node_modules/
 
 # 다운로드 모델 디렉토리 (qwen3 LoRA 제외)
 models/rapidocr_korean/
+models/opus-mt-ct2/
 
 # LoRA 모델은 예외 (번역용 파인튜닝 모델)
 !models/qwen3/**
@@ -37,12 +38,8 @@ models/**/.gitattributes
 # TTS 자동 다운로드 모델 파일
 backend/app/services/models/
 
-# 업로드 파일 (슬라이드, 이미지) — 루트 기준 실행 시 생성됨
+# 업로드 파일 (슬라이드, 이미지) — 항상 프로젝트 루트에 생성됨
 uploads/
-# 백엔드 디렉토리에서 직접 실행 시 잘못 생성되는 경로
-backend/uploads/
-backend/slides/
-backend/dist/
 
 # 보안
 *.pem
