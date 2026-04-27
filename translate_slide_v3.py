@@ -80,8 +80,8 @@ def cfg(key: str, default=None):
 VLM_BASE_MODEL = os.environ.get("VLM_BASE_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
 VLM_LORA_PATH = Path(__file__).parent / os.environ.get("VLM_LORA_PATH", "models/qwen3/qwen3-vl-8b-lora-r64-e3-final")
 VLM_DEVICE = os.environ.get("VLM_DEVICE", "cuda")
-VLM_MAX_GPU_MEMORY = os.environ.get("VLM_MAX_GPU_MEMORY", "7GB")
 VLM_USE_4BIT = os.environ.get("VLM_USE_4BIT", "true").lower() == "true"
+VLM_MAX_GPU_MEMORY = os.environ.get("VLM_MAX_GPU_MEMORY", "6GB")
 
 # ============================================================
 # OCR 엔진 선택 (환경변수)
@@ -334,8 +334,8 @@ def get_vlm_model():
     _vlm_processor = AutoProcessor.from_pretrained(
         VLM_BASE_MODEL,  # Base 모델에서 processor 로드 (LoRA에는 processor 없음)
         trust_remote_code=True,
-        min_pixels=256 * 28 * 28,
-        max_pixels=512 * 28 * 28,
+        min_pixels=128 * 28 * 28,
+        max_pixels=256 * 28 * 28,
     )
 
     base_model = AutoModelForImageTextToText.from_pretrained(

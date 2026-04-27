@@ -17,16 +17,11 @@ export function useAudioCapture({ onAudioData, chunkInterval = 1000 }: UseAudioC
   const [error, setError] = useState<string | null>(null)
   const vadRef = useRef<any>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const chunksRef = useRef<Float32Array[]>([])
-  const intervalRef = useRef<NodeJS.Timeout | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const gainNodeRef = useRef<GainNode | null>(null)
   const gainValueRef = useRef<number>(1)  // 0 = mute, 1 = unity, 2 = +6dB
   const keepAliveRef = useRef<NodeJS.Timeout | null>(null)
-  
-  // 누락된 Ref 추가
   const audioContextRef = useRef<AudioContext | null>(null)
-  const processorRef = useRef<ScriptProcessorNode | null>(null)
 
   const onAudioDataRef = useRef(onAudioData)
   onAudioDataRef.current = onAudioData
@@ -124,34 +119,12 @@ export function useAudioCapture({ onAudioData, chunkInterval = 1000 }: UseAudioC
       gainNodeRef.current = gainNode
       source.connect(gainNode)
 
-      const processor = audioContext.createScriptProcessor(4096, 1, 1)
-      processorRef.current = processor
-
       // 실시간 레벨 측정용 analyser (게인 적용 후 기준)
       const analyser = audioContext.createAnalyser()
       analyser.fftSize = 2048
       analyser.smoothingTimeConstant = 0.3
       analyserRef.current = analyser
       gainNode.connect(analyser)
-
-      // 오디오 데이터 수집 (게인 적용 후 기준)
-      processor.onaudioprocess = (e) => {
-        const inputData = e.inputBuffer.getChannelData(0)
-        chunksRef.current.push(new Float32Array(inputData))
-      }
-
-      gainNode.connect(processor)
-      processor.connect(audioContext.destination)
-
-      // 주기적으로 오디오 전송
-      intervalRef.current = setInterval(() => {
-        if (chunksRef.current.length > 0) {
-          const audioData = mergeChunks(chunksRef.current)
-          const wavBlob = float32ToWav(audioData, 16000) // createWavBlob 대신 하단의 float32ToWav 사용
-          onAudioDataRef.current(wavBlob)
-          chunksRef.current = []
-        }
-      }, chunkInterval)
 
       vadRef.current = vad
       vad.start()
@@ -165,16 +138,6 @@ export function useAudioCapture({ onAudioData, chunkInterval = 1000 }: UseAudioC
   }, [chunkInterval])
 
   const stopCapture = useCallback(() => {
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current)
-      intervalRef.current = null
-    }
-
-    if (processorRef.current) {
-      processorRef.current.disconnect()
-      processorRef.current = null
-    }
-
     if (analyserRef.current) {
       analyserRef.current.disconnect()
       analyserRef.current = null
@@ -195,7 +158,6 @@ export function useAudioCapture({ onAudioData, chunkInterval = 1000 }: UseAudioC
       streamRef.current = null
     }
 
-    chunksRef.current = []
     stopKeepAlive()
     vadRef.current?.pause()
     stopStream()

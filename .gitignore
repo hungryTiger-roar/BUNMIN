@@ -5,6 +5,7 @@ __pycache__/
 *.egg-info/
 .env
 .env.*
+!.env.example
 server.log
 error_log.txt
 *.log
@@ -23,6 +24,8 @@ node_modules/
 
 # LoRA 모델은 예외 (번역용 파인튜닝 모델)
 !models/qwen3/**
+# LoRA 모델 내 HuggingFace 캐시는 제외
+models/qwen3/**/.cache/
 # HuggingFace 자동 생성 LFS 설정 파일 제외
 models/**/.gitattributes
 
@@ -66,3 +69,6 @@ evaluation/datasets/ocr_pdfs/
 
 # Claude
 .claude/
+
+# 자동 생성 API 문서
+docs/api/

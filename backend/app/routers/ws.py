@@ -113,7 +113,6 @@ class ConnectionManager:
         self.is_lecture_started: bool = False
         self.is_paused: bool = False
         self.presentation_mode: str = "slide"  # 'slide' or 'screen'
-        self.last_screen_hash: Optional[str] = None
         self.current_session_id: Optional[str] = None  # 자막 저장 세션
         self.lecture_title: str = ""  # 강사가 설정한 강의 제목
         self._lock = asyncio.Lock()  # students 리스트 동시 접근 방지
@@ -165,13 +164,15 @@ class ConnectionManager:
         async with self._lock:
             students_snapshot = list(self.students)
 
-        disconnected = []
-        for student in students_snapshot:
-            try:
-                await student.send_json(message)
-            except Exception:
-                disconnected.append(student)
+        results = await asyncio.gather(
+            *[student.send_json(message) for student in students_snapshot],
+            return_exceptions=True,
+        )
 
+        disconnected = [
+            ws for ws, result in zip(students_snapshot, results)
+            if isinstance(result, Exception)
+        ]
         if disconnected:
             async with self._lock:
                 for ws in disconnected:
@@ -202,24 +203,41 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+# ASR: GPU 직렬화 (단일 모델 인스턴스, 동시 호출 방지)
+_asr_semaphore = asyncio.Semaphore(1)
+# NMT: CPU 모델 인스턴스 보호 (PyTorch generate() 비thread-safe)
+_nmt_semaphore = asyncio.Semaphore(1)
+_MAX_QUEUED_AUDIO = 2   # ASR 대기 큐 최대 발화 수 — 초과 시 신규 발화 스킵
+_queued_audio_count = 0  # 현재 ASR 세마포어 대기 중인 발화 수
+_utterance_seq = 0       # 발화 순서 번호 (프론트 순서 보장용)
+
 PING_INTERVAL = 20  # 서버 → 클라이언트 ping 주기 (초)
 PING_TIMEOUT  = 10  # pong 미응답 허용 시간 (초)
 
 
-async def heartbeat(websocket: WebSocket):
-    """서버 → 클라이언트 주기적 ping 전송"""
+async def heartbeat(websocket: WebSocket, pong_event: asyncio.Event | None = None):
+    """서버 → 클라이언트 주기적 ping 전송, pong_event 제공 시 타임아웃 감지"""
     while websocket.client_state == WebSocketState.CONNECTED:
         await asyncio.sleep(PING_INTERVAL)
         try:
+            if pong_event:
+                pong_event.clear()
             await websocket.send_json({"type": "ping"})
+            if pong_event:
+                try:
+                    await asyncio.wait_for(pong_event.wait(), timeout=PING_TIMEOUT)
+                except asyncio.TimeoutError:
+                    print(f"[WS] pong 미응답 → 좀비 연결 강제 종료")
+                    await websocket.close()
+                    break
         except Exception:
             break
 
 
-async def run_with_heartbeat(handler, websocket: WebSocket):
+async def run_with_heartbeat(handler, websocket: WebSocket, pong_event: asyncio.Event | None = None):
     """핸들러 종료 시 heartbeat도 함께 취소"""
     handler_task   = asyncio.ensure_future(handler)
-    heartbeat_task = asyncio.ensure_future(heartbeat(websocket))
+    heartbeat_task = asyncio.ensure_future(heartbeat(websocket, pong_event))
 
     done, pending = await asyncio.wait(
         [handler_task, heartbeat_task],
@@ -322,7 +340,8 @@ async def websocket_pipeline(websocket: WebSocket):
                     await websocket.send_json({
                         "type": "lecture_pause",
                     })
-            await run_with_heartbeat(handle_student(websocket), websocket)
+            pong_event = asyncio.Event()
+            await run_with_heartbeat(handle_student(websocket, pong_event), websocket, pong_event)
 
         else:
             await websocket.close(code=4001, reason="올바른 역할이 아닙니다")
@@ -352,12 +371,12 @@ async def handle_lecturer(websocket: WebSocket):
 
             elif msg_type == "audio":
                 audio_size = len(message.get("audio", "")) * 3 // 4 // 1024
-                print(f"[WS] 오디오 수신 ({audio_size}KB) → 처리 태스크 시작", flush=True)
+                # print(f"[WS] 오디오 수신 ({audio_size}KB) → 처리 태스크 시작", flush=True)
                 task = asyncio.create_task(process_audio(message))
                 manager.track_task(task)
 
             elif msg_type == "screen":
-                print(f"[WS] 화면 데이터 수신, 수강자 수: {len(manager.students)}")
+                # print(f"[WS] 화면 데이터 수신, 수강자 수: {len(manager.students)}")
                 await process_screen(message)
 
             elif msg_type == "slide_select":
@@ -473,7 +492,7 @@ async def handle_lecturer(websocket: WebSocket):
         await manager.broadcast_participants()
 
 
-async def handle_student(websocket: WebSocket):
+async def handle_student(websocket: WebSocket, pong_event: asyncio.Event | None = None):
     """수강자 메시지 처리 (주로 수신만 함)"""
     try:
         while True:
@@ -484,7 +503,8 @@ async def handle_student(websocket: WebSocket):
                 await websocket.send_json({"type": "pong"})
 
             elif msg_type == "pong":
-                pass  # heartbeat 응답 확인
+                if pong_event:
+                    pong_event.set()
 
             elif msg_type == "chat_message":
                 text = (message.get("text") or "").strip()
@@ -512,67 +532,77 @@ async def handle_student(websocket: WebSocket):
 
 async def process_audio(message: dict):
     """
-    오디오 처리 파이프라인
-    오디오 → ASR → NMT → TTS → 수강자 전송
+    오디오 처리 파이프라인: 오디오 → ASR(GPU) → NMT(CPU) → TTS(CPU) → 수강자 전송
+
+    - _asr_semaphore: ASR GPU 직렬화 (한 번에 하나의 발화만 GPU 사용)
+    - _nmt_semaphore: NMT CPU 모델 보호 (ASR 해제 직후 다음 발화 ASR 시작 가능)
+    - seq: 발화 순서 번호 (NMT 처리 시간 편차로 인한 순서 역전 대응)
+    - 큐 포화 방지: _MAX_QUEUED_AUDIO 초과 또는 6s 이상 대기 시 스킵
     """
+    global _queued_audio_count, _utterance_seq
+
     if not all([_asr_service, _nmt_service, _tts_service]):
         print("[WS] 서비스가 초기화되지 않았습니다")
         return
 
-    import time
     try:
         t_start = time.perf_counter()
-
-        # 프론트엔드 전송 타임스탬프 (ms, echo back용)
         sent_at = message.get("sentAt")
 
-        # Base64 디코딩 (프론트엔드는 'audio' 키 사용)
         audio_b64 = message.get("audio", "") or message.get("data", "")
         if not audio_b64:
-            print("[WS] 오디오 데이터 없음")
             return
         audio_bytes = base64.b64decode(audio_b64)
 
-        # Layer 2-A: ASR 실행 전 오디오 품질 검증
         ok, reason = _validate_audio(audio_bytes)
         if not ok:
-            print(f"[필터-오디오] {reason} → 스킵")
             return
 
-        try:
-            with wave.open(io.BytesIO(audio_bytes)) as _w:
-                _dur = _w.getnframes() / _w.getframerate()
-            print(f"[INPUT] 오디오 수신: {len(audio_bytes) / 1024:.1f}KB, {_dur:.2f}s → ASR 시작", flush=True)
-        except Exception:
-            print(f"[INPUT] 오디오 수신: {len(audio_bytes) / 1024:.1f}KB → ASR 시작", flush=True)
-
-        # ASR: 음성 → 한국어 텍스트
-        t_asr = time.perf_counter()
-        korean_text = await asyncio.to_thread(
-            _asr_service.transcribe, audio_bytes
-        )
-        t_asr_done = time.perf_counter()
-
-        # Layer 2-B: ASR 결과 텍스트 품질 검증
-        ok, reason = _validate_asr_text(korean_text)
-        if not ok:
-            print(f"[필터-텍스트] {reason} → 스킵")
+        # ASR 큐 포화 방지: 이미 충분한 발화가 대기 중이면 신규 발화 스킵
+        if _queued_audio_count >= _MAX_QUEUED_AUDIO:
+            print(f"[QUEUE] ASR 대기 포화 ({_queued_audio_count}개) → 스킵", flush=True)
             return
 
-        print(f"[ASR  input ] {korean_text}", flush=True)
+        _queued_audio_count += 1
+        _utterance_seq += 1
+        seq = _utterance_seq
+        t_enqueue = time.perf_counter()
 
-        # NMT: 한국어 → 영어
+        # Phase 1: ASR — GPU 직렬화
+        async with _asr_semaphore:
+            _queued_audio_count -= 1
+
+            wait_s = time.perf_counter() - t_enqueue
+            if wait_s > 6.0:
+                print(f"[QUEUE] seq={seq} 대기 {wait_s:.1f}s → stale 스킵", flush=True)
+                return
+
+            t_asr = time.perf_counter()
+            korean_text = await asyncio.to_thread(
+                _asr_service.transcribe, audio_bytes
+            )
+            t_asr_done = time.perf_counter()
+
+            ok, reason = _validate_asr_text(korean_text)
+            if not ok:
+                return
+
+            print(f"[ASR  seq={seq}] {korean_text}", flush=True)
+
+        # _asr_semaphore 해제 → 다음 발화 ASR이 즉시 GPU 사용 가능
+        # Phase 2: NMT — CPU, 모델 인스턴스 보호
         t_nmt = time.perf_counter()
-        english_text = await asyncio.to_thread(
-            _nmt_service.translate, korean_text, "ko", "en", 512, ""
-        )
+        async with _nmt_semaphore:
+            english_text = await asyncio.to_thread(
+                _nmt_service.translate, korean_text, "ko", "en", 512
+            )
         t_nmt_done = time.perf_counter()
-        print(f"[NMT  output] {english_text}", flush=True)
+        print(f"[NMT  seq={seq}] {english_text}", flush=True)
 
         if not english_text.strip():
             return
 
-        # TTS: 영어 텍스트 → 음성 (실패해도 자막은 전송)
+        # Phase 3: TTS — CPU, 세마포어 없음
         t_tts = time.perf_counter()
         audio_output_b64 = None
         try:
@@ -581,24 +611,22 @@ async def process_audio(message: dict):
             )
             audio_output_b64 = base64.b64encode(audio_output).decode()
         except Exception as tts_err:
-            print(f"[TTS] 합성 실패, 자막만 전송: {tts_err}")
+            print(f"[TTS] seq={seq} 합성 실패, 자막만 전송: {tts_err}")
         t_tts_done = time.perf_counter()
 
-        # 자막 파일에 append (세션 진행 중일 때만)
         if manager.current_session_id:
             transcripts.append_segment(
                 manager.current_session_id, korean_text, english_text
             )
 
-        # 수강자에게 전송 (audio 없으면 자막만)
         await manager.broadcast_to_students({
             "type": "transcription",
+            "seq": seq,
             "original": korean_text,
             "translated": english_text,
             "audio": audio_output_b64,
             "sentAt": sent_at,
         })
-        print(f"[OUTPUT] 수강자 전송 완료: '{english_text[:60]}'", flush=True)
 
         # 강의자에게도 자막 전송 (오디오 없이 — 강의자는 TTS 재생 불필요)
         if manager.lecturer:
@@ -612,13 +640,12 @@ async def process_audio(message: dict):
                 })
             except Exception:
                 pass
-
-        t_end = time.perf_counter()
         print(
-            f"[LATENCY] ASR={t_asr_done - t_asr:.2f}s | "
+            f"[LATENCY] seq={seq} | 대기={t_asr - t_start:.2f}s | "
+            f"ASR={t_asr_done - t_asr:.2f}s | "
             f"NMT={t_nmt_done - t_nmt:.2f}s | "
             f"TTS={t_tts_done - t_tts:.2f}s | "
-            f"전체={t_end - t_start:.2f}s",
+            f"전체={t_tts_done - t_start:.2f}s",
             flush=True,
         )
 
@@ -631,8 +658,6 @@ async def process_screen(message: dict):
     화면 캡처 처리
     - 화면을 수강자에게 전달
     - 슬라이드 모드: 사전 처리된 overlay 전송
-    - 순수 화면 공유 모드: 실시간 OCR + 번역 후 overlay 전송
-    - 화면이 바뀌지 않으면 OCR 재실행 생략
     """
     try:
         screen_b64 = message.get("data", "")
@@ -661,58 +686,6 @@ async def process_screen(message: dict):
                 })
             return
 
-        # 순수 화면 공유 모드: 실시간 OCR
-        if not _ocr_service or not _nmt_service:
-            return
-
-        image_bytes = base64.b64decode(screen_b64)
-        screen_hash = hashlib.md5(image_bytes).hexdigest()[:16]
-
-        # 화면이 바뀌지 않았으면 OCR 생략
-        if screen_hash == manager.last_screen_hash:
-            return
-        manager.last_screen_hash = screen_hash
-
-        # OCR + 번역 (블로킹 작업이므로 thread에서 실행)
-        ocr_results = await asyncio.to_thread(
-            _ocr_service.extract_with_positions, image_bytes
-        )
-
-        if not ocr_results:
-            return
-
-        overlay_items = []
-        texts = [item["text"] for item in ocr_results if item["text"].strip()]
-
-        if texts:
-            # NMT 배치 번역
-            translated_list = await asyncio.to_thread(
-                _nmt_service.translate_batch, texts
-            )
-            text_idx = 0
-            for item in ocr_results:
-                if not item["text"].strip():
-                    continue
-                raw_bbox = item["bbox"]
-                if raw_bbox is None:
-                    bbox = None
-                elif len(raw_bbox) == 4:
-                    bbox = [raw_bbox[0][0], raw_bbox[0][1], raw_bbox[2][0], raw_bbox[2][1]]
-                else:
-                    bbox = raw_bbox
-                overlay_items.append({
-                    "original": item["text"],
-                    "translated": translated_list[text_idx],
-                    "bbox": bbox,
-                    "confidence": item["confidence"],
-                })
-                text_idx += 1
-
-        if overlay_items:
-            await manager.broadcast_to_students({
-                "type": "overlay",
-                "items": overlay_items,
-            })
 
     except Exception as e:
         print(f"[WS] 화면 처리 오류: {e}")
