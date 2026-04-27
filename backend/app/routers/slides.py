@@ -5,6 +5,7 @@ PDF 업로드 및 전처리 (OCR + VLM 번역)
 import asyncio
 import shutil
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -50,7 +51,84 @@ class SlideStatus(BaseModel):
     status: str  # pending, processing, completed, failed
     total_pages: int
     processed_pages: int
+    stage: str  # pending, ocr, translate, bundling, completed, failed
+    stage_current: int
+    stage_total: int
+    eta_seconds: Optional[float] = None  # 페이지 완료 시점에 갱신되는 앵커 — /status 응답 시점까지 흐른 시간만큼 감산됨
     error: Optional[str] = None
+
+
+_BASELINE_SECONDS_PER_PAGE = {
+    "ocr": 10.0,       # Surya OCR 한 장 처리 추정치 (초)
+    "translate": 30.0,  # Qwen3-VL 한 장 번역 추정치 (4bit GPU)
+}
+_BUNDLING_BASELINE = 3.0  # PDF 묶기 짧은 고정값
+
+
+def _unified_remaining(stage: str, total: int, current: int, avg: float) -> Optional[float]:
+    """현재 단계 + 후속 단계의 남은 작업 시간을 합산.
+    OCR 단계에서는 OCR 잔여 + 번역 전체 baseline 까지 포함 → 단계 전환 시 ETA가 0으로
+    내려갔다가 다시 올라가는 현상 제거."""
+    remaining_in_stage = max(0, total - current)
+
+    if stage == "ocr":
+        ocr_per_page = avg if avg > 0 else _BASELINE_SECONDS_PER_PAGE["ocr"]
+        ocr_remaining = ocr_per_page * remaining_in_stage
+        translate_remaining = _BASELINE_SECONDS_PER_PAGE["translate"] * total  # 아직 시작 안 한 단계
+        return ocr_remaining + translate_remaining + _BUNDLING_BASELINE
+
+    if stage == "translate":
+        translate_per_page = avg if avg > 0 else _BASELINE_SECONDS_PER_PAGE["translate"]
+        return translate_per_page * remaining_in_stage + _BUNDLING_BASELINE
+
+    if stage == "bundling":
+        return _BUNDLING_BASELINE
+
+    return None
+
+
+def _set_stage(slide_id: str, stage: str, total: int) -> None:
+    """현재 처리 단계 전환 — 카운터/타이머 리셋 + 통합 ETA 시드.
+    avg는 단계마다 리셋(다른 작업이라 평균 의미 다름), ETA 앵커는 후속 단계 baseline까지 포함."""
+    s = slide_status.get(slide_id)
+    if s is None:
+        return
+    now = time.time()
+    s["stage"] = stage
+    s["stage_current"] = 0
+    s["stage_total"] = total
+    s["stage_started_at"] = now
+    s["last_page_at"] = now
+    s["avg_page_duration"] = 0.0
+    s["eta_anchor_at"] = now
+    s["eta_anchor_seconds"] = _unified_remaining(stage, total, current=0, avg=0.0)
+
+
+def _page_completed(slide_id: str, current: int) -> None:
+    """페이지 완료 시점에 통합 ETA 앵커 갱신.
+    잦은 점프 완화: 첫 페이지는 baseline과 실측치를 5:5로 블렌딩, 이후는 느린 EMA(alpha=0.25)."""
+    s = slide_status.get(slide_id)
+    if s is None:
+        return
+    now = time.time()
+    s["stage_current"] = current
+
+    duration = max(0.0, now - s.get("last_page_at", now))
+    s["last_page_at"] = now
+
+    stage = s.get("stage", "")
+    prev = s.get("avg_page_duration", 0.0)
+    if prev == 0.0:
+        # 첫 페이지: baseline과 실측치를 절반씩 블렌딩 (실측이 baseline과 크게 어긋나도 점프 절반으로 줄임)
+        baseline = _BASELINE_SECONDS_PER_PAGE.get(stage, duration)
+        s["avg_page_duration"] = 0.5 * baseline + 0.5 * duration
+    else:
+        # 두 번째부터는 느린 EMA — 페이지간 편차에 덜 휘둘림
+        s["avg_page_duration"] = 0.75 * prev + 0.25 * duration
+
+    total = s.get("stage_total", 0)
+    s["eta_anchor_seconds"] = _unified_remaining(stage, total, current, s["avg_page_duration"])
+    s["eta_anchor_at"] = now
 
 
 class OverlayItem(BaseModel):
@@ -99,10 +177,19 @@ async def upload_slide(
         f.write(content)
 
     # 상태 초기화
+    now = time.time()
     slide_status[slide_id] = {
         "status": "pending",
         "total_pages": 0,
         "processed_pages": 0,
+        "stage": "pending",
+        "stage_current": 0,
+        "stage_total": 0,
+        "stage_started_at": now,
+        "last_page_at": now,
+        "avg_page_duration": 0.0,
+        "eta_anchor_seconds": None,
+        "eta_anchor_at": now,
         "error": None,
         "filename": file.filename or f"{slide_id}.pdf",
     }
@@ -136,11 +223,23 @@ async def get_status(slide_id: str) -> SlideStatus:
         raise HTTPException(404, "슬라이드를 찾을 수 없습니다")
 
     status = slide_status[slide_id]
+
+    # ETA 앵커에서 현재 시점까지 흐른 시간만큼 감산해서 반환
+    anchor = status.get("eta_anchor_seconds")
+    eta_seconds: Optional[float] = None
+    if anchor is not None:
+        elapsed_since_anchor = max(0.0, time.time() - status.get("eta_anchor_at", time.time()))
+        eta_seconds = max(0.0, anchor - elapsed_since_anchor)
+
     return SlideStatus(
         slide_id=slide_id,
         status=status["status"],
         total_pages=status["total_pages"],
         processed_pages=status["processed_pages"],
+        stage=status.get("stage", "pending"),
+        stage_current=status.get("stage_current", 0),
+        stage_total=status.get("stage_total", 0),
+        eta_seconds=eta_seconds,
         error=status["error"],
     )
 
@@ -269,6 +368,7 @@ async def process_slide(slide_id: str, pdf_path: Path):
             print(f"[Slides] VLM 번역 모듈 없음 (원본만 저장): {e}")
 
         # ========== 1단계: 모든 페이지 원본 저장 + OCR (Surya) ==========
+        _set_stage(slide_id, "ocr", total_pages)
         ocr_results = []  # [(image_path, regions), ...]
         for i, image_bytes in enumerate(images):
             image_path = IMAGES_DIR / f"{slide_id}_{i}.png"
@@ -287,12 +387,15 @@ async def process_slide(slide_id: str, pdf_path: Path):
             else:
                 ocr_results.append((image_path, None))
 
+            _page_completed(slide_id, i + 1)
+
         # Surya 모델 언로드 (GPU 메모리 확보)
         if vlm_available:
             print(f"[Slides] Surya OCR 완료, 모델 언로드...")
             await asyncio.to_thread(unload_surya_models)
 
         # ========== 2단계: 모든 페이지 번역 (VLM) ==========
+        _set_stage(slide_id, "translate", total_pages)
         for i, (image_path, regions) in enumerate(ocr_results):
             translated_path = TRANSLATED_DIR / f"{slide_id}_{i}.png"
             overlay_items = []
@@ -326,6 +429,7 @@ async def process_slide(slide_id: str, pdf_path: Path):
             })
 
             slide_status[slide_id]["processed_pages"] = i + 1
+            _page_completed(slide_id, i + 1)
 
         # VLM 모델 언로드 (GPU 메모리 해제 — ASR과 VRAM 경합 방지)
         if vlm_available:
@@ -333,6 +437,7 @@ async def process_slide(slide_id: str, pdf_path: Path):
             await asyncio.to_thread(unload_vlm_model)
 
         # 번역된 이미지들을 PDF로 변환
+        _set_stage(slide_id, "bundling", 0)
         print(f"[Slides] {slide_id} 번역 PDF 생성 중...")
         try:
             from PIL import Image
@@ -361,10 +466,12 @@ async def process_slide(slide_id: str, pdf_path: Path):
             print(f"[Slides] {slide_id} PDF 생성 실패: {e}")
 
         slide_status[slide_id]["status"] = "completed"
+        slide_status[slide_id]["stage"] = "completed"
         print(f"[Slides] {slide_id} 전처리 완료! (번역 포함)")
 
     except Exception as e:
         slide_status[slide_id]["status"] = "failed"
+        slide_status[slide_id]["stage"] = "failed"
         slide_status[slide_id]["error"] = str(e)
         print(f"[Slides] {slide_id} 처리 실패: {e}")
         # 예외 발생 시에도 VLM 언로드 보장
