@@ -9,9 +9,15 @@ HuggingFace Hub에서 필요한 모델들을 미리 다운로드합니다.
     pip install huggingface_hub requests
 """
 
+import os
 from pathlib import Path
 from huggingface_hub import snapshot_download
 import requests
+
+# HuggingFace 캐시를 프로젝트 내 경로로 고정 (팀원 간 경로 통일)
+HF_CACHE_DIR = Path(__file__).parent.parent / "backend" / "cache" / "huggingface"
+HF_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+os.environ["HF_HOME"] = str(HF_CACHE_DIR)
 
 # 모델 저장 경로
 MODELS_DIR = Path(__file__).parent.parent / "models"
