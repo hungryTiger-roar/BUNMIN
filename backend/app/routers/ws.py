@@ -16,7 +16,6 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
 from app.routers import transcripts
-from app.routers.slides import get_page_ocr_text
 
 
 def _validate_audio(audio_bytes: bytes) -> tuple[bool, str]:
@@ -562,19 +561,10 @@ async def process_audio(message: dict):
 
         print(f"[ASR  input ] {korean_text}", flush=True)
 
-        # 현재 슬라이드 페이지 OCR 텍스트를 컨텍스트로 활용 (0-indexed)
-        slide_context = ""
-        if manager.current_slide_id and manager.current_page:
-            slide_context = get_page_ocr_text(
-                manager.current_slide_id, manager.current_page - 1
-            )
-            if slide_context:
-                print(f"[NMT] 슬라이드 컨텍스트 사용: {slide_context[:50]}...")
-
         # NMT: 한국어 → 영어
         t_nmt = time.perf_counter()
         english_text = await asyncio.to_thread(
-            _nmt_service.translate, korean_text, "ko", "en", 512, slide_context
+            _nmt_service.translate, korean_text, "ko", "en", 512, ""
         )
         t_nmt_done = time.perf_counter()
         print(f"[NMT  output] {english_text}", flush=True)

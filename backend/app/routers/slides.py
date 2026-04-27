@@ -44,9 +44,6 @@ TRANSLATED_DIR.mkdir(parents=True, exist_ok=True)
 slide_status: dict[str, dict] = {}
 slide_data: dict[str, list[dict]] = {}
 
-# 번역 상태 별도 관리
-translation_status: dict[str, dict] = {}
-
 
 class SlideStatus(BaseModel):
     slide_id: str
@@ -67,16 +64,6 @@ class PageData(BaseModel):
     pageNumber: int
     imageUrl: str
     ocrText: Optional[str] = None
-
-
-def get_page_ocr_text(slide_id: str, page_number: int) -> str:
-    """현재 슬라이드 페이지의 OCR 텍스트 반환 (NMT 컨텍스트용, 0-indexed)"""
-    if slide_id not in slide_data:
-        return ""
-    pages = slide_data[slide_id]
-    if page_number < 0 or page_number >= len(pages):
-        return ""
-    return pages[page_number].get("ocr_text") or ""
 
 
 def get_page_overlay(slide_id: str, page_number: int) -> list[dict]:
@@ -156,28 +143,6 @@ async def get_status(slide_id: str) -> SlideStatus:
         processed_pages=status["processed_pages"],
         error=status["error"],
     )
-
-
-@router.get("/translation-status/{slide_id}")
-async def get_translation_status(slide_id: str):
-    """번역 진행 상태 조회 (VLM 번역은 별도 진행)"""
-    if slide_id not in translation_status:
-        return {
-            "slide_id": slide_id,
-            "status": "not_started",
-            "total_pages": 0,
-            "translated_pages": 0,
-            "error": None,
-        }
-
-    ts = translation_status[slide_id]
-    return {
-        "slide_id": slide_id,
-        "status": ts["status"],
-        "total_pages": ts["total_pages"],
-        "translated_pages": ts["translated_pages"],
-        "error": ts["error"],
-    }
 
 
 @router.get("/pages/{slide_id}")
@@ -293,47 +258,60 @@ async def process_slide(slide_id: str, pdf_path: Path):
 
         # VLM 번역 함수 임포트
         try:
-            from translate_slide_v3 import translate_slide
+            from translate_slide_v3 import (
+                stage_ocr_surya, stage_translate, stage_overlay,
+                unload_surya_models, unload_vlm_model
+            )
             vlm_available = True
             print(f"[Slides] VLM 번역 모듈 로드 완료")
         except ImportError as e:
             vlm_available = False
             print(f"[Slides] VLM 번역 모듈 없음 (원본만 저장): {e}")
 
-        # 각 페이지 처리
+        # ========== 1단계: 모든 페이지 원본 저장 + OCR (Surya) ==========
+        ocr_results = []  # [(image_path, regions), ...]
         for i, image_bytes in enumerate(images):
-            # 원본 이미지 저장
             image_path = IMAGES_DIR / f"{slide_id}_{i}.png"
             with open(image_path, "wb") as f:
                 f.write(image_bytes)
             print(f"[Slides] {slide_id} 페이지 {i + 1}/{total_pages} 원본 저장")
 
-            # VLM 번역
+            if vlm_available:
+                try:
+                    print(f"[Slides] {slide_id} 페이지 {i + 1}/{total_pages} OCR 중...")
+                    regions = await asyncio.to_thread(stage_ocr_surya, str(image_path))
+                    ocr_results.append((image_path, regions))
+                except Exception as e:
+                    print(f"[Slides] OCR 예외: {e}")
+                    ocr_results.append((image_path, None))
+            else:
+                ocr_results.append((image_path, None))
+
+        # Surya 모델 언로드 (GPU 메모리 확보)
+        if vlm_available:
+            print(f"[Slides] Surya OCR 완료, 모델 언로드...")
+            await asyncio.to_thread(unload_surya_models)
+
+        # ========== 2단계: 모든 페이지 번역 (VLM) ==========
+        for i, (image_path, regions) in enumerate(ocr_results):
             translated_path = TRANSLATED_DIR / f"{slide_id}_{i}.png"
             overlay_items = []
 
-            if vlm_available:
+            if vlm_available and regions is not None:
                 try:
                     print(f"[Slides] {slide_id} 페이지 {i + 1}/{total_pages} VLM 번역 중...")
-                    result = await asyncio.to_thread(
-                        translate_slide,
-                        str(image_path),
-                        str(translated_path)
-                    )
+                    regions = await asyncio.to_thread(stage_translate, str(image_path), regions)
+                    await asyncio.to_thread(stage_overlay, str(image_path), regions, str(translated_path))
 
-                    if result["success"]:
-                        for region in result.get("regions", []):
-                            if not region.get("skip_translate", False):
-                                overlay_items.append({
-                                    "original": region.get("ocr_text", ""),
-                                    "translated": region.get("english", ""),
-                                    "bbox": region.get("bbox"),
-                                    "confidence": region.get("confidence", 0.9),
-                                })
-                        print(f"[Slides] {slide_id} 페이지 {i + 1}/{total_pages} VLM 번역 완료!")
-                    else:
-                        print(f"[Slides] {slide_id} 페이지 {i + 1} VLM 번역 실패: {result.get('error')}")
-                        shutil.copy(image_path, translated_path)
+                    for region in regions:
+                        if not region.get("skip_translate", False):
+                            overlay_items.append({
+                                "original": region.get("ocr_text", ""),
+                                "translated": region.get("english", ""),
+                                "bbox": region.get("bbox"),
+                                "confidence": region.get("confidence", 0.9),
+                            })
+                    print(f"[Slides] {slide_id} 페이지 {i + 1}/{total_pages} VLM 번역 완료!")
                 except Exception as e:
                     print(f"[Slides] VLM 번역 예외 (원본 사용): {e}")
                     shutil.copy(image_path, translated_path)
@@ -364,11 +342,16 @@ async def process_slide(slide_id: str, pdf_path: Path):
                 pdf_path = TRANSLATED_DIR / f"{slide_id}_translated.pdf"
                 translated_images[0].save(
                     pdf_path,
+                    format="PDF",
                     save_all=True,
                     append_images=translated_images[1:] if len(translated_images) > 1 else [],
                     resolution=150.0
                 )
                 print(f"[Slides] {slide_id} 번역 PDF 저장: {pdf_path}")
+
+                # 이미지 리소스 정리
+                for img in translated_images:
+                    img.close()
         except Exception as e:
             print(f"[Slides] {slide_id} PDF 생성 실패: {e}")
 
@@ -379,87 +362,6 @@ async def process_slide(slide_id: str, pdf_path: Path):
         slide_status[slide_id]["status"] = "failed"
         slide_status[slide_id]["error"] = str(e)
         print(f"[Slides] {slide_id} 처리 실패: {e}")
-
-
-async def process_translation(slide_id: str):
-    """
-    VLM 번역 처리 (별도 백그라운드 태스크)
-    원본 이미지를 하나씩 번역하여 translated 폴더에 저장
-    """
-
-    try:
-        translation_status[slide_id]["status"] = "translating"
-        total_pages = translation_status[slide_id]["total_pages"]
-
-        # VLM 번역 함수 임포트
-        try:
-            from translate_slide_v3 import translate_slide
-            vlm_available = True
-            print(f"[Translation] VLM 모듈 로드 완료")
-        except ImportError as e:
-            vlm_available = False
-            print(f"[Translation] VLM 모듈 없음: {e}")
-            # VLM 없으면 원본 복사만
-            for i in range(total_pages):
-                src = IMAGES_DIR / f"{slide_id}_{i}.png"
-                dst = TRANSLATED_DIR / f"{slide_id}_{i}.png"
-                if src.exists():
-                    shutil.copy(src, dst)
-            translation_status[slide_id]["status"] = "completed"
-            translation_status[slide_id]["translated_pages"] = total_pages
-            return
-
-        # 각 페이지 번역
-        for i in range(total_pages):
-            image_path = IMAGES_DIR / f"{slide_id}_{i}.png"
-            translated_path = TRANSLATED_DIR / f"{slide_id}_{i}.png"
-
-            if not image_path.exists():
-                print(f"[Translation] {slide_id} 페이지 {i + 1} 원본 없음, 스킵")
-                continue
-
-            try:
-                print(f"[Translation] {slide_id} 페이지 {i + 1}/{total_pages} 번역 시작...")
-                result = await asyncio.to_thread(
-                    translate_slide,
-                    str(image_path),
-                    str(translated_path)
-                )
-
-                if result["success"]:
-                    # overlay_items 업데이트
-                    overlay_items = []
-                    for region in result.get("regions", []):
-                        if not region.get("skip_translate", False):
-                            overlay_items.append({
-                                "original": region.get("ocr_text", ""),
-                                "translated": region.get("english", ""),
-                                "bbox": region.get("bbox"),
-                                "confidence": region.get("confidence", 0.9),
-                            })
-
-                    if slide_id in slide_data and i < len(slide_data[slide_id]):
-                        slide_data[slide_id][i]["overlay_items"] = overlay_items
-                        slide_data[slide_id][i]["has_translation"] = True
-
-                    print(f"[Translation] {slide_id} 페이지 {i + 1}/{total_pages} 번역 완료!")
-                else:
-                    print(f"[Translation] {slide_id} 페이지 {i + 1} 번역 실패: {result.get('error')}")
-                    shutil.copy(image_path, translated_path)
-
-            except Exception as e:
-                print(f"[Translation] {slide_id} 페이지 {i + 1} 예외: {e}")
-                shutil.copy(image_path, translated_path)
-
-            translation_status[slide_id]["translated_pages"] = i + 1
-
-        translation_status[slide_id]["status"] = "completed"
-        print(f"[Translation] {slide_id} 전체 번역 완료!")
-
-    except Exception as e:
-        translation_status[slide_id]["status"] = "failed"
-        translation_status[slide_id]["error"] = str(e)
-        print(f"[Translation] {slide_id} 번역 실패: {e}")
 
 
 def pdf_to_images(pdf_path: Path) -> list[bytes]:
