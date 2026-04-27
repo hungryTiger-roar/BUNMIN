@@ -124,7 +124,7 @@ function Student() {
     toggleTheme,
   } = usePreferencesStore()
 
-  const { isConnected, connect, sendChat } = useWebSocket(WS_PIPELINE_URL, 'student')
+  const { isConnected, connect, sendChat, unlockAudio, isAudioUnlocked } = useWebSocket(WS_PIPELINE_URL, 'student')
 
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [volume, setVolume] = useState(70)
@@ -218,7 +218,10 @@ function Student() {
     ASPECT_OPTIONS.find((a) => a.value === aspectRatio)?.className ?? 'aspect-[4/3]'
 
   return (
-    <div className="h-screen overflow-hidden flex flex-col bg-background text-onBackground">
+    <div
+      className="h-screen overflow-hidden flex flex-col bg-background text-onBackground"
+      onClick={!isAudioUnlocked ? unlockAudio : undefined}
+    >
       {/* 자막 다운로드 모달 */}
       {showTranscriptModal && sessionId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -440,10 +443,13 @@ function Student() {
               <div className="group/vol flex items-center bg-black/60 backdrop-blur-sm rounded-full pl-2 pr-2 py-1.5 group-hover/vol:pr-3 transition-all">
                 <button
                   type="button"
-                  onClick={() => setIsMuted(!isMuted)}
-                  className="text-white hover:opacity-80"
+                  onClick={() => { unlockAudio(); setIsMuted(!isMuted) }}
+                  className="text-white hover:opacity-80 relative"
                   aria-label={isMuted ? '음소거 해제' : '음소거'}
                 >
+                  {!isAudioUnlocked && (
+                    <span className="absolute -top-1 -right-1 w-2 h-2 bg-yellow-400 rounded-full" title="클릭하여 오디오 활성화" />
+                  )}
                   {isMuted || volume === 0 ? (
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
