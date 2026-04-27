@@ -22,8 +22,13 @@ node_modules/
 *.pt
 *.pth
 
+# 다운로드 모델 디렉토리 (qwen3 LoRA 제외)
+models/rapidocr_korean/
+
 # LoRA 모델은 예외 (번역용 파인튜닝 모델)
 !models/qwen3/**
+# LFS 포인터 깨진 파일 제외
+models/qwen3/qwen3-vl-8b-lora-r64-e3-final/tokenizer.json
 # LoRA 모델 내 HuggingFace 캐시는 제외
 models/qwen3/**/.cache/
 # HuggingFace 자동 생성 LFS 설정 파일 제외

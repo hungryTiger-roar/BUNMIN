@@ -6,7 +6,7 @@
   "description": "Aunion AI - Korean Lecture Real-time Translation",
   "author": "Aunion Team",
   "scripts": {
-    "setup": "bash scripts/setup.sh",
+    "setup": "node scripts/setup.js",
     "dev": "concurrently --kill-others-on-fail -n backend,frontend -c blue,green \"conda run --no-capture-output -n aunion python backend/run.py\" \"wait-on http://localhost:8000/health && npm run dev --prefix frontend\"",
     "electron:dev": "concurrently \"npm run dev --prefix frontend\" \"wait-on http://localhost:3000 && cross-env NODE_ENV=development electron frontend/.\"",
     "electron:build": "npm run build --prefix frontend && electron-builder --config electron-builder.json"
