@@ -66,6 +66,10 @@ export default defineConfig({
         target: backendUrl,
         changeOrigin: true,
       },
+      '/transcripts': {
+        target: backendUrl,
+        changeOrigin: true,
+      },
       '/ws': {
         target: backendWsUrl,
         ws: true,
