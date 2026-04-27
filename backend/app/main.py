@@ -17,6 +17,9 @@ from app.routers import ws, slides, transcripts, network, mode
 from app.utils.firewall import ensure_firewall_rule
 from app.utils.network import SERVER_PORT, get_lan_ip
 
+# VLM Base 모델 (translate_slide_v3.py와 동일한 env 사용)
+VLM_BASE_MODEL = os.environ.get("VLM_BASE_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
+
 # PyInstaller 번들 여부에 따라 frontend dist 경로 결정
 if getattr(sys, 'frozen', False):
     _FRONTEND_DIST = os.path.join(sys._MEIPASS, 'frontend_dist')
@@ -33,6 +36,7 @@ _model_status = {
         "nmt_asr": {"status": "pending", "progress": 0, "label": "NMT-ASR (실시간 번역)", "desc": ModelConfig.NMT_ASR_MODEL},
         "tts": {"status": "pending", "progress": 0, "label": "TTS (음성합성)", "desc": ModelConfig.TTS_MODEL},
         "ocr": {"status": "pending", "progress": 0, "label": "OCR (문자인식)", "desc": ModelConfig.OCR_MODEL},
+        "vlm": {"status": "pending", "progress": 0, "label": "VLM (슬라이드 번역)", "desc": VLM_BASE_MODEL},
     },
 }
 
@@ -157,24 +161,22 @@ def _load_models_sync():
     print("Aunion AI Backend 시작", flush=True)
     print("=" * 50, flush=True)
 
-    # 슬라이드 번역 전용 모드 - 다른 모델 스킵
+    # 슬라이드 번역 전용 모드 - 실시간 모델 스킵 (VLM은 다운로드만 진행)
     skip_models = os.environ.get("SKIP_STARTUP_MODELS", "").lower() == "true"
     if skip_models:
-        print("[모드] 슬라이드 번역 전용 - ASR/NMT/TTS/OCR 스킵", flush=True)
-        _model_status["status"] = "ready"
-        _model_status["message"] = "슬라이드 번역 전용 모드"
-        _model_status["progress"] = 100
+        print("[모드] 슬라이드 번역 전용 - ASR/NMT/TTS/OCR 스킵 (VLM은 다운로드 진행)", flush=True)
         for key in ["asr", "nmt_asr", "tts", "ocr"]:
             _model_status["models"][key]["status"] = "skipped"
         _emit_status()
-        return
 
     # ── 1단계: 병렬 다운로드 ─────────────────────────────────────────
-    model_repos = [
+    # VLM은 사용 시점에 메모리 로드되지만, 다운로드는 미리 받아둠 (~17GB 첫 사용 대기 회피)
+    model_repos = [] if skip_models else [
         ("asr",     ModelConfig.ASR_MODEL),
         ("nmt_asr", ModelConfig.NMT_ASR_MODEL),
         ("tts",     ModelConfig.TTS_MODEL),
     ]
+    model_repos.append(("vlm", VLM_BASE_MODEL))
 
     to_download = [(key, repo) for key, repo in model_repos if not _is_cached(repo)]
 
@@ -201,14 +203,33 @@ def _load_models_sync():
         print("[다운로드] 전체 완료", flush=True)
 
         # 다운로드 완료 표시를 잠깐 보여준 뒤 로딩 단계로 재설정
+        # VLM은 메모리 로드를 startup에서 안 함 (실시간 스택과 VRAM 충돌, 사용 시점에 lazy 로드)
         for key, repo in model_repos:
             if "/" not in repo:
+                continue
+            if key == "vlm":
                 continue
             _model_status["models"][key]["status"] = "loading"
             _model_status["models"][key]["progress"] = 0
         _emit_status()
     else:
         _set_status("모든 모델 캐시 확인됨, 초기화 시작...", progress=10)
+
+    # VLM은 다운로드 완료(또는 캐시됨) 시점에 done 처리 — 메모리 로드는 사용 시점에 lazy
+    _model_status["models"]["vlm"]["status"] = "done"
+    _model_status["models"]["vlm"]["progress"] = 100
+    _emit_status()
+
+    # 슬라이드 전용 모드는 여기서 종료 (실시간 스택 메모리 로드 안 함)
+    if skip_models:
+        _model_status["status"] = "ready"
+        _model_status["message"] = "슬라이드 번역 전용 모드 — 준비 완료"
+        _model_status["progress"] = 100
+        _emit_status()
+        print("=" * 50, flush=True)
+        print("[모드] 슬라이드 번역 전용 모드 — VLM 다운로드 완료, 메모리 로드는 사용 시점에", flush=True)
+        print("=" * 50, flush=True)
+        return
 
     # ── 2단계: 순차 메모리 로딩 ──────────────────────────────────────
     import traceback
