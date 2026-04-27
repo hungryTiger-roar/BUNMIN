@@ -38,7 +38,7 @@ VLM_LORA = {
 
 # ASR 모델 (음성 인식)
 ASR_MODEL = {
-    "repo_id": "CohereLabs/cohere-transcribe-03-2026",
+    "repo_id": "ghost613/faster-whisper-large-v3-turbo-korean",
     "description": "ASR 음성인식 모델",
     "size": "~3GB",
 }

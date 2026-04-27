@@ -65,15 +65,9 @@ if (envExists) {
 step(5, 6, 'Python 패키지 설치...')
 run('conda run --no-capture-output -n aunion pip install -r backend/requirements.txt')
 
-const torchCudaOk = runSilent(
-  'conda run -n aunion python -c "import torch; assert \'cu\' in torch.__version__"'
-)
-if (torchCudaOk) {
-  console.log('  torch CUDA 버전 이미 설치됨 → 스킵')
-} else {
-  console.log('  torch CUDA 버전 설치 중 (cu126)...')
-  run('conda run --no-capture-output -n aunion pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126')
-}
+// requirements.txt 설치 후 surya-ocr 등이 torch를 CPU 버전으로 교체할 수 있으므로 강제 재설치
+console.log('  torch CUDA 버전 재설치 중 (cu126)...')
+run('conda run --no-capture-output -n aunion pip install --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126')
 
 run('conda run --no-capture-output -n aunion pip install "numpy>=1.24.0,<2.0.0" "Pillow>=10.2.0,<11.0.0"')
 console.log('  완료')
