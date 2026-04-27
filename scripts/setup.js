@@ -65,11 +65,14 @@ if (envExists) {
 step(5, 6, 'Python 패키지 설치...')
 run('conda run --no-capture-output -n aunion pip install -r backend/requirements.txt')
 
-// requirements.txt 설치 후 surya-ocr 등이 torch를 CPU 버전으로 교체할 수 있으므로 강제 재설치
-console.log('  torch CUDA 버전 재설치 중 (cu126)...')
-run('conda run --no-capture-output -n aunion pip install --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126')
+// numpy/Pillow 버전 고정 (surya-ocr, unbabel-comet 호환)
+// CMD에서 <, > 문자가 리다이렉션으로 해석되므로 특정 버전 지정
+console.log('  numpy/Pillow 버전 고정 중...')
+run('conda run --no-capture-output -n aunion pip install --force-reinstall numpy==1.26.4 Pillow==10.4.0')
 
-run('conda run --no-capture-output -n aunion pip install "numpy>=1.24.0,<2.0.0" "Pillow>=10.2.0,<11.0.0"')
+// torch CUDA 버전 설치 (--no-deps로 numpy/Pillow 덮어쓰기 방지)
+console.log('  torch CUDA 버전 설치 중 (cu126)...')
+run('conda run --no-capture-output -n aunion pip install --no-deps --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126')
 console.log('  완료')
 
 // 6. AI 모델 다운로드
