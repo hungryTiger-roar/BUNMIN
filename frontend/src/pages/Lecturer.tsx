@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState, useRef, type CSSProperties } from 'react'
+import { useEffect, useCallback, useState, useRef, useMemo, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import {
@@ -99,6 +99,9 @@ function Lecturer() {
   const [spotlightColor, setSpotlightColor] = useState(SPOTLIGHT_PRESETS[0])
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [slideBoxWidth, setSlideBoxWidth] = useState<number | undefined>(undefined)
+
+  // 커서 위치 상태 (브라우저 전체 기준 vw/vh 비율, 0~1)
+  const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null)
 
   const {
     isMicOn,
@@ -224,6 +227,117 @@ function Lecturer() {
     observer.observe(el)
     return () => observer.disconnect()
   }, [presentationMode, slideStatus])
+
+  // 커서 위치 추적 + WebSocket 전송 (슬라이드 영역 기준 상대좌표)
+  useEffect(() => {
+    if (!spotlightEnabled) {
+      setCursorPos(null)
+      // 스팟라이트 OFF 시 한 번만 visible:false 전송
+      if (isConnected && isLectureStarted) {
+        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor })
+      }
+      return
+    }
+
+    let currentX = 0
+    let currentY = 0
+    let isInsideSlide = false
+    let rafId: number
+    let lastSendTime = 0
+    const SEND_INTERVAL = 50 // 20fps
+
+    const handleMove = (e: MouseEvent) => {
+      const container = slideBoxRef.current
+      if (!container) {
+        isInsideSlide = false
+        setCursorPos(null)
+        return
+      }
+
+      const containerRect = container.getBoundingClientRect()
+
+      // 컨테이너 내 이미지 요소 찾기 (object-fit: contain 고려)
+      const img = container.querySelector('img') as HTMLImageElement | null
+      let imgOffsetX = 0
+      let imgOffsetY = 0
+      let imgWidth = containerRect.width
+      let imgHeight = containerRect.height
+
+      if (img && img.naturalWidth && img.naturalHeight) {
+        const imgRatio = img.naturalWidth / img.naturalHeight
+        const containerRatio = containerRect.width / containerRect.height
+
+        if (imgRatio > containerRatio) {
+          imgWidth = containerRect.width
+          imgHeight = containerRect.width / imgRatio
+        } else {
+          imgHeight = containerRect.height
+          imgWidth = containerRect.height * imgRatio
+        }
+        imgOffsetX = (containerRect.width - imgWidth) / 2
+        imgOffsetY = (containerRect.height - imgHeight) / 2
+      }
+
+      // 이미지 영역 기준 상대 좌표 (0~1)
+      const imgLeft = containerRect.left + imgOffsetX
+      const imgTop = containerRect.top + imgOffsetY
+      const relX = (e.clientX - imgLeft) / imgWidth
+      const relY = (e.clientY - imgTop) / imgHeight
+
+      // 이미지 영역 내부인지 확인
+      if (relX >= 0 && relX <= 1 && relY >= 0 && relY <= 1) {
+        currentX = relX
+        currentY = relY
+        isInsideSlide = true
+        // 로컬 UI: 브라우저 전체 기준 vw/vh로 표시 (fixed positioning)
+        setCursorPos({
+          x: e.clientX / window.innerWidth,
+          y: e.clientY / window.innerHeight,
+        })
+      } else {
+        isInsideSlide = false
+        setCursorPos(null)
+      }
+    }
+
+    const handleLeave = () => {
+      isInsideSlide = false
+      setCursorPos(null)
+      // 즉시 visible:false 전송
+      if (isConnected && isLectureStarted) {
+        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor })
+      }
+    }
+
+    // 주기적으로 WebSocket 전송 (RAF 기반)
+    const tick = () => {
+      const now = Date.now()
+      if (isConnected && isLectureStarted && now - lastSendTime >= SEND_INTERVAL) {
+        lastSendTime = now
+        if (isInsideSlide) {
+          // 슬라이드 기준 상대좌표 전송
+          send({ type: 'cursor', x: currentX, y: currentY, visible: true, color: spotlightColor })
+        } else {
+          send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor })
+        }
+      }
+      rafId = requestAnimationFrame(tick)
+    }
+
+    window.addEventListener('mousemove', handleMove)
+    document.addEventListener('mouseleave', handleLeave)
+    rafId = requestAnimationFrame(tick)
+
+    return () => {
+      window.removeEventListener('mousemove', handleMove)
+      document.removeEventListener('mouseleave', handleLeave)
+      cancelAnimationFrame(rafId)
+      // cleanup 시 visible:false 전송
+      if (isConnected && isLectureStarted) {
+        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor })
+      }
+    }
+  }, [spotlightEnabled, spotlightColor, isConnected, isLectureStarted, send])
 
   const handlePageChange = useCallback((page: number) => {
     if (isConnected && slideId && !isPaused) {
@@ -547,8 +661,14 @@ function Lecturer() {
           : 'bg-background'
       }`}
     >
-      {/* Cursor spotlight (global overlay) */}
-      <CursorSpotlight enabled={spotlightEnabled} color={spotlightColor} />
+      {/* Cursor spotlight (global overlay - 강의자 로컬) */}
+      <CursorSpotlight
+        x={cursorPos?.x ?? 0}
+        y={cursorPos?.y ?? 0}
+        visible={spotlightEnabled && cursorPos !== null}
+        color={spotlightColor}
+        mode="fixed"
+      />
 
       {/* 자막 다운로드 모달 */}
       {showTranscriptModal && sessionId && (

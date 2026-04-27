@@ -484,6 +484,16 @@ async def handle_lecturer(websocket: WebSocket):
                 print(f"[WS] 강사 이름 변경: {new_name}")
                 await manager.broadcast_participants()
 
+            elif msg_type == "cursor":
+                # 강의자 커서 상태 → 수강자에게만 브로드캐스트 (강의자에게 재전송 X)
+                await manager.broadcast_to_students({
+                    "type": "cursor",
+                    "x": message.get("x", 0),
+                    "y": message.get("y", 0),
+                    "visible": message.get("visible", False),
+                    "color": message.get("color", "#60A5FA"),
+                })
+
             elif msg_type == "participants_request":
                 await websocket.send_json(manager.participants_payload())
 

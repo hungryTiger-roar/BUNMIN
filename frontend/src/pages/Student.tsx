@@ -10,6 +10,7 @@ import {
 import { useWebSocket } from '@/hooks/useWebSocket'
 import ConnectionStatus from '@/components/common/ConnectionStatus'
 import ParticipantsPanel from '@/components/common/ParticipantsPanel'
+import { StudentCursorOverlay, useCursorOverlay } from '@/components/student/StudentCursorOverlay'
 import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
 
 const SUBTITLE_LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
@@ -124,7 +125,15 @@ function Student() {
     toggleTheme,
   } = usePreferencesStore()
 
-  const { isConnected, connect, sendChat, unlockAudio, isAudioUnlocked } = useWebSocket(WS_PIPELINE_URL, 'student')
+  // ref 기반 커서 오버레이 (React 상태 없이 DOM 직접 조작)
+  // slideRef를 전달해서 컨테이너 크기 기준으로 px 변환
+  const { spotlightRef, onCursor } = useCursorOverlay(slideRef)
+
+  const { isConnected, connect, sendChat, unlockAudio, isAudioUnlocked } = useWebSocket(
+    WS_PIPELINE_URL,
+    'student',
+    { onCursor }
+  )
 
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [volume, setVolume] = useState(70)
@@ -346,6 +355,9 @@ function Student() {
             ref={slideRef}
             className={`group relative bg-black rounded-xl overflow-hidden shadow-2xl h-full ${aspectClass} max-w-full`}
           >
+            {/* 강의자 커서 오버레이 (ref 기반, 리렌더링 없음) */}
+            <StudentCursorOverlay spotlightRef={spotlightRef} />
+
             {/* 상단 강의 제목 바 — 마우스 올렸을 때만 표시 */}
             {displayTitle && (
               <div className="absolute top-0 left-0 right-0 z-30 px-4 py-3 bg-gradient-to-b from-black/70 to-transparent opacity-0 pointer-events-none group-hover:opacity-100 transition-opacity duration-200">
