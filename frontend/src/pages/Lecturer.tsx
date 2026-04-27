@@ -98,8 +98,6 @@ function Lecturer() {
   const [spotlightEnabled, setSpotlightEnabled] = useState(false)
   const [spotlightColor, setSpotlightColor] = useState(SPOTLIGHT_PRESETS[0])
   const [isFullscreen, setIsFullscreen] = useState(false)
-  const [listenVolume, setListenVolume] = useState(70)
-  const [listenMuted, setListenMuted] = useState(false)
   const [slideBoxWidth, setSlideBoxWidth] = useState<number | undefined>(undefined)
 
   const {
@@ -316,7 +314,6 @@ function Lecturer() {
   const displayParticipantCount = Math.max(participantTotal, studentCount + 1)
 
   const latestSubtitle = subtitles[subtitles.length - 1]
-  const effectiveListenVolume = listenMuted ? 0 : listenVolume
 
   // 슬라이드 박스 내부에 공통으로 들어가는 자막 오버레이
   const primaryText = !latestSubtitle || primaryLang === 'off' ? null
@@ -353,40 +350,7 @@ function Lecturer() {
   // 슬라이드 박스 내부 하단 컨트롤 바 (student 화면과 동일 구성)
   const bottomControlBar = (
     <div className="absolute left-3 right-3 bottom-3 z-30 flex items-center gap-2 flex-wrap opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity duration-200">
-      {/* 볼륨 — 자기가 듣는 소리 */}
-      <div className="group/vol flex items-center bg-black/60 backdrop-blur-sm rounded-full pl-2 pr-2 py-1.5 group-hover/vol:pr-3 transition-all">
-        <button
-          type="button"
-          onClick={() => setListenMuted(!listenMuted)}
-          className="text-white hover:opacity-80"
-          aria-label={listenMuted ? '음소거 해제' : '음소거'}
-        >
-          {listenMuted || listenVolume === 0 ? (
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
-            </svg>
-          ) : (
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
-            </svg>
-          )}
-        </button>
-        <input
-          type="range"
-          min={0}
-          max={100}
-          step={5}
-          value={effectiveListenVolume}
-          onChange={(e) => {
-            const v = Number(e.target.value)
-            setListenVolume(v)
-            if (v > 0) setListenMuted(false)
-          }}
-          className="w-0 opacity-0 ml-0 group-hover/vol:w-24 group-hover/vol:opacity-100 group-hover/vol:ml-2 accent-primary transition-all"
-          aria-label="듣는 볼륨"
-        />
-      </div>
+    
 
       <div className="flex-1" />
 
