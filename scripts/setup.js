@@ -237,11 +237,14 @@ step(7, TOTAL, '설치 검증...')
     }
   }
 
-  // NMT CTranslate2 모델 확인
+  // NMT CTranslate2 모델 확인 — 필수 파일 5개 모두 존재해야 함
+  // (sentencepiece spm 파일 누락 시 nmt_service가 HF 폴백으로 떨어져 성능 저하)
   const nmtDir = path.join(ROOT, 'models', 'opus-mt-ct2')
-  if (!fs.existsSync(nmtDir)) {
-    console.error('  ✗ 누락: models/opus-mt-ct2/ (NMT CTranslate2 변환 실패)')
-    ok = false
+  for (const f of ['model.bin', 'config.json', 'shared_vocabulary.json', 'source.spm', 'target.spm']) {
+    if (!fs.existsSync(path.join(nmtDir, f))) {
+      console.error(`  ✗ 누락: models/opus-mt-ct2/${f} (NMT CTranslate2 부분 변환)`)
+      ok = false
+    }
   }
 
   // VLM LoRA 어댑터 확인
@@ -268,6 +271,22 @@ step(7, TOTAL, '설치 검증...')
         `  ✗ VLM Base 부분 다운로드 (shards ${shards.length}/4, ${sizeGb.toFixed(2)}GB / 16GB 기대)`
       )
       console.error('     conda run -n aunion python scripts/download_models.py 로 재실행')
+      ok = false
+    }
+  }
+
+  // ASR 모델 (faster-whisper) — 로컬 디렉토리 + model.bin
+  const asrDir = path.join(ROOT, 'models', 'asr-faster-whisper-large-v3-turbo-ko')
+  if (!fs.existsSync(path.join(asrDir, 'model.bin'))) {
+    console.error('  ✗ 누락: models/asr-faster-whisper-large-v3-turbo-ko/model.bin (ASR)')
+    ok = false
+  }
+
+  // RapidOCR Korean 모델 — 로컬 디렉토리 + 핵심 파일 2개
+  const rapidocrDir = path.join(ROOT, 'models', 'rapidocr-korean')
+  for (const f of ['model.onnx', 'korean_dict.txt']) {
+    if (!fs.existsSync(path.join(rapidocrDir, f))) {
+      console.error(`  ✗ 누락: models/rapidocr-korean/${f}`)
       ok = false
     }
   }
