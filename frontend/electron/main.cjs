@@ -52,14 +52,30 @@ const BACKEND_PORT = 8000
 const HEALTH_PORT = 18765   // GIL 독립 전용 health 서버 포트
 const FRONTEND_PORT = 3000
 
-// ─── renderer 메시지 전송 ───────────────────────────────────────
+// dev 모드에서 concurrently 터미널에 라이프사이클 추적 로그 출력
+function devLog(msg) {
+  console.log(`[main] ${msg}`)
+}
+devLog(`Electron main 시작 (isDev=${isDev}, NODE_ENV=${process.env.NODE_ENV || 'unset'})`)
+
+// ─── renderer 메시지 전송 + 마지막 상태 캐시 ────────────────────────
+// renderer mount 타이밍이 늦어 IPC 이벤트를 놓칠 수 있으므로
+// 마지막 상태를 캐시하고 'get-backend-state' invoke로 동기화 가능하게 함.
+const _lastState = {
+  progress: 0,
+  models: null,
+  ready: null,    // null=미정, true=ok/ready, false=error
+}
+
 function sendLog(log) {
   if (mainWindow) mainWindow.webContents.send('backend-log', log)
 }
 function sendProgress(progress) {
+  _lastState.progress = progress
   if (mainWindow) mainWindow.webContents.send('backend-progress', progress)
 }
 function sendModelStatus(models) {
+  _lastState.models = models
   if (mainWindow) mainWindow.webContents.send('backend-model-status', models)
 }
 
@@ -69,6 +85,8 @@ function sendModelStatus(models) {
 let _notifyReady = null
 
 function notifyReady(success) {
+  _lastState.ready = success
+  devLog(`백엔드 준비 신호 수신: success=${success}`)
   if (_notifyReady) {
     const fn = _notifyReady
     _notifyReady = null
@@ -124,7 +142,8 @@ function startBackend() {
           if (typeof s.progress === 'number') sendProgress(s.progress)
           if (s.models) sendModelStatus(s.models)
           // 완료/실패 신호 → 즉시 화면 전환 (health 폴링 기다릴 필요 없음)
-          if (s.status === 'ok') {
+          // "ok": 풀 모드 모델 로드 완료, "ready": 슬라이드 전용 모드 준비 완료
+          if (s.status === 'ok' || s.status === 'ready') {
             notifyReady(true)
           } else if (s.status === 'error') {
             if (s.message) sendLog(`[오류] ${s.message}`)
@@ -171,11 +190,15 @@ function waitForBackend(callback, maxAttempts = 1800) {
   _notifyReady = callback   // stdout 핸들러와 공유
 
   let attempts = 0
+  // Windows Node.js는 'localhost'를 IPv6(::1)로 먼저 풀 수 있음 — uvicorn은 0.0.0.0(IPv4)만
+  // 듣고 있어 ECONNREFUSED 발생. 명시적으로 127.0.0.1로 고정.
   const healthUrl = isDev
-    ? `http://localhost:${BACKEND_PORT}/health`
-    : `http://localhost:${HEALTH_PORT}/`
+    ? `http://127.0.0.1:${BACKEND_PORT}/health`
+    : `http://127.0.0.1:${HEALTH_PORT}/`
+  devLog(`health 폴링 시작: ${healthUrl} (maxAttempts=${maxAttempts})`)
 
   const check = () => {
+    devLog(`health check #${attempts + 1} → ${healthUrl}`)
     const req = http.get(healthUrl, (res) => {
       if (res.statusCode === 200) {
         let body = ''
@@ -183,32 +206,48 @@ function waitForBackend(callback, maxAttempts = 1800) {
         res.on('end', () => {
           try {
             const json = JSON.parse(body)
-            if (json.status === 'ok') {
+            if (json.status === 'ok' || json.status === 'ready') {
+              devLog(`health 200 → status=${json.status} (성공)`)
               sendProgress(100)
               if (json.models) sendModelStatus(json.models)
               notifyReady(true)
             } else if (json.status === 'error') {
+              devLog(`health 200 → status=error msg="${json.message || ''}"`)
               if (json.message) sendLog(`[오류] ${json.message}`)
               notifyReady(false)
             } else {
-              // 로딩 중 — 진행률만 보조 업데이트 (stdout이 주)
+              // 로딩 중 — 진행률 + 메시지 보조 업데이트 (stdout이 주)
+              devLog(`health 200 → status=${json.status} progress=${json.progress}`)
               if (typeof json.progress === 'number') sendProgress(json.progress)
               if (json.models) sendModelStatus(json.models)
-              retry()
+              if (json.message) sendLog(json.message)
+              retry('loading status')
             }
-          } catch {
-            retry()
+          } catch (e) {
+            devLog(`health 200 but JSON parse 실패: ${e.message}`)
+            retry('parse error')
           }
         })
       } else {
-        retry()
+        devLog(`health non-200: ${res.statusCode}`)
+        retry(`status ${res.statusCode}`)
       }
     })
-    req.on('error', retry)
-    req.setTimeout(10000, () => { req.destroy(); retry() })
+    req.on('error', (err) => {
+      devLog(`health 요청 오류: ${err.code || err.message}`)
+      retry(err.code || 'error')
+    })
+    req.setTimeout(10000, () => {
+      devLog('health 요청 timeout (10s)')
+      req.destroy()
+      retry('timeout')
+    })
 
-    function retry() {
+    function retry(reason) {
       attempts++
+      if (attempts <= 3 || attempts % 15 === 0) {
+        devLog(`retry #${attempts} (이유: ${reason || '미상'})`)
+      }
       if (attempts % 15 === 0) {
         const elapsed = Math.floor(attempts * 2 / 60)
         sendLog(`[대기] 모델 로딩 중... (${elapsed}분 경과, 다운로드 시 최대 60분 소요)`)
@@ -216,7 +255,7 @@ function waitForBackend(callback, maxAttempts = 1800) {
       if (_notifyReady && attempts < maxAttempts) {
         setTimeout(check, 2000)
       } else if (_notifyReady) {
-        // 60분 초과 — 최후의 수단으로 실패 처리
+        devLog(`maxAttempts(${maxAttempts}) 초과 — 실패 처리`)
         notifyReady(false)
       }
     }
@@ -226,6 +265,7 @@ function waitForBackend(callback, maxAttempts = 1800) {
 }
 
 function createWindow() {
+  devLog('BrowserWindow 생성')
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -240,32 +280,52 @@ function createWindow() {
   })
 
   if (isDev) {
-    mainWindow.loadURL(`http://localhost:${FRONTEND_PORT}/#/loading`)
+    const url = `http://127.0.0.1:${FRONTEND_PORT}/#/loading`
+    devLog(`loadURL: ${url}`)
+    mainWindow.loadURL(url)
+    mainWindow.webContents.openDevTools({ mode: 'detach' })
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), {
       hash: '/loading',
     })
   }
 
+  mainWindow.webContents.on('did-finish-load', () => {
+    devLog('renderer did-finish-load')
+  })
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    devLog(`renderer did-fail-load: code=${code} desc="${desc}" url=${url}`)
+  })
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    devLog(`renderer crashed: ${JSON.stringify(details)}`)
+  })
+
   mainWindow.once('ready-to-show', () => {
+    devLog('ready-to-show → window.show()')
     mainWindow.show()
   })
 }
 
 app.whenReady().then(() => {
+  devLog('app.whenReady → createWindow + startBackend')
   createWindow()
   startBackend()
 
   ipcMain.handle('get-lan-ip', () => getLanIp())
+  ipcMain.handle('get-backend-state', () => {
+    devLog(`renderer get-backend-state 요청: ${JSON.stringify({ progress: _lastState.progress, ready: _lastState.ready, hasModels: !!_lastState.models })}`)
+    return _lastState
+  })
+
+  const onReady = (ready) => {
+    devLog(`renderer로 backend-ready=${ready} 송신`)
+    if (mainWindow) mainWindow.webContents.send('backend-ready', ready)
+  }
 
   if (isDev) {
-    waitForBackend((ready) => {
-      if (mainWindow) mainWindow.webContents.send('backend-ready', ready)
-    }, 150)
+    waitForBackend(onReady, 150)
   } else {
-    waitForBackend((ready) => {
-      if (mainWindow) mainWindow.webContents.send('backend-ready', ready)
-    })
+    waitForBackend(onReady)
   }
 })
 

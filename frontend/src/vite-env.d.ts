@@ -12,6 +12,13 @@ interface ModelMap {
   nmt_asr: ModelEntry
   tts: ModelEntry
   ocr: ModelEntry
+  vlm: ModelEntry
+}
+
+interface BackendState {
+  progress: number
+  models: ModelMap | null
+  ready: boolean | null
 }
 
 interface Window {
@@ -21,5 +28,6 @@ interface Window {
     onBackendProgress: (callback: (progress: number) => void) => void
     onBackendModelStatus: (callback: (models: ModelMap) => void) => void
     getLanIp: () => Promise<string>
+    getBackendState: () => Promise<BackendState>
   }
 }
