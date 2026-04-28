@@ -57,6 +57,7 @@ class ASRService:
                 language=language,
                 condition_on_previous_text=False,  # 이전 발화 컨텍스트 무시 → hallucination 차단
                 vad_filter=True,                   # 무음 구간 자동 필터
+                beam_size=5,
             )
             return "".join(s.text for s in segments).strip()
         except Exception as e:

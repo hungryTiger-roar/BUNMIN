@@ -542,7 +542,8 @@ async def handle_student(websocket: WebSocket, pong_event: asyncio.Event | None 
 
 async def process_audio(message: dict):
     """
-    오디오 처리 파이프라인: 오디오 → ASR(GPU) → NMT(CPU) → TTS(CPU) → 수강자 전송
+    오디오 처리 파이프라인: 오디오 → ASR(GPU) → NMT(CPU) → 수강자 전송
+    TTS는 수강자 브라우저에서 WASM(kokoro-js)으로 처리
 
     - _asr_semaphore: ASR GPU 직렬화 (한 번에 하나의 발화만 GPU 사용)
     - _nmt_semaphore: NMT CPU 모델 보호 (ASR 해제 직후 다음 발화 ASR 시작 가능)
@@ -551,7 +552,7 @@ async def process_audio(message: dict):
     """
     global _queued_audio_count, _utterance_seq
 
-    if not all([_asr_service, _nmt_service, _tts_service]):
+    if not all([_asr_service, _nmt_service]):
         print("[WS] 서비스가 초기화되지 않았습니다")
         return
 
@@ -612,50 +613,33 @@ async def process_audio(message: dict):
         if not english_text.strip():
             return
 
-        # Phase 3: TTS — CPU, 세마포어 없음
-        t_tts = time.perf_counter()
-        audio_output_b64 = None
-        try:
-            audio_output = await asyncio.to_thread(
-                _tts_service.synthesize, english_text
-            )
-            audio_output_b64 = base64.b64encode(audio_output).decode()
-        except Exception as tts_err:
-            print(f"[TTS] seq={seq} 합성 실패, 자막만 전송: {tts_err}")
-        t_tts_done = time.perf_counter()
-
         if manager.current_session_id:
             transcripts.append_segment(
                 manager.current_session_id, korean_text, english_text
             )
 
-        await manager.broadcast_to_students({
+        # TTS는 수강자 브라우저(WASM)에서 처리 — audio 필드 없이 텍스트만 전송
+        payload = {
             "type": "transcription",
             "seq": seq,
             "original": korean_text,
             "translated": english_text,
-            "audio": audio_output_b64,
             "sentAt": sent_at,
-        })
+        }
+        await manager.broadcast_to_students(payload)
 
-        # 강의자에게도 자막 전송 (오디오 없이 — 강의자는 TTS 재생 불필요)
+        # 강의자에게도 자막 전송
         if manager.lecturer:
             try:
-                await manager.lecturer.send_json({
-                    "type": "transcription",
-                    "original": korean_text,
-                    "translated": english_text,
-                    "audio": None,
-                    "sentAt": sent_at,
-                })
+                await manager.lecturer.send_json(payload)
             except Exception:
                 pass
+
         print(
             f"[LATENCY] seq={seq} | 대기={t_asr - t_start:.2f}s | "
             f"ASR={t_asr_done - t_asr:.2f}s | "
             f"NMT={t_nmt_done - t_nmt:.2f}s | "
-            f"TTS={t_tts_done - t_tts:.2f}s | "
-            f"전체={t_tts_done - t_start:.2f}s",
+            f"전체={t_nmt_done - t_start:.2f}s",
             flush=True,
         )
 
