@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require('electron')
+const { app, BrowserWindow, ipcMain, desktopCapturer, session } = require('electron')
 const { spawn } = require('child_process')
 const path = require('path')
 const http = require('http')
@@ -315,6 +315,29 @@ app.whenReady().then(() => {
   ipcMain.handle('get-backend-state', () => {
     devLog(`renderer get-backend-state 요청: ${JSON.stringify({ progress: _lastState.progress, ready: _lastState.ready, hasModels: !!_lastState.models })}`)
     return _lastState
+  })
+
+  // 화면 공유 picker용 — desktopCapturer로 화면/창 목록 + 썸네일 반환.
+  // renderer에서 ID 선택 후 getUserMedia(chromeMediaSourceId)로 stream 획득.
+  ipcMain.handle('get-screen-sources', async () => {
+    const sources = await desktopCapturer.getSources({
+      types: ['screen', 'window'],
+      thumbnailSize: { width: 320, height: 180 },
+      fetchWindowIcons: true,
+    })
+    return sources.map((s) => ({
+      id: s.id,
+      name: s.name,
+      thumbnail: s.thumbnail.toDataURL(),
+      appIcon: s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.toDataURL() : null,
+      display_id: s.display_id,
+    }))
+  })
+
+  // getDisplayMedia 호출 보호 — 등록 안 하면 Electron이 'Permission denied'로 거부.
+  // 우리는 자체 picker(getUserMedia + chromeMediaSourceId)로 처리하므로 이 경로는 사용 안 함.
+  session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+    callback({}) // 빈 응답 → renderer가 자체 picker로 폴백하도록 유도
   })
 
   const onReady = (ready) => {

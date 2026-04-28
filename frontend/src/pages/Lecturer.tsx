@@ -16,6 +16,7 @@ import ParticipantsPanel from '@/components/common/ParticipantsPanel'
 import AudioLevelMeter from '@/components/lecturer/AudioLevelMeter'
 import MicButton from '@/components/lecturer/MicButton'
 import CursorSpotlight from '@/components/lecturer/CursorSpotlight'
+import ScreenPickerModal from '@/components/lecturer/ScreenPickerModal'
 import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
 
 const ASPECT_OPTIONS: { value: AspectRatio; label: string; className: string }[] = [
@@ -177,6 +178,9 @@ function Lecturer() {
     isCapturing: isScreenSharing,
     startCapture: startScreenCapture,
     stopCapture: stopScreenCapture,
+    pickerSources: screenPickerSources,
+    selectPickerSource: selectScreenSource,
+    cancelPicker: cancelScreenPicker,
   } = useScreenCapture({ onFrame: handleScreenData, frameRate: 2 })
 
   useEffect(() => {
@@ -1277,6 +1281,13 @@ function Lecturer() {
           )}
         </aside>
       </div>
+      {screenPickerSources && (
+        <ScreenPickerModal
+          sources={screenPickerSources}
+          onSelect={selectScreenSource}
+          onCancel={cancelScreenPicker}
+        />
+      )}
     </div>
   )
 }

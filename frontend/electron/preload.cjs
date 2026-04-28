@@ -11,4 +11,5 @@ contextBridge.exposeInMainWorld('electron', {
     ipcRenderer.on('backend-model-status', (_, models) => callback(models)),
   getLanIp: () => ipcRenderer.invoke('get-lan-ip'),
   getBackendState: () => ipcRenderer.invoke('get-backend-state'),
+  getScreenSources: () => ipcRenderer.invoke('get-screen-sources'),
 })

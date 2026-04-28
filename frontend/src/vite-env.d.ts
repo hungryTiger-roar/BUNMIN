@@ -21,6 +21,14 @@ interface BackendState {
   ready: boolean | null
 }
 
+interface ScreenSource {
+  id: string
+  name: string
+  thumbnail: string  // data URL
+  appIcon: string | null
+  display_id: string
+}
+
 interface Window {
   electron?: {
     onBackendReady: (callback: (ready: boolean) => void) => void
@@ -29,5 +37,6 @@ interface Window {
     onBackendModelStatus: (callback: (models: ModelMap) => void) => void
     getLanIp: () => Promise<string>
     getBackendState: () => Promise<BackendState>
+    getScreenSources: () => Promise<ScreenSource[]>
   }
 }
