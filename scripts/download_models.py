@@ -10,6 +10,7 @@ HuggingFace Hub에서 필요한 모델들을 미리 다운로드합니다.
 """
 
 import os
+import sys
 from pathlib import Path
 from huggingface_hub import snapshot_download
 import requests
@@ -31,8 +32,11 @@ TTS_MODEL_DIR = _PROJECT_ROOT / "backend" / "app" / "services" / "models"
 # VLM Base 모델 (HuggingFace 캐시에 저장)
 VLM_BASE = {
     "repo_id": "Qwen/Qwen3-VL-8B-Instruct",
+    # 로컬 평탄 디렉토리 사용 — Windows 심볼릭 미지원 환경에서 HF 캐시
+    # snapshots/blobs 분리 구조가 부분 실패하는 문제 회피
+    "local_dir": MODELS_DIR / "qwen3-vl-8b-instruct",
     "description": "VLM Base 모델",
-    "size": "~17GB",
+    "size": "~16GB",  # bf16 가중치 4 shards (8B params × 2 bytes)
 }
 
 # VLM LoRA 어댑터 (로컬 디렉토리에 저장)
@@ -81,42 +85,51 @@ SURYA_OCR = {
 }
 
 
-def download_to_cache(model: dict, step: str) -> bool:
-    """HuggingFace 캐시에 모델 다운로드"""
+def download_to_cache(model: dict, step: str, retries: int = 3) -> bool:
+    """HuggingFace 캐시에 모델 다운로드 (네트워크 끊김에 대비해 재시도)"""
     print(f"\n[{step}] {model['description']} ({model['size']})")
     print(f"      저장소: {model['repo_id']}")
     print("      (HuggingFace 캐시에 저장됨)")
     print("-" * 60)
 
-    try:
-        print("다운로드 중...")
-        snapshot_download(repo_id=model["repo_id"])
-        print(f"✓ {model['description']} 다운로드 완료!")
-        return True
-    except Exception as e:
-        print(f"✗ {model['description']} 다운로드 실패: {e}")
-        return False
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            print(f"다운로드 중... (시도 {attempt}/{retries})")
+            # snapshot_download는 기본적으로 부분 다운로드를 이어받음
+            snapshot_download(repo_id=model["repo_id"])
+            print(f"✓ {model['description']} 다운로드 완료!")
+            return True
+        except Exception as e:
+            last_err = e
+            print(f"  시도 {attempt} 실패: {e}")
+    print(f"✗ {model['description']} 다운로드 실패 (재시도 {retries}회 모두 실패): {last_err}")
+    return False
 
 
-def download_to_local(model: dict, step: str) -> bool:
-    """로컬 디렉토리에 모델 다운로드"""
+def download_to_local(model: dict, step: str, retries: int = 3) -> bool:
+    """로컬 디렉토리에 모델 다운로드 (재시도 포함)"""
     print(f"\n[{step}] {model['description']} ({model['size']})")
     print(f"      저장소: {model['repo_id']}")
     print(f"      경로: {model['local_dir']}")
     print("-" * 60)
 
-    try:
-        model["local_dir"].parent.mkdir(parents=True, exist_ok=True)
-        print("다운로드 중...")
-        snapshot_download(
-            repo_id=model["repo_id"],
-            local_dir=str(model["local_dir"]),
-        )
-        print(f"✓ {model['description']} 다운로드 완료!")
-        return True
-    except Exception as e:
-        print(f"✗ {model['description']} 다운로드 실패: {e}")
-        return False
+    model["local_dir"].parent.mkdir(parents=True, exist_ok=True)
+    last_err = None
+    for attempt in range(1, retries + 1):
+        try:
+            print(f"다운로드 중... (시도 {attempt}/{retries})")
+            snapshot_download(
+                repo_id=model["repo_id"],
+                local_dir=str(model["local_dir"]),
+            )
+            print(f"✓ {model['description']} 다운로드 완료!")
+            return True
+        except Exception as e:
+            last_err = e
+            print(f"  시도 {attempt} 실패: {e}")
+    print(f"✗ {model['description']} 다운로드 실패 (재시도 {retries}회 모두 실패): {last_err}")
+    return False
 
 
 
@@ -250,12 +263,12 @@ def main():
     print(f"  5. {TTS_MODEL['description']} ({TTS_MODEL['size']})")
     print(f"  6. {RAPIDOCR_KOREAN['description']} ({RAPIDOCR_KOREAN['size']})")
     print(f"  7. {SURYA_OCR['description']} ({SURYA_OCR['size']})")
-    print(f"\n총 예상 용량: ~22GB (최초 1회만 다운로드)")
+    print(f"\n총 예상 용량: ~21GB (최초 1회만 다운로드)")
 
     results = []
 
-    # 1. VLM Base 모델
-    results.append(("VLM Base", download_to_cache(VLM_BASE, "1/7")))
+    # 1. VLM Base 모델 (로컬 디렉토리 — HF 캐시 심볼릭 이슈 회피)
+    results.append(("VLM Base", download_to_local(VLM_BASE, "1/7")))
 
     # 2. VLM LoRA 어댑터
     results.append(("VLM LoRA", download_to_local(VLM_LORA, "2/7")))
@@ -294,6 +307,16 @@ def main():
     else:
         print("일부 모델 다운로드 실패. 위 오류를 확인하세요.")
     print("=" * 60)
+
+    # 핵심 모델(VLM Base/LoRA, ASR, NMT) 실패 시 setup이 멈추도록 종료 코드 1
+    # → silent fail로 첫 추론에서 16GB를 다시 받는 사고 방지
+    critical = {"VLM Base", "VLM LoRA", "ASR", "NMT"}
+    failed_critical = [name for name, ok in results if not ok and name in critical]
+    if failed_critical:
+        print(f"\n[중단] 핵심 모델 실패: {', '.join(failed_critical)}")
+        print("       네트워크 확인 후 다시 실행해주세요:")
+        print("       conda run -n aunion python scripts/download_models.py")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ node_modules/
 # 다운로드 모델 디렉토리 (qwen3 LoRA 제외)
 models/rapidocr_korean/
 models/opus-mt-ct2/
+models/qwen3-vl-8b-instruct/
 
 # LoRA 모델은 예외 (번역용 파인튜닝 모델)
 !models/qwen3/**
