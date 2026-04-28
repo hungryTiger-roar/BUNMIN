@@ -15,25 +15,68 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}) {
     quality = 0.6        // JPEG 품질
   } = options
   const [isCapturing, setIsCapturing] = useState(false)
+  const [pickerSources, setPickerSources] = useState<ScreenSource[] | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const intervalRef = useRef<NodeJS.Timeout | null>(null)
+  // Electron picker가 사용자 선택을 기다리는 동안 startCapture의 Promise를 보류시키는 resolver.
+  const pickerResolveRef = useRef<((id: string | null) => void) | null>(null)
+
+  const stopCapture = useCallback(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop())
+      streamRef.current = null
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null
+      videoRef.current = null
+    }
+    setIsCapturing(false)
+  }, [])
+
+  const acquireStream = useCallback(async (): Promise<MediaStream | null> => {
+    // Electron: desktopCapturer로 sources 가져온 뒤 picker 모달로 사용자 선택 대기.
+    // 선택된 ID로 getUserMedia(chromeMediaSource: 'desktop')로 stream 획득.
+    if (window.electron) {
+      const sources = await window.electron.getScreenSources()
+      const sourceId = await new Promise<string | null>((resolve) => {
+        pickerResolveRef.current = resolve
+        setPickerSources(sources)
+      })
+      if (!sourceId) return null
+      return await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: sourceId,
+          },
+        } as unknown as MediaTrackConstraints,
+      })
+    }
+
+    // 웹: 브라우저 기본 picker.
+    return await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        cursor: 'always',
+        displaySurface: 'monitor',
+      } as MediaTrackConstraints,
+      audio: false,
+    })
+  }, [])
 
   const startCapture = useCallback(async () => {
     try {
-      // 화면 공유 요청
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          cursor: 'always',
-          displaySurface: 'monitor',
-        } as MediaTrackConstraints,
-        audio: false,
-      })
+      const stream = await acquireStream()
+      if (!stream) return // 사용자가 picker에서 취소
 
       streamRef.current = stream
 
-      // 비디오 엘리먼트 생성
       const video = document.createElement('video')
       video.srcObject = stream
       video.autoplay = true
@@ -41,14 +84,11 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}) {
       video.playsInline = true
       videoRef.current = video
 
-      // 캔버스 생성
       const canvas = document.createElement('canvas')
       canvasRef.current = canvas
 
-      // 비디오 재생 시작
       await video.play()
 
-      // 리사이즈 계산 (maxWidth > 0일 때만)
       let targetWidth = video.videoWidth
       let targetHeight = video.videoHeight
 
@@ -64,19 +104,15 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}) {
       const ctx = canvas.getContext('2d')
       if (!ctx) return
 
-      // 주기적으로 프레임 캡처
       intervalRef.current = setInterval(() => {
         if (video.readyState === video.HAVE_ENOUGH_DATA) {
-          // 리사이즈하여 그리기
           ctx.drawImage(video, 0, 0, targetWidth, targetHeight)
           const imageData = canvas.toDataURL('image/jpeg', quality)
-          // data:image/jpeg;base64, 부분 제거
           const base64 = imageData.split(',')[1]
           onFrame?.(base64)
         }
       }, 1000 / frameRate)
 
-      // 사용자가 공유 중지했을 때
       stream.getVideoTracks()[0].onended = () => {
         stopCapture()
       }
@@ -86,33 +122,26 @@ export function useScreenCapture(options: UseScreenCaptureOptions = {}) {
       console.error('[ScreenCapture] 화면 공유 실패:', err)
       throw err
     }
-  }, [onFrame, frameRate])
+  }, [acquireStream, onFrame, frameRate, maxWidth, quality, stopCapture])
 
-  const stopCapture = useCallback(() => {
-    // 인터벌 정리
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current)
-      intervalRef.current = null
-    }
+  const selectPickerSource = useCallback((sourceId: string) => {
+    setPickerSources(null)
+    pickerResolveRef.current?.(sourceId)
+    pickerResolveRef.current = null
+  }, [])
 
-    // 스트림 정리
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop())
-      streamRef.current = null
-    }
-
-    // 비디오 정리
-    if (videoRef.current) {
-      videoRef.current.srcObject = null
-      videoRef.current = null
-    }
-
-    setIsCapturing(false)
+  const cancelPicker = useCallback(() => {
+    setPickerSources(null)
+    pickerResolveRef.current?.(null)
+    pickerResolveRef.current = null
   }, [])
 
   return {
     isCapturing,
     startCapture,
     stopCapture,
+    pickerSources,
+    selectPickerSource,
+    cancelPicker,
   }
 }
