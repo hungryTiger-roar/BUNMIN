@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLectureStore } from '@/stores/lectureStore'
 import { usePreferencesStore } from '@/stores/preferencesStore'
 import { API_BASE } from '@/lib/api'
+import { useTTS } from '@/hooks/useTTS'
 
 interface WebSocketMessage {
   type: string
@@ -30,7 +31,13 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
   const [isAudioUnlocked, setIsAudioUnlocked] = useState(false)
   const isAudioUnlockedRef = useRef(false)  // stale closure 방지
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
-  const audioContextRef = useRef<AudioContext | null>(null)
+
+  // 수강자만 TTS Worker 생성 (강의자는 enabled=false)
+  const { synthesize, unlockAudio: unlockTTS, status: ttsStatus, setVolume: setTTSVolume } = useTTS(role === 'student')
+
+  // synthesize는 deps 없이 stable하지만, 혹시 교체될 경우를 위해 ref로 보관
+  const synthesizeRef = useRef(synthesize)
+  synthesizeRef.current = synthesize
 
   const {
     addSubtitle,
@@ -95,9 +102,11 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
           inputTime,
         })
 
-        // 오디오 재생 (잠금 해제된 경우에만)
-        if (data.audio && isAudioUnlockedRef.current) {
-          playAudio(data.audio as string)
+        // 로컬 WASM TTS 합성·재생 (수강자 + 오디오 잠금 해제 상태에서만)
+        if (role === 'student' && isAudioUnlockedRef.current && data.translated) {
+          synthesizeRef.current(data.translated as string).catch((err) =>
+            console.error('[TTS] 합성 실패:', err),
+          )
         }
         break
       }
@@ -321,44 +330,12 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     socketRef.current = socket
   }, [url, role, setConnected, handleMessage])
 
-  const playAudio = async (base64Audio: string) => {
-    if (!audioContextRef.current) return
-
-    if (audioContextRef.current.state === 'suspended') {
-      await audioContextRef.current.resume()
-    }
-
-    const audioData = atob(base64Audio)
-    const arrayBuffer = new ArrayBuffer(audioData.length)
-    const view = new Uint8Array(arrayBuffer)
-    for (let i = 0; i < audioData.length; i++) {
-      view[i] = audioData.charCodeAt(i)
-    }
-
-    try {
-      const audioBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer)
-      const source = audioContextRef.current.createBufferSource()
-      source.buffer = audioBuffer
-      source.connect(audioContextRef.current.destination)
-      source.start()
-    } catch (err) {
-      console.error('[Audio] 재생 실패:', err)
-    }
-  }
-
   const unlockAudio = useCallback(() => {
-    if (!audioContextRef.current) {
-      audioContextRef.current = new AudioContext()
-    }
-    const buffer = audioContextRef.current.createBuffer(1, 1, 22050)
-    const source = audioContextRef.current.createBufferSource()
-    source.buffer = buffer
-    source.connect(audioContextRef.current.destination)
-    source.start()
+    unlockTTS()
     isAudioUnlockedRef.current = true
     setIsAudioUnlocked(true)
-    console.log('[Audio] 재생 잠금 해제됨')
-  }, [])
+    console.log('[Audio] 재생 잠금 해제됨 (WASM TTS)')
+  }, [unlockTTS])
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {
@@ -373,14 +350,13 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
   useEffect(() => {
     return () => {
       disconnect()
-      audioContextRef.current?.close()
-      audioContextRef.current = null
     }
   }, [disconnect])
 
   return {
     isConnected,
     isAudioUnlocked,
+    ttsStatus,
     connect,
     disconnect,
     send,
@@ -388,5 +364,6 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     sendLectureTitle,
     sendLecturerName,
     unlockAudio,
+    setTTSVolume,
   }
 }

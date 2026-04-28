@@ -131,7 +131,7 @@ function Student() {
   // slideRef를 전달해서 컨테이너 크기 기준으로 px 변환
   const { spotlightRef, onCursor } = useCursorOverlay(slideRef)
 
-  const { isConnected, connect, sendChat, unlockAudio, isAudioUnlocked } = useWebSocket(
+  const { isConnected, connect, sendChat, unlockAudio, isAudioUnlocked, ttsStatus, setTTSVolume } = useWebSocket(
     WS_PIPELINE_URL,
     'student',
     { onCursor }
@@ -182,6 +182,11 @@ function Student() {
     document.addEventListener('fullscreenchange', handle)
     return () => document.removeEventListener('fullscreenchange', handle)
   }, [])
+
+  // volume/muted → TTS GainNode 실시간 동기화
+  useEffect(() => {
+    setTTSVolume(volume, isMuted)
+  }, [volume, isMuted, setTTSVolume])
 
   useEffect(() => {
     chatScrollRef.current?.scrollTo({
@@ -293,6 +298,17 @@ function Student() {
               <span className="opacity-60">/</span>
               <span className="opacity-60">{totalPages}</span>
             </div>
+          )}
+          {ttsStatus === 'loading' && (
+            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-yellow-500/20 text-yellow-600 dark:text-yellow-400 text-xs font-medium rounded-full border border-yellow-500/30">
+              <span className="w-1.5 h-1.5 bg-yellow-500 rounded-full animate-pulse" />
+              TTS 로딩 중
+            </span>
+          )}
+          {ttsStatus === 'error' && (
+            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-error/20 text-error text-xs font-medium rounded-full border border-error/30">
+              TTS 오류
+            </span>
           )}
         </div>
 
