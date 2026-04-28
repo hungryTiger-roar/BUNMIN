@@ -363,6 +363,9 @@ def unload_vlm_model():
         print("[VLM] 언로드할 모델 없음")
         return
 
+    cuda_available = torch.cuda.is_available()
+    vram_before = torch.cuda.memory_allocated() / 1024 ** 3 if cuda_available else 0
+
     print("[VLM] 모델 언로드 중...")
     del _vlm_model
     del _vlm_processor
@@ -370,10 +373,18 @@ def unload_vlm_model():
     _vlm_processor = None
 
     gc.collect()
-    if torch.cuda.is_available():
+    if cuda_available:
         torch.cuda.empty_cache()
-
-    print("[VLM] 모델 언로드 완료, GPU 메모리 해제됨")
+        vram_after = torch.cuda.memory_allocated() / 1024 ** 3
+        freed = vram_before - vram_after
+        print(
+            f"[VLM] VRAM 해제 완료 | "
+            f"해제 전: {vram_before:.2f}GB → 해제 후: {vram_after:.2f}GB "
+            f"(해제량: {freed:.2f}GB)",
+            flush=True,
+        )
+    else:
+        print("[VLM] 모델 언로드 완료 (CPU 모드)", flush=True)
 
 
 def is_number_or_english_only(text: str) -> bool:

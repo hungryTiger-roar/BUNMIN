@@ -16,8 +16,10 @@ from pydantic import BaseModel
 
 router = APIRouter(prefix="/transcripts", tags=["Transcripts"])
 
+_REPO_DIR = Path(__file__).parent.parent.parent.parent
+
 # 자막 저장 경로
-TRANSCRIPTS_DIR = Path("uploads/transcripts")
+TRANSCRIPTS_DIR = _REPO_DIR / "uploads" / "transcripts"
 TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # 활성 세션 상태 (메모리)

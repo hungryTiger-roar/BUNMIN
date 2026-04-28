@@ -10,7 +10,21 @@ interface WebSocketMessage {
 
 type Role = 'lecturer' | 'student'
 
-export function useWebSocket(url: string, role: Role = 'student') {
+/** 커서 메시지 타입 (ref 기반 DOM 업데이트용) */
+export interface CursorMessage {
+  x: number
+  y: number
+  visible: boolean
+  color: string
+}
+
+interface UseWebSocketOptions {
+  /** 커서 메시지 수신 시 콜백 (React 상태 대신 DOM 직접 업데이트용) */
+  onCursor?: (cursor: CursorMessage) => void
+}
+
+export function useWebSocket(url: string, role: Role = 'student', options: UseWebSocketOptions = {}) {
+  const { onCursor } = options
   const socketRef = useRef<WebSocket | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const [isAudioUnlocked, setIsAudioUnlocked] = useState(false)
@@ -44,6 +58,12 @@ export function useWebSocket(url: string, role: Role = 'student') {
   useEffect(() => {
     registerNameRef.current = role === 'lecturer' ? lecturerName : studentName
   }, [role, lecturerName, studentName])
+
+  // onCursor callback ref (stale closure 방지)
+  const onCursorRef = useRef(onCursor)
+  useEffect(() => {
+    onCursorRef.current = onCursor
+  }, [onCursor])
 
   // 슬라이드 페이지 로드
   const loadSlidePages = useCallback(async (slideId: string) => {
@@ -204,6 +224,18 @@ export function useWebSocket(url: string, role: Role = 'student') {
       case 'registered':
         // 역할 등록 확인
         console.log('[WebSocket] 역할 등록 완료:', data.role)
+        break
+
+      case 'cursor':
+        // 강의자 커서 상태 수신 (수강자 전용, callback으로 DOM 직접 업데이트)
+        if (role === 'student' && onCursorRef.current) {
+          onCursorRef.current({
+            x: data.x as number,
+            y: data.y as number,
+            visible: data.visible as boolean,
+            color: data.color as string,
+          })
+        }
         break
 
       default:
