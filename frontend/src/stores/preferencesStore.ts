@@ -35,8 +35,10 @@ interface PreferencesState {
 
   audioLang: TranslationLang
   subtitleLang: TranslationLang
+  secondarySubtitleLang: TranslationLang
   setAudioLang: (lang: TranslationLang) => void
   setSubtitleLang: (lang: TranslationLang) => void
+  setSecondarySubtitleLang: (lang: TranslationLang) => void
 
   aspectRatio: AspectRatio
   setAspectRatio: (ratio: AspectRatio) => void
@@ -70,10 +72,12 @@ export const usePreferencesStore = create<PreferencesState>()(
       resetSubtitleSettings: () =>
         set({ subtitleSettings: DEFAULT_SUBTITLE_SETTINGS }),
 
-      audioLang: 'ko',
-      subtitleLang: 'both',
+      audioLang: 'en',
+      subtitleLang: 'en',
+      secondarySubtitleLang: 'ko',
       setAudioLang: (lang) => set({ audioLang: lang }),
       setSubtitleLang: (lang) => set({ subtitleLang: lang }),
+      setSecondarySubtitleLang: (lang) => set({ secondarySubtitleLang: lang }),
 
       aspectRatio: '4/3',
       setAspectRatio: (ratio) => set({ aspectRatio: ratio }),
@@ -96,7 +100,7 @@ export const usePreferencesStore = create<PreferencesState>()(
     }),
     {
       name: 'aunion-preferences',
-      version: 6,
+      version: 7,
     }
   )
 )
