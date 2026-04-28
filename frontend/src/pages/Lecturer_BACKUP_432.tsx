@@ -1,4 +1,8 @@
+<<<<<<< HEAD
+﻿import { useEffect, useCallback, useState, useRef, type CSSProperties } from 'react'
+=======
 import { useEffect, useCallback, useState, useRef, useMemo, type CSSProperties } from 'react'
+>>>>>>> bbde581700a743fb1d61a0540f379ae17ef8c16d
 import { useNavigate } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import {

@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, type CSSProperties } from 'react'
+﻿import { useEffect, useState, useRef, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import {
@@ -13,17 +13,17 @@ import ParticipantsPanel from '@/components/common/ParticipantsPanel'
 import { StudentCursorOverlay, useCursorOverlay } from '@/components/student/StudentCursorOverlay'
 import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
 
-const SUBTITLE_LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
-  { value: 'off', label: '끄기' },
+const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
+  { value: 'off', label: 'Off' },
   { value: 'ko', label: '한국어 (Korean)' },
   { value: 'en', label: '영어 (English)' },
-  { value: 'both', label: '둘 다' },
   { value: 'de', label: '독일어 (Deutsch)' },
   { value: 'es', label: '스페인어 (Español)' },
   { value: 'ru', label: '러시아어 (Русский)' },
 ]
 
-const AUDIO_LANG_OPTIONS = SUBTITLE_LANG_OPTIONS.filter((o) => o.value !== 'both')
+const AUDIO_LANG_OPTIONS = LANG_OPTIONS
+const SUBTITLE_LANG_OPTIONS = LANG_OPTIONS
 
 const STYLE_LABEL: Record<SubtitleStyle, string> = {
   plain: '기본',
@@ -117,8 +117,10 @@ function Student() {
     setSubtitleSettings,
     audioLang,
     subtitleLang,
+    secondarySubtitleLang,
     setAudioLang,
     setSubtitleLang,
+    setSecondarySubtitleLang,
     aspectRatio,
     setAspectRatio,
     theme,
@@ -216,7 +218,12 @@ function Student() {
     : null
 
   const latestSubtitle = subtitles[subtitles.length - 1]
-  const showBothSubs = subtitleLang === 'both'
+  const primaryText = !latestSubtitle || subtitleLang === 'off' ? null
+    : subtitleLang === 'ko' ? latestSubtitle.original
+    : latestSubtitle.translated
+  const secondaryText = !latestSubtitle || secondarySubtitleLang === 'off' ? null
+    : secondarySubtitleLang === 'ko' ? latestSubtitle.original
+    : latestSubtitle.translated
   const effectiveVolume = isMuted ? 0 : volume
 
   const participantTotal =
@@ -424,7 +431,7 @@ function Student() {
             )}
 
             {/* 자막 오버레이 */}
-            {isSubtitleOn && subtitleLang !== 'off' && latestSubtitle && (
+            {isSubtitleOn && (primaryText || secondaryText) && (
               <div
                 className={`absolute left-1/2 -translate-x-1/2 max-w-[90%] px-4 text-center text-white pointer-events-none z-10 ${
                   subtitleSettings.position === 'top' ? 'top-6' : 'bottom-20'
@@ -435,15 +442,13 @@ function Student() {
                   ...subtitleStyleToCss(subtitleSettings.style),
                 }}
               >
-                <p className="font-medium leading-snug">
-                  {subtitleLang === 'en' ? latestSubtitle.translated : latestSubtitle.original}
-                </p>
-                {showBothSubs && (
+                {primaryText && <p className="font-medium leading-snug">{primaryText}</p>}
+                {secondaryText && (
                   <p
                     className="mt-1 leading-snug opacity-80"
                     style={{ fontSize: `${Math.max(12, subtitleSettings.fontSize - 4)}px` }}
                   >
-                    {latestSubtitle.translated}
+                    {secondaryText}
                   </p>
                 )}
               </div>
@@ -572,17 +577,23 @@ function Student() {
                   className="absolute inset-0 bg-black/40 z-40"
                   onClick={() => setShowLangPanel(false)}
                 />
-                <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[min(90%,640px)] max-h-[80%] overflow-y-auto bg-black/80 backdrop-blur-md text-white rounded-xl shadow-2xl p-6 grid grid-cols-2 gap-6">
+                <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[min(90%,800px)] max-h-[80%] overflow-y-auto bg-black/80 backdrop-blur-md text-white rounded-xl shadow-2xl p-8 grid grid-cols-3 gap-12">
                   <LangColumn
-                    title="음성"
+                    title="Audio"
                     value={audioLang}
                     onChange={setAudioLang}
                     options={AUDIO_LANG_OPTIONS}
                   />
                   <LangColumn
-                    title="자막"
+                    title="Subtitles"
                     value={subtitleLang}
                     onChange={setSubtitleLang}
+                    options={SUBTITLE_LANG_OPTIONS}
+                  />
+                  <LangColumn
+                    title="Secondary Subtitles"
+                    value={secondarySubtitleLang}
+                    onChange={setSecondarySubtitleLang}
                     options={SUBTITLE_LANG_OPTIONS}
                   />
                   <button
@@ -838,7 +849,7 @@ interface LangColumnProps {
 function LangColumn({ title, value, onChange, options }: LangColumnProps) {
   return (
     <div>
-      <h3 className="text-lg font-semibold mb-4">{title}</h3>
+      <h3 className="text-lg font-semibold mb-4 pl-6">{title}</h3>
       <ul className="space-y-2">
         {options.map((opt) => {
           const selected = value === opt.value

@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState, useRef, useMemo, type CSSProperties } from 'react'
+import { useEffect, useCallback, useState, useRef, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import {
@@ -98,10 +98,9 @@ function Lecturer() {
   const [spotlightEnabled, setSpotlightEnabled] = useState(false)
   const [spotlightColor, setSpotlightColor] = useState(SPOTLIGHT_PRESETS[0])
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [listenVolume, setListenVolume] = useState(70)
+  const [listenMuted, setListenMuted] = useState(false)
   const [slideBoxWidth, setSlideBoxWidth] = useState<number | undefined>(undefined)
-
-  // 커서 위치 상태 (브라우저 전체 기준 vw/vh 비율, 0~1)
-  const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null)
 
   const {
     isMicOn,
@@ -228,117 +227,6 @@ function Lecturer() {
     return () => observer.disconnect()
   }, [presentationMode, slideStatus])
 
-  // 커서 위치 추적 + WebSocket 전송 (슬라이드 영역 기준 상대좌표)
-  useEffect(() => {
-    if (!spotlightEnabled) {
-      setCursorPos(null)
-      // 스팟라이트 OFF 시 한 번만 visible:false 전송
-      if (isConnected && isLectureStarted) {
-        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor })
-      }
-      return
-    }
-
-    let currentX = 0
-    let currentY = 0
-    let isInsideSlide = false
-    let rafId: number
-    let lastSendTime = 0
-    const SEND_INTERVAL = 50 // 20fps
-
-    const handleMove = (e: MouseEvent) => {
-      const container = slideBoxRef.current
-      if (!container) {
-        isInsideSlide = false
-        setCursorPos(null)
-        return
-      }
-
-      const containerRect = container.getBoundingClientRect()
-
-      // 컨테이너 내 이미지 요소 찾기 (object-fit: contain 고려)
-      const img = container.querySelector('img') as HTMLImageElement | null
-      let imgOffsetX = 0
-      let imgOffsetY = 0
-      let imgWidth = containerRect.width
-      let imgHeight = containerRect.height
-
-      if (img && img.naturalWidth && img.naturalHeight) {
-        const imgRatio = img.naturalWidth / img.naturalHeight
-        const containerRatio = containerRect.width / containerRect.height
-
-        if (imgRatio > containerRatio) {
-          imgWidth = containerRect.width
-          imgHeight = containerRect.width / imgRatio
-        } else {
-          imgHeight = containerRect.height
-          imgWidth = containerRect.height * imgRatio
-        }
-        imgOffsetX = (containerRect.width - imgWidth) / 2
-        imgOffsetY = (containerRect.height - imgHeight) / 2
-      }
-
-      // 이미지 영역 기준 상대 좌표 (0~1)
-      const imgLeft = containerRect.left + imgOffsetX
-      const imgTop = containerRect.top + imgOffsetY
-      const relX = (e.clientX - imgLeft) / imgWidth
-      const relY = (e.clientY - imgTop) / imgHeight
-
-      // 이미지 영역 내부인지 확인
-      if (relX >= 0 && relX <= 1 && relY >= 0 && relY <= 1) {
-        currentX = relX
-        currentY = relY
-        isInsideSlide = true
-        // 로컬 UI: 브라우저 전체 기준 vw/vh로 표시 (fixed positioning)
-        setCursorPos({
-          x: e.clientX / window.innerWidth,
-          y: e.clientY / window.innerHeight,
-        })
-      } else {
-        isInsideSlide = false
-        setCursorPos(null)
-      }
-    }
-
-    const handleLeave = () => {
-      isInsideSlide = false
-      setCursorPos(null)
-      // 즉시 visible:false 전송
-      if (isConnected && isLectureStarted) {
-        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor })
-      }
-    }
-
-    // 주기적으로 WebSocket 전송 (RAF 기반)
-    const tick = () => {
-      const now = Date.now()
-      if (isConnected && isLectureStarted && now - lastSendTime >= SEND_INTERVAL) {
-        lastSendTime = now
-        if (isInsideSlide) {
-          // 슬라이드 기준 상대좌표 전송
-          send({ type: 'cursor', x: currentX, y: currentY, visible: true, color: spotlightColor })
-        } else {
-          send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor })
-        }
-      }
-      rafId = requestAnimationFrame(tick)
-    }
-
-    window.addEventListener('mousemove', handleMove)
-    document.addEventListener('mouseleave', handleLeave)
-    rafId = requestAnimationFrame(tick)
-
-    return () => {
-      window.removeEventListener('mousemove', handleMove)
-      document.removeEventListener('mouseleave', handleLeave)
-      cancelAnimationFrame(rafId)
-      // cleanup 시 visible:false 전송
-      if (isConnected && isLectureStarted) {
-        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor })
-      }
-    }
-  }, [spotlightEnabled, spotlightColor, isConnected, isLectureStarted, send])
-
   const handlePageChange = useCallback((page: number) => {
     if (isConnected && slideId && !isPaused) {
       send({ type: 'page_change', slide_id: slideId, page })
@@ -428,6 +316,7 @@ function Lecturer() {
   const displayParticipantCount = Math.max(participantTotal, studentCount + 1)
 
   const latestSubtitle = subtitles[subtitles.length - 1]
+  const effectiveListenVolume = listenMuted ? 0 : listenVolume
 
   // 슬라이드 박스 내부에 공통으로 들어가는 자막 오버레이
   const primaryText = !latestSubtitle || primaryLang === 'off' ? null
@@ -464,7 +353,40 @@ function Lecturer() {
   // 슬라이드 박스 내부 하단 컨트롤 바 (student 화면과 동일 구성)
   const bottomControlBar = (
     <div className="absolute left-3 right-3 bottom-3 z-30 flex items-center gap-2 flex-wrap opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity duration-200">
-    
+      {/* 볼륨 — 자기가 듣는 소리 */}
+      <div className="group/vol flex items-center bg-black/60 backdrop-blur-sm rounded-full pl-2 pr-2 py-1.5 group-hover/vol:pr-3 transition-all">
+        <button
+          type="button"
+          onClick={() => setListenMuted(!listenMuted)}
+          className="text-white hover:opacity-80"
+          aria-label={listenMuted ? '음소거 해제' : '음소거'}
+        >
+          {listenMuted || listenVolume === 0 ? (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2" />
+            </svg>
+          ) : (
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
+            </svg>
+          )}
+        </button>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={5}
+          value={effectiveListenVolume}
+          onChange={(e) => {
+            const v = Number(e.target.value)
+            setListenVolume(v)
+            if (v > 0) setListenMuted(false)
+          }}
+          className="w-0 opacity-0 ml-0 group-hover/vol:w-24 group-hover/vol:opacity-100 group-hover/vol:ml-2 accent-primary transition-all"
+          aria-label="듣는 볼륨"
+        />
+      </div>
 
       <div className="flex-1" />
 
@@ -624,18 +546,20 @@ function Lecturer() {
             className="absolute inset-0 bg-black/40 z-40"
             onClick={() => setShowLangPanel(false)}
           />
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[min(90%,560px)] bg-black/80 backdrop-blur-md text-white rounded-xl shadow-2xl p-8">
-            <div className="grid grid-cols-2 gap-12">
+          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[min(90%,480px)] bg-black/80 backdrop-blur-md text-white rounded-xl shadow-2xl p-6">
+            <div className="grid grid-cols-2 gap-0">
               <LangColumn
                 title="자막"
                 value={primaryLang}
                 onChange={setPrimaryLang}
               />
-              <LangColumn
-                title="두번째 자막"
-                value={secondaryLang}
-                onChange={setSecondaryLang}
-              />
+              <div className="border-l border-white/20 pl-6">
+                <LangColumn
+                  title="두번째 자막"
+                  value={secondaryLang}
+                  onChange={setSecondaryLang}
+                />
+              </div>
             </div>
             <button
               type="button"
@@ -659,14 +583,8 @@ function Lecturer() {
           : 'bg-background'
       }`}
     >
-      {/* Cursor spotlight (global overlay - 강의자 로컬) */}
-      <CursorSpotlight
-        x={cursorPos?.x ?? 0}
-        y={cursorPos?.y ?? 0}
-        visible={spotlightEnabled && cursorPos !== null}
-        color={spotlightColor}
-        mode="fixed"
-      />
+      {/* Cursor spotlight (global overlay) */}
+      <CursorSpotlight enabled={spotlightEnabled} color={spotlightColor} />
 
       {/* 자막 다운로드 모달 */}
       {showTranscriptModal && sessionId && (
@@ -1290,7 +1208,7 @@ interface LangColumnProps {
 function LangColumn({ title, value, onChange }: LangColumnProps) {
   return (
     <div>
-      <h3 className="text-lg font-semibold mb-4 pl-6">{title}</h3>
+      <h3 className="text-lg font-semibold mb-4">{title}</h3>
       <ul className="space-y-2">
         {LANG_OPTIONS.map((opt) => {
           const selected = value === opt.value
