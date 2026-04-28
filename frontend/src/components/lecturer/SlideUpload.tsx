@@ -1,13 +1,53 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLectureStore } from '@/stores/lectureStore'
 import { API_BASE, switchToRealtimeMode, switchToSlideMode } from '@/lib/api'
 
+type Stage = 'pending' | 'ocr' | 'translate' | 'bundling' | 'completed' | 'failed'
+
+const STAGE_LABELS: Record<Stage, string> = {
+  pending: '준비 중',
+  ocr: 'OCR',
+  translate: '번역',
+  bundling: 'PDF 생성',
+  completed: '완료',
+  failed: '실패',
+}
+
+function formatEta(seconds: number): string {
+  if (seconds < 1) return '거의 다 됨'
+  if (seconds < 60) return `약 ${Math.ceil(seconds)}초 남음`
+  const min = Math.floor(seconds / 60)
+  const sec = Math.ceil(seconds % 60)
+  if (sec === 0 || sec === 60) return `약 ${sec === 60 ? min + 1 : min}분 남음`
+  return `약 ${min}분 ${sec}초 남음`
+}
+
 function SlideUpload() {
   const inputRef = useRef<HTMLInputElement>(null)
-  const [uploadProgress, setUploadProgress] = useState(0)
+  const [stage, setStage] = useState<Stage>('pending')
+  const [stageCurrent, setStageCurrent] = useState(0)
+  const [stageTotal, setStageTotal] = useState(0)
+  // ETA 앵커: 백엔드 폴링 응답 받은 시점의 (남은 초, 받은 시각). 클라이언트에서 1초씩 깎음
+  const [etaAnchor, setEtaAnchor] = useState<{ value: number; at: number } | null>(null)
+  const [displayEta, setDisplayEta] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const { slideStatus, setSlideId, setSlideStatus, modelMode, setModelMode } = useLectureStore()
+
+  // 1초마다 displayEta를 깎아냄 (다음 폴링까지의 부드러운 카운트다운)
+  useEffect(() => {
+    if (etaAnchor === null) {
+      setDisplayEta(null)
+      return
+    }
+    const tick = () => {
+      const elapsed = (Date.now() - etaAnchor.at) / 1000
+      setDisplayEta(Math.max(0, etaAnchor.value - elapsed))
+    }
+    tick()
+    const id = setInterval(tick, 1000)
+    return () => clearInterval(id)
+  }, [etaAnchor])
 
   const handleFileSelect = useCallback(async (file: File) => {
     // 파일 타입 검증
@@ -59,6 +99,9 @@ function SlideUpload() {
         const data = await response.json()
 
         if (data.status === 'completed') {
+          setStage('completed')
+          setEtaAnchor(null)
+          setDisplayEta(0)
           setSlideStatus('ready')
           // 옵션 B: 번역 완료 후 즉시 실시간 모드로 전환
           setModelMode('switching')
@@ -74,14 +117,27 @@ function SlideUpload() {
         }
 
         if (data.status === 'failed') {
+          setStage('failed')
           setError('강의자료 처리에 실패했습니다.')
           setSlideStatus('none')
           return
         }
 
-        // 진행률 업데이트
-        if (data.total_pages > 0) {
-          setUploadProgress(Math.round((data.processed_pages / data.total_pages) * 100))
+        // 단계 정보 업데이트
+        const nextStage = (data.stage ?? 'pending') as Stage
+        const current = data.stage_current ?? 0
+        const total = data.stage_total ?? 0
+        setStage(nextStage)
+        setStageCurrent(current)
+        setStageTotal(total)
+
+        // ETA 앵커 갱신 — 백엔드는 페이지 완료 시점에만 갱신하고, 폴링 응답 시점에 흐른 시간만큼
+        // 이미 감산해서 보내줌. 클라이언트는 그 시점부터 1초씩 깎아내림 (위 useEffect)
+        const eta = data.eta_seconds
+        if (typeof eta === 'number') {
+          setEtaAnchor({ value: eta, at: Date.now() })
+        } else {
+          setEtaAnchor(null)
         }
 
         setTimeout(checkStatus, 2000)
@@ -140,19 +196,49 @@ function SlideUpload() {
           <p className="text-xs text-onSurface/50 mt-1">업로드 즉시 번역이 시작됩니다</p>
         </div>
       ) : slideStatus === 'uploading' || slideStatus === 'processing' ? (
-        <div className="text-center py-6">
-          <div className="w-12 h-12 mx-auto mb-3 relative">
-            <svg className="animate-spin w-12 h-12 text-primary" fill="none" viewBox="0 0 24 24">
+        <div className="py-4 px-2">
+          <div className="flex items-center gap-2 mb-2">
+            <svg className="animate-spin w-4 h-4 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
             </svg>
+            <p className="text-sm text-onSurface/80">
+              {slideStatus === 'uploading'
+                ? '업로드 중...'
+                : stage === 'bundling'
+                  ? 'PDF 생성 중...'
+                  : stage === 'pending'
+                    ? '준비 중...'
+                    : stageTotal > 0
+                      ? `${STAGE_LABELS[stage]} ${stageCurrent}/${stageTotal}`
+                      : `${STAGE_LABELS[stage]}...`}
+            </p>
           </div>
-          <p className="text-sm text-onSurface/80">
-            {slideStatus === 'uploading' ? '업로드 중...' : '처리 중...'}
+
+          {/* 진행률 바 — 단계별 표시 */}
+          <div className="w-full h-1.5 bg-primaryContainer/40 rounded-full overflow-hidden">
+            {stage === 'bundling' ? (
+              <div className="h-full w-full bg-primary/60 animate-pulse" />
+            ) : (
+              <div
+                className="h-full bg-primary transition-all duration-300"
+                style={{
+                  width:
+                    stageTotal > 0
+                      ? `${Math.min(100, Math.round((stageCurrent / stageTotal) * 100))}%`
+                      : '0%',
+                }}
+              />
+            )}
+          </div>
+
+          <p className="text-xs text-onSurface/50 mt-2 text-center">
+            {slideStatus === 'uploading'
+              ? ''
+              : displayEta !== null
+                ? formatEta(displayEta)
+                : '남은 시간 계산 중...'}
           </p>
-          {slideStatus === 'processing' && uploadProgress > 0 && (
-            <p className="text-xs text-onSurface/50 mt-1">{uploadProgress}% 완료</p>
-          )}
         </div>
       ) : slideStatus === 'ready' ? (
         <div className="text-center py-2">

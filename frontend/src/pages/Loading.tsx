@@ -2,11 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { API_BASE } from '@/lib/api'
 
-const MODEL_KEYS = ['asr', 'nmt_asr', 'tts', 'ocr'] as const
+const MODEL_KEYS = ['asr', 'nmt_asr', 'tts', 'ocr', 'vlm'] as const
 type ModelKey = typeof MODEL_KEYS[number]
 
 interface ModelEntry {
-  status: 'pending' | 'loading' | 'done' | 'error'
+  status: 'pending' | 'loading' | 'done' | 'error' | 'skipped'
   progress: number
   label: string
   desc: string
@@ -17,6 +17,7 @@ const DEFAULT_MODELS: Record<ModelKey, ModelEntry> = {
   nmt_asr: { status: 'pending', progress: 0, label: 'NMT-ASR (실시간 번역)', desc: '로딩 중...' },
   tts:     { status: 'pending', progress: 0, label: 'TTS (음성합성)', desc: '로딩 중...' },
   ocr:     { status: 'pending', progress: 0, label: 'OCR (문자인식)', desc: '로딩 중...' },
+  vlm:     { status: 'pending', progress: 0, label: 'VLM (슬라이드 번역)', desc: '다운로드 대기 중...' },
 }
 
 function StatusIcon({ status }: { status: ModelEntry['status'] }) {
