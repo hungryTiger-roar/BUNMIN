@@ -18,14 +18,17 @@ from app.utils.firewall import ensure_firewall_rule
 from app.utils.network import SERVER_PORT, get_lan_ip
 
 # VLM Base 모델 (translate_slide_v3.py와 동일한 env 사용)
-# 우선순위: 환경변수 > 로컬 디렉토리(setup이 받은 곳) > HF repo_id
-# 로컬 디렉토리가 있으면 HF 캐시(symlink) 우회 → Windows 호환성
+# .env 값이 상대 경로면 프로젝트 루트 기준 절대 경로로 변환, repo_id면 그대로
 from pathlib import Path as _Path
-_VLM_LOCAL_DIR = _Path(__file__).parent.parent.parent / "models" / "qwen3-vl-8b-instruct"
-VLM_BASE_MODEL = os.environ.get(
-    "VLM_BASE_MODEL",
-    str(_VLM_LOCAL_DIR) if _VLM_LOCAL_DIR.is_dir() else "Qwen/Qwen3-VL-8B-Instruct",
-)
+_PROJECT_ROOT = _Path(__file__).parent.parent.parent
+def _resolve_vlm(value: str) -> str:
+    p = _Path(value)
+    if p.is_absolute():
+        return value
+    candidate = _PROJECT_ROOT / value
+    return str(candidate) if candidate.is_dir() else value
+
+VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL", "Qwen/Qwen3-VL-8B-Instruct"))
 
 # PyInstaller 번들 여부에 따라 frontend dist 경로 결정
 if getattr(sys, 'frozen', False):
