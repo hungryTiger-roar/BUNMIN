@@ -40,7 +40,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    exclude: ['@ricky0123/vad-web', 'onnxruntime-web'],
+    exclude: ['@ricky0123/vad-web', 'onnxruntime-web', 'kokoro-js'],
   },
   server: {
     port: 3000,
