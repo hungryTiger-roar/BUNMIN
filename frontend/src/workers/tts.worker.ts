@@ -16,7 +16,7 @@ import { PiperWebEngine, OnnxWebRuntime, PhonemizeWebRuntime } from 'piper-tts-w
 
 // 지원 언어 → Piper voice ID (useTTS.ts의 VOICE_MAP과 동일하게 유지)
 const VOICE_MAP: Record<string, string> = {
-  en: 'en_US-libritts_r-medium',
+  en: 'en_US-lessac-medium',
   de: 'de_DE-thorsten-medium',
   es: 'es_MX-ald-medium',
   ru: 'ru_RU-irina-medium',
