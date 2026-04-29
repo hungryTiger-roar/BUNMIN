@@ -359,7 +359,8 @@ async def process_slide(slide_id: str, pdf_path: Path):
         try:
             from translate_slide_v3 import (
                 stage_ocr_surya, stage_translate, stage_overlay,
-                unload_surya_models, unload_vlm_model
+                unload_surya_models, unload_vlm_model,
+                build_glossary_from_ocr_results
             )
             vlm_available = True
             print(f"[Slides] VLM 번역 모듈 로드 완료")
@@ -394,6 +395,22 @@ async def process_slide(slide_id: str, pdf_path: Path):
             print(f"[Slides] Surya OCR 완료, 모델 언로드...")
             await asyncio.to_thread(unload_surya_models)
 
+        # ========== 용어집 빌드 (전체 슬라이드 1회) ==========
+        glossary = {}
+        if vlm_available:
+            try:
+                # 강의 제목: 첫 페이지 첫 번째 텍스트 또는 기본값
+                lecture_title = "Lecture"
+                if ocr_results and ocr_results[0][1]:
+                    first_text = ocr_results[0][1][0].get("ocr_text", "")
+                    if first_text:
+                        lecture_title = first_text[:50]  # 최대 50자
+                glossary = await asyncio.to_thread(
+                    build_glossary_from_ocr_results, ocr_results, lecture_title
+                )
+            except Exception as e:
+                print(f"[Slides] 용어집 빌드 실패 (무시): {e}")
+
         # ========== 2단계: 모든 페이지 번역 (VLM) ==========
         _set_stage(slide_id, "translate", total_pages)
         for i, (image_path, regions) in enumerate(ocr_results):
@@ -403,7 +420,7 @@ async def process_slide(slide_id: str, pdf_path: Path):
             if vlm_available and regions is not None:
                 try:
                     print(f"[Slides] {slide_id} 페이지 {i + 1}/{total_pages} VLM 번역 중...")
-                    regions = await asyncio.to_thread(stage_translate, str(image_path), regions)
+                    regions = await asyncio.to_thread(stage_translate, str(image_path), regions, glossary)
                     await asyncio.to_thread(stage_overlay, str(image_path), regions, str(translated_path))
 
                     for region in regions:
