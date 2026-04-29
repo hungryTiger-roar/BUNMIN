@@ -6,10 +6,55 @@ NMT (Neural Machine Translation) 서비스
 1. CTranslate2 (models/opus-mt-ct2/ 존재 시) — CPU 3~5배 가속, int8 양자화
 2. HuggingFace transformers 폴백 — ctranslate2 미설치 또는 변환 전 상태
 """
+import re
 import subprocess
 from pathlib import Path
 
-_CT2_MODEL_DIR = Path(__file__).parent.parent.parent.parent / "models" / "opus-mt-ct2"
+_MODELS_ROOT = Path(__file__).parent.parent.parent.parent / "models"
+
+
+def _ct2_model_dir(model_name: str) -> Path:
+    # "Helsinki-NLP/opus-mt-tc-big-ko-en" → "models/opus-mt-tc-big-ko-en-ct2"
+    return _MODELS_ROOT / (model_name.split("/")[-1] + "-ct2")
+
+
+# 대학교 강의 맥락: 관사·접속사·조동사는 정상적으로 반복되므로 반복 감지 제외
+_STOP_WORDS = frozenset({
+    'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'as',
+    'and', 'or', 'but', 'not', 'so', 'if', 'it', 'this', 'that',
+    'you', 'we', 'i', 'do', 'can', 'will', 'have', 'has', 'had', 'just',
+    'how', 'what', 'when', 'where', 'who', 'which', 'about',
+})
+
+
+def _postprocess_translation(text: str) -> str:
+    """opus-mt 반복 생성 제거:
+    1) 문장 경계 이후 추가 생성된 내용 제거
+    2) 동일 어간 단어가 세 번 등장하면 첫 반복 직전까지만 반환 (기술 용어 정상 반복 허용)
+    """
+    text = text.strip()
+
+    # 1) 첫 완성 문장 이후 내용 제거 ("How are you? How are..." → "How are you?")
+    m = re.match(r'^(.+?[.!?])\s+\S', text)
+    if m:
+        return m.group(1)
+
+    # 2) 단어 반복 감지 — stop word 제외, 동일 어간이 세 번째 등장 시 그 전까지만 반환
+    words = text.split()
+    seen: dict[str, int] = {}
+    for i, w in enumerate(words):
+        stem = re.sub(r'[^a-z]', '', w.lower())  # 구두점·대소문자 제거
+        if not stem or stem in _STOP_WORDS:
+            continue
+        seen[stem] = seen.get(stem, 0) + 1
+        if seen[stem] >= 3:
+            truncated = ' '.join(words[:i]).rstrip(',.;')
+            if truncated:
+                return truncated + '.'
+            break
+
+    return text
 
 
 class NMTService:
@@ -39,46 +84,45 @@ class NMTService:
             import ctranslate2
             import sentencepiece as spm
 
-            if not _CT2_MODEL_DIR.exists():
-                self._convert_model()
+            ct2_dir = _ct2_model_dir(self.model_name)
+            if not ct2_dir.exists():
+                self._convert_model(ct2_dir)
 
             self._ct2 = ctranslate2.Translator(
-                str(_CT2_MODEL_DIR),
+                str(ct2_dir),
                 device=self.device,
                 inter_threads=2,
             )
             self._sp_src = spm.SentencePieceProcessor()
-            self._sp_src.Load(str(_CT2_MODEL_DIR / "source.spm"))
+            self._sp_src.Load(str(ct2_dir / "source.spm"))
             self._sp_tgt = spm.SentencePieceProcessor()
-            self._sp_tgt.Load(str(_CT2_MODEL_DIR / "target.spm"))
+            self._sp_tgt.Load(str(ct2_dir / "target.spm"))
 
-            print(f"[NMT] CTranslate2 opus-mt-ko-en 로드 완료 ({self.device}, int8)")
+            print(f"[NMT] CTranslate2 {self.model_name} 로드 완료 ({self.device}, int8)")
             return True
         except Exception as e:
             print(f"[NMT] CTranslate2 로드 실패 → HuggingFace 폴백: {e}")
             return False
 
-    def _convert_model(self):
-        print(f"[NMT] CTranslate2 변환 중: {self.model_name} → {_CT2_MODEL_DIR}")
-        _CT2_MODEL_DIR.parent.mkdir(parents=True, exist_ok=True)
+    def _convert_model(self, ct2_dir: Path):
+        print(f"[NMT] CTranslate2 변환 중: {self.model_name} → {ct2_dir}")
+        ct2_dir.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             [
                 "ct2-transformers-converter",
                 "--model", self.model_name,
-                "--output_dir", str(_CT2_MODEL_DIR),
+                "--output_dir", str(ct2_dir),
                 "--quantization", "int8",
                 "--force",
             ],
             check=True,
         )
-        # SentencePiece 파일은 변환기가 생성하지 않으므로 HF에서 직접 받아 복사
-        # (CT2 번역기 로드 후 self._sp_src.Load()에서 필요)
         from huggingface_hub import hf_hub_download
         for spm in ["source.spm", "target.spm"]:
             hf_hub_download(
                 repo_id=self.model_name,
                 filename=spm,
-                local_dir=str(_CT2_MODEL_DIR),
+                local_dir=str(ct2_dir),
             )
         print("[NMT] 변환 완료!")
 
@@ -111,28 +155,34 @@ class NMTService:
         target_lang: str = "en",
         max_length: int = 512,
     ) -> str:
-        if not text.strip():
+        normalized = text.strip()
+        if not normalized:
             return ""
         try:
             if self._mode == "ct2":
-                return self._translate_ct2(text)
+                result = self._translate_ct2(normalized)
             else:
-                return self._translate_hf(text, max_length)
+                result = self._translate_hf(normalized, max_length)
+            return _postprocess_translation(result)
         except Exception as e:
             print(f"[NMT] 번역 오류: {e}")
             return ""
 
     def _translate_ct2(self, text: str) -> str:
         tokens = self._sp_src.Encode(text, out_type=str)
-        # 곱수 2.5(긴 문장 잘림 방지 더 여유) + floor 20
-        max_decoding_length = max(20, int(len(tokens) * 2.5))
+        # floor를 입력 길이 기준으로 — 절댓값 20은 짧은 입력에서 hallucination 유발
+        # 영어 학술 문장은 한국어보다 길어지므로 2.5x 여유 확보
+        max_decoding_length = max(len(tokens) + 5, int(len(tokens) * 2.5))
+        # 짧은 입력(≤6토큰)은 greedy — beam search가 대소문자 변형 반복 토큰을 선택하는 문제 방지
+        beam_size = 1 if len(tokens) <= 6 else 4
         results = self._ct2.translate_batch(
             [tokens],
             max_decoding_length=max_decoding_length,
-            beam_size=2,                # beam search 활성화
-            length_penalty=1.0,         # 중립 — 0.6은 긴 번역 자르는 부작용
-            repetition_penalty=2.0,
-            no_repeat_ngram_size=2,
+            beam_size=beam_size,
+            length_penalty=1.0,
+            # 2.5: 기술 용어 정상 반복을 허용하면서 hallucination 억제 (3.0은 과도하게 억제)
+            repetition_penalty=2.5,
+            no_repeat_ngram_size=3,
         )
         return self._sp_tgt.Decode(results[0].hypotheses[0]).strip()
 
@@ -140,16 +190,17 @@ class NMTService:
         import torch
         inputs = self._hf_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
-        # CT2 경로와 동일 정책 — 곱수 2.5 + floor 20
-        adjusted_max = min(max_length, max(20, int(inputs["input_ids"].shape[1] * 2.5)))
+        input_len = inputs["input_ids"].shape[1]
+        adjusted_max = min(max_length, max(input_len + 5, int(input_len * 2.5)))
+        num_beams = 1 if input_len <= 6 else 4
         with torch.no_grad():
             outputs = self._hf_model.generate(
                 **inputs,
                 max_length=adjusted_max,
-                num_beams=2,
+                num_beams=num_beams,
                 length_penalty=1.0,
-                repetition_penalty=2.0,
-                no_repeat_ngram_size=2,
+                repetition_penalty=2.5,
+                no_repeat_ngram_size=3,
             )
         return self._hf_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
 

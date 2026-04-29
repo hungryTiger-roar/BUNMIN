@@ -59,7 +59,7 @@ ASR_MODEL = {
 # NMT 모델 (실시간 번역) — CTranslate2 변환 대상
 NMT_MODEL = {
     "repo_id": "Helsinki-NLP/opus-mt-ko-en",
-    "local_dir": MODELS_DIR / "opus-mt-ct2",
+    "local_dir": MODELS_DIR / "opus-mt-ko-en-ct2",
     "description": "NMT 실시간 번역 모델 (CTranslate2 int8)",
     "size": "~150MB",
 }
