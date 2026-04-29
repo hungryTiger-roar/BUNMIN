@@ -80,3 +80,37 @@ glossary/
 
 # 자동 생성 API 문서
 docs/api/
+
+# 테스트 파일 및 출력물 (프로젝트 루트)
+test_*.py
+test_*.png
+test_*.pdf
+test_*.json
+test_*.txt
+compare_*.py
+create_*.py
+inference_vlm.py
+run_test.bat
+check_p*.png
+*_regions.json
+*_translated*.json
+*_translated*.png
+
+# 레거시 스크립트 (v3 사용)
+translate_slide.py
+translate_slide_v2.py
+
+# 프론트엔드 빌드 캐시
+frontend/.vite/
+
+# 로컬 모델 캐시
+backend/app/services/models/
+models/asr-*/
+models/*_new/
+models/nul
+
+# 테스트용 PDF
+models/*.pdf
+
+# 로컬 데이터셋
+datasets/

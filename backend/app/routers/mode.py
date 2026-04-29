@@ -3,7 +3,7 @@
 
 슬라이드 번역 모드 ↔ 실시간 번역 모드 전환
 - /api/mode/slide: VLM 온디맨드 로드, 실시간 모델 언로드
-- /api/mode/realtime: VLM 언로드, ASR/NMT/OCR 로드
+- /api/mode/realtime: VLM 언로드, ASR/NMT 로드
 - /api/mode/current: 현재 모드 확인
 """
 
@@ -135,7 +135,7 @@ async def switch_to_slide_mode():
 
 @router.post("/realtime", response_model=ModeResponse)
 async def switch_to_realtime_mode():
-    """실시간 번역 모드로 전환 (VLM 언로드, ASR/NMT-ASR/OCR 로드)"""
+    """실시간 번역 모드로 전환 (VLM 언로드, ASR/NMT-ASR 로드)"""
     global _current_mode, _first_realtime_load
 
     async with _mode_lock:
@@ -143,7 +143,7 @@ async def switch_to_realtime_mode():
             return ModeResponse(
                 mode=Mode.REALTIME.value,
                 message="이미 실시간 번역 모드입니다",
-                models_loaded=["asr", "nmt_asr", "ocr"]
+                models_loaded=["asr", "nmt_asr"]
             )
 
         # VLM 언로드
@@ -162,11 +162,10 @@ async def switch_to_realtime_mode():
             from app.config import ModelConfig
             from app.services.asr_service import ASRService
             from app.services.nmt_service import NMTService
-            from app.services.ocr_service import OCRService
-            from app.routers import ws, slides
+            from app.routers import ws
 
             # ASR
-            print(f"\n[1/3] ASR 음성인식 모델 로드 중...")
+            print(f"\n[1/2] ASR 음성인식 모델 로드 중...")
             if _first_realtime_load:
                 print(f"  모델: {ModelConfig.ASR_MODEL}")
                 print(f"  디바이스: {ModelConfig.ASR_DEVICE} / {ModelConfig.ASR_DTYPE}")
@@ -179,10 +178,10 @@ async def switch_to_realtime_mode():
             )
             ws.set_asr_service(asr_service)
             loaded.append("asr")
-            print(f"  [1/3] ASR 로드 완료 ✓")
+            print(f"  [1/2] ASR 로드 완료 ✓")
 
             # NMT-ASR
-            print(f"\n[2/3] NMT 번역 모델 로드 중...")
+            print(f"\n[2/2] NMT 번역 모델 로드 중...")
             if _first_realtime_load:
                 print(f"  모델: {ModelConfig.NMT_ASR_MODEL}")
                 print(f"  디바이스: {ModelConfig.NMT_ASR_DEVICE} / int8")
@@ -195,17 +194,9 @@ async def switch_to_realtime_mode():
             )
             ws.set_nmt_service(nmt_asr_service)
             loaded.append("nmt_asr")
-            print(f"  [2/3] NMT 로드 완료 ✓")
+            print(f"  [2/2] NMT 로드 완료 ✓")
 
-            # OCR
-            print(f"\n[3/3] OCR 모델 로드 중...")
-            if _first_realtime_load:
-                print(f"  모델: RapidOCR (Korean PP-OCRv4)")
-            ocr_service = await asyncio.to_thread(OCRService)
-            ws.set_ocr_service(ocr_service)
-            slides.set_ocr_service(ocr_service)
-            loaded.append("ocr")
-            print(f"  [3/3] OCR 로드 완료 ✓")
+            # OCR은 실시간 모드에서 사용하지 않음 (슬라이드 번역 전용)
 
         except Exception as e:
             print(f"[Mode] 실시간 모델 로드 실패: {e}")
