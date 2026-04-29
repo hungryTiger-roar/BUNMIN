@@ -76,8 +76,19 @@ def _dtype(device: str) -> str:
     return "float16" if device == "cuda" else "float32"
 
 
+# 모델 값 해석: 상대 경로면 프로젝트 루트 기준으로 절대 경로 변환,
+# 절대 경로/HF repo_id는 그대로. → .env에서 로컬 경로/repo_id 자유롭게 지정 가능
+_PROJECT_ROOT = APP_DATA_DIR.parent
+def _resolve_model(value: str) -> str:
+    p = Path(value)
+    if p.is_absolute():
+        return value
+    candidate = _PROJECT_ROOT / value
+    return str(candidate) if candidate.is_dir() else value
+
+
 class ModelConfig:
-    ASR_MODEL  = os.environ.get("ASR_MODEL",  "ghost613/faster-whisper-large-v3-turbo-korean")
+    ASR_MODEL  = _resolve_model(os.environ.get("ASR_MODEL", "ghost613/faster-whisper-large-v3-turbo-korean"))
     ASR_DEVICE = _resolve_device("ASR_DEVICE", "asr")
     ASR_DTYPE  = _dtype(ASR_DEVICE)  # faster-whisper는 compute_type을 ASRService 내부에서 결정
 

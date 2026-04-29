@@ -28,10 +28,19 @@ class OCRService:
 
     def _load_rapidocr(self):
         try:
+            from pathlib import Path
             from rapidocr_onnxruntime import RapidOCR
-            from huggingface_hub import hf_hub_download
-            rec_path  = hf_hub_download("cycloneboy/korean_PP-OCRv4_rec_infer", "model.onnx")
-            dict_path = hf_hub_download("cycloneboy/korean_PP-OCRv4_rec_infer", "korean_dict.txt")
+            # 로컬 디렉토리 우선 (setup이 받은 곳), 없으면 HF hub 폴백
+            # Windows 심볼릭 미지원/Electron 배포 환경에서 hf_hub_download가 깨지는 문제 회피
+            local_dir = Path(__file__).parent.parent.parent.parent / "models" / "rapidocr-korean"
+            if (local_dir / "model.onnx").is_file() and (local_dir / "korean_dict.txt").is_file():
+                rec_path  = str(local_dir / "model.onnx")
+                dict_path = str(local_dir / "korean_dict.txt")
+                print(f"[OCR] RapidOCR 로컬 모델 사용: {local_dir}")
+            else:
+                from huggingface_hub import hf_hub_download
+                rec_path  = hf_hub_download("cycloneboy/korean_PP-OCRv4_rec_infer", "model.onnx")
+                dict_path = hf_hub_download("cycloneboy/korean_PP-OCRv4_rec_infer", "korean_dict.txt")
             self.ocr  = RapidOCR(rec_model_path=rec_path, rec_keys_path=dict_path)
             self.mode = "rapidocr"
             print("[OCR] RapidOCR (Korean PP-OCRv4) 초기화 완료")
