@@ -20,16 +20,18 @@ import hashlib
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Optional
 
-from dotenv import load_dotenv
+# config.py가 dev/frozen 양쪽에서 .env를 적절한 위치에서 로드함 — 여기서 중복 로드 X
+from app.config import USER_DATA_DIR, PROJECT_ROOT
 
-# .env 로드
-load_dotenv(Path(__file__).parent.parent.parent.parent / ".env")
-
-GLOSSARY_DIR = Path(__file__).parent.parent.parent.parent / "glossary"
-GLOSSARY_DIR.mkdir(exist_ok=True)
+# 용어집 캐시 위치:
+#   - frozen: %LOCALAPPDATA%/Aunion AI/glossary/  (사용자별 영구 저장)
+#   - dev: <root>/glossary/                       (저장소 표준 위치)
+GLOSSARY_DIR = (USER_DATA_DIR / "glossary") if getattr(sys, 'frozen', False) else (PROJECT_ROOT / "glossary")
+GLOSSARY_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class GlossaryBuilder:

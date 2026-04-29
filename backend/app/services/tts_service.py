@@ -8,14 +8,27 @@ import struct
 import wave
 from pathlib import Path
 
-_MODEL_DIR = Path(__file__).parent / "models"
+from app.config import resolve_model_dir, USER_DATA_DIR
+
 _BASE_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium"
+_LEGACY_MODEL_DIR = Path(__file__).parent / "models"  # 기존 dev 위치 (호환)
+
+
+def _piper_model_dir() -> Path:
+    """Piper 모델 디렉토리. 표준 위치 → legacy backend/app/services/models/ → user data 순서."""
+    found = resolve_model_dir("tts-piper-en-us-lessac")
+    if found is not None:
+        return found
+    if (_LEGACY_MODEL_DIR / "en_US-lessac-medium.onnx").is_file():
+        return _LEGACY_MODEL_DIR
+    return USER_DATA_DIR / "models" / "tts-piper-en-us-lessac"
 
 
 class TTSService:
     def __init__(self, model_name: str = "piper", device: str = "cpu"):
-        self.model_path = _MODEL_DIR / "en_US-lessac-medium.onnx"
-        self.config_path = _MODEL_DIR / "en_US-lessac-medium.onnx.json"
+        model_dir = _piper_model_dir()
+        self.model_path = model_dir / "en_US-lessac-medium.onnx"
+        self.config_path = model_dir / "en_US-lessac-medium.onnx.json"
         self.sampling_rate = 22050
         self.voice = None
         self._ensure_model()
@@ -24,7 +37,7 @@ class TTSService:
     def _ensure_model(self):
         if self.model_path.exists() and self.config_path.exists():
             return
-        _MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        self.model_path.parent.mkdir(parents=True, exist_ok=True)
         try:
             import requests
         except ImportError:

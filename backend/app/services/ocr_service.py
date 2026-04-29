@@ -28,12 +28,12 @@ class OCRService:
 
     def _load_rapidocr(self):
         try:
-            from pathlib import Path
             from rapidocr_onnxruntime import RapidOCR
-            # 로컬 디렉토리 우선 (setup이 받은 곳), 없으면 HF hub 폴백
+            from app.config import resolve_model_dir
+            # 로컬 디렉토리 우선 (setup이 받은 곳/동봉), 없으면 HF hub 폴백
             # Windows 심볼릭 미지원/Electron 배포 환경에서 hf_hub_download가 깨지는 문제 회피
-            local_dir = Path(__file__).parent.parent.parent.parent / "models" / "rapidocr-korean"
-            if (local_dir / "model.onnx").is_file() and (local_dir / "korean_dict.txt").is_file():
+            local_dir = resolve_model_dir("rapidocr-korean")
+            if local_dir and (local_dir / "model.onnx").is_file() and (local_dir / "korean_dict.txt").is_file():
                 rec_path  = str(local_dir / "model.onnx")
                 dict_path = str(local_dir / "korean_dict.txt")
                 print(f"[OCR] RapidOCR 로컬 모델 사용: {local_dir}")
