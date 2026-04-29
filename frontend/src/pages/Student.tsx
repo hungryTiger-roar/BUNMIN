@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, type CSSProperties } from 'react'
+﻿import { useEffect, useState, useRef, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import {
@@ -142,6 +142,8 @@ function Student() {
   const [showParticipants, setShowParticipants] = useState(false)
   const [materials, setMaterials] = useState<MaterialItem[]>([])
   const [showTranscriptModal, setShowTranscriptModal] = useState(false)
+  const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 1000)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
   useEffect(() => {
     if (sessionId) setShowTranscriptModal(true)
@@ -177,6 +179,17 @@ function Student() {
     const handle = () => setIsFullscreen(!!document.fullscreenElement)
     document.addEventListener('fullscreenchange', handle)
     return () => document.removeEventListener('fullscreenchange', handle)
+  }, [])
+
+  // 창 너비에 따라 사이드바 자동 접기/펼치기
+  useEffect(() => {
+    const onResize = () => {
+      const narrow = window.innerWidth < 1000
+      setIsNarrow(narrow)
+      if (!narrow) setSidebarOpen(false)
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
   }, [])
 
   useEffect(() => {
@@ -354,7 +367,7 @@ function Student() {
       </header>
 
       {/* 메인: 화면 + 채팅 */}
-      <main className="flex-1 flex gap-4 px-4 py-4 overflow-hidden min-h-0">
+      <main className="flex-1 flex gap-4 px-4 py-4 overflow-hidden min-h-0 relative">
         <div className="flex-1 flex items-center justify-center min-w-0 min-h-0">
           <div
             ref={slideRef}
@@ -765,8 +778,27 @@ function Student() {
           </div>
         </div>
 
+        {/* 사이드바 토글 탭 — 좁은 화면에서만 표시 */}
+        {isNarrow && (
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(v => !v)}
+            className={`absolute top-1/2 -translate-y-1/2 z-30 flex items-center justify-center w-4 h-20 bg-surface border border-r-0 border-primaryContainer rounded-l-lg shadow-md transition-all duration-300 ease-in-out ${
+              sidebarOpen ? 'right-80' : 'right-0'
+            }`}
+            aria-label={sidebarOpen ? '패널 숨기기' : '패널 보기'}
+          >
+            <svg className="w-3 h-3 text-onSurface" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d={sidebarOpen ? 'M9 5l7 7-7 7' : 'M15 19l-7-7 7-7'} />
+            </svg>
+          </button>
+        )}
+
         {/* 우측 사이드: 강의자료 + 채팅 */}
-        <aside className="w-80 flex flex-col gap-3 min-h-0">
+        <aside className={isNarrow
+          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 min-h-0 py-4 bg-background z-20 transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
+          : 'w-80 flex-shrink-0 flex flex-col gap-3 min-h-0'
+        }>
           {/* 오늘의 강의 자료 — 강의 시작 후에만 노출 */}
           {isLectureStarted && (
           <div

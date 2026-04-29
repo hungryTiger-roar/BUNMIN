@@ -98,6 +98,8 @@ function Lecturer() {
   const [spotlightEnabled, setSpotlightEnabled] = useState(false)
   const [spotlightColor, setSpotlightColor] = useState(SPOTLIGHT_PRESETS[0])
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 1000)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [slideBoxWidth, setSlideBoxWidth] = useState<number | undefined>(undefined)
 
   // 커서 위치 상태 (브라우저 전체 기준 vw/vh 비율, 0~1)
@@ -213,6 +215,17 @@ function Lecturer() {
     const handle = () => setIsFullscreen(!!document.fullscreenElement)
     document.addEventListener('fullscreenchange', handle)
     return () => document.removeEventListener('fullscreenchange', handle)
+  }, [])
+
+  // 창 너비에 따라 사이드바 자동 접기/펼치기
+  useEffect(() => {
+    const onResize = () => {
+      const narrow = window.innerWidth < 1000
+      setIsNarrow(narrow)
+      if (!narrow) setSidebarOpen(false)
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
   }, [])
 
   // 슬라이드 박스 폭을 추적해 하단 바 폭을 맞춤 (aspect ratio 변경 시에도 정확히 정렬)
@@ -881,7 +894,7 @@ function Lecturer() {
       </header>
 
       {/* 메인 */}
-      <div className="flex-1 flex gap-4 p-4 overflow-hidden min-h-0">
+      <div className="flex-1 flex gap-4 p-4 overflow-hidden min-h-0 relative">
         {/* 메인 영역 — 세로: 슬라이드(fill) + 하단 바(auto) */}
         <div className="flex-1 flex flex-col gap-3 min-w-0 min-h-0 overflow-hidden">
           {/* 슬라이드/화면 박스 — Student와 동일: h-full + aspect로 세로 고정, 가로만 비율에 따라 변경 */}
@@ -1092,8 +1105,27 @@ function Lecturer() {
             </div>
           </div>
 
+        {/* 사이드바 토글 탭 — 좁은 화면에서만 표시 */}
+        {isNarrow && (
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(v => !v)}
+            className={`absolute top-1/2 -translate-y-1/2 z-30 flex items-center justify-center w-4 h-20 bg-surface border border-r-0 border-primaryContainer rounded-l-lg shadow-md transition-all duration-300 ease-in-out ${
+              sidebarOpen ? 'right-80' : 'right-0'
+            }`}
+            aria-label={sidebarOpen ? '패널 숨기기' : '패널 보기'}
+          >
+            <svg className="w-3 h-3 text-onSurface" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d={sidebarOpen ? 'M9 5l7 7-7 7' : 'M15 19l-7-7 7-7'} />
+            </svg>
+          </button>
+        )}
+
         {/* 사이드바 */}
-        <aside className="w-80 flex-shrink-0 flex flex-col gap-3 overflow-hidden min-h-0">
+        <aside className={isNarrow
+          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 overflow-hidden min-h-0 py-4 bg-background z-20 transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
+          : 'w-80 flex-shrink-0 flex flex-col gap-3 overflow-hidden min-h-0'
+        }>
           <div className="flex-1 overflow-y-auto scrollbar-hide space-y-3 min-h-0">
             
             {/* 기존 마이크/오디오 카드 */}
