@@ -141,18 +141,34 @@ def cfg(key: str, default=None):
 # VLM 설정 (환경변수 또는 기본값) — _BASE_DIR(파일 상단 정의)이 dev/frozen 자동 분기
 _PROJECT_ROOT = _BASE_DIR
 
+# 가중치 검사 — 빈 폴더(설치 시 Inno Setup Excludes 부산물)를 valid로 오인 방지
+_VLM_WEIGHT_EXTS = (".safetensors", ".bin")
+
+
+def _has_vlm_weights(directory: Path) -> bool:
+    if not directory.is_dir():
+        return False
+    for ext in _VLM_WEIGHT_EXTS:
+        try:
+            if next(directory.rglob(f"*{ext}"), None) is not None:
+                return True
+        except (OSError, PermissionError):
+            continue
+    return False
+
+
 def _resolve_vlm(value: str) -> str:
     p = Path(value)
     if p.is_absolute():
         return value
     candidate = _PROJECT_ROOT / value
-    return str(candidate) if candidate.is_dir() else value
+    return str(candidate) if _has_vlm_weights(candidate) else value
 
 
 def _vlm_default() -> str:
     """env 미지정 시 기본값. 로컬 동봉본 있으면 거기, 없으면 HF repo_id."""
     local = _PROJECT_ROOT / "models" / "qwen3-vl-8b-instruct"
-    if local.is_dir():
+    if _has_vlm_weights(local):
         return str(local)
     return "Qwen/Qwen3-VL-8B-Instruct"
 

@@ -41,12 +41,31 @@ os.environ.setdefault("HF_HOME", str(CACHE_DIR / "huggingface"))
 
 
 # ─── 모델 디렉토리 해석 ──────────────────────────────────────────────────────
+# 흔한 가중치 파일 확장자 — 빈 폴더(설치 시 Inno Setup의 Excludes로 파일은 빠지고
+# 디렉토리만 남는 경우)를 valid 모델로 오인하지 않기 위한 검사 키.
+_WEIGHT_EXTS = (".safetensors", ".bin", ".onnx", ".pt", ".pth")
+
+
+def _has_model_weights(directory: Path) -> bool:
+    """디렉토리에 모델 가중치 파일이 하나라도 있으면 True."""
+    if not directory.is_dir():
+        return False
+    for ext in _WEIGHT_EXTS:
+        try:
+            if next(directory.rglob(f"*{ext}"), None) is not None:
+                return True
+        except (OSError, PermissionError):
+            continue
+    return False
+
+
 def resolve_model_dir(name: str) -> Path | None:
-    """주어진 이름의 모델 디렉토리를 다음 순서로 찾는다.
+    """주어진 이름의 모델 디렉토리를 다음 순서로 찾는다 (가중치 파일이 있어야 valid).
       1) USER_DATA_DIR/models/<name>/  — 사용자가 다운로드한 모델 (예: VLM)
       2) INSTALL_DIR/models/<name>/    — 설치 시 동봉된 모델 (frozen) / 저장소 (dev)
       3) PROJECT_ROOT/models/<name>/   — dev 전용 추가 폴백
-    존재하는 첫 디렉토리를 반환, 없으면 None.
+    가중치가 있는 첫 디렉토리를 반환, 없으면 None.
+    빈 디렉토리(설치 시 Inno Setup Excludes 부산물 등)는 무시.
     """
     candidates = [
         USER_DATA_DIR / "models" / name,
@@ -55,7 +74,7 @@ def resolve_model_dir(name: str) -> Path | None:
     if not _FROZEN:
         candidates.append(PROJECT_ROOT / "models" / name)
     for c in candidates:
-        if c.is_dir():
+        if _has_model_weights(c):
             return c
     return None
 
