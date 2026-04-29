@@ -11,7 +11,6 @@ import { useAudioCapture } from '@/hooks/useAudioCapture'
 import { useScreenCapture } from '@/hooks/useScreenCapture'
 import SlideUpload from '@/components/lecturer/SlideUpload'
 import SlideViewer from '@/components/lecturer/SlideViewer'
-import ConnectionStatus from '@/components/common/ConnectionStatus'
 import ParticipantsPanel from '@/components/common/ParticipantsPanel'
 import AudioLevelMeter from '@/components/lecturer/AudioLevelMeter'
 import MicButton from '@/components/lecturer/MicButton'
@@ -766,7 +765,21 @@ function Lecturer() {
           <h1 className="text-xl font-special-gothic tracking-wide bg-gradient-to-r from-gradientBlue to-gradientPurple bg-clip-text text-transparent">
             Aunion AI
           </h1>
-          <ConnectionStatus isConnected={isConnected} />
+          {isLectureStarted && !isPaused && (
+            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-error text-white text-xs font-semibold rounded-full">
+              <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
+              LIVE
+            </span>
+          )}
+          {isPaused && (
+            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-yellow-500 text-white text-xs font-semibold rounded-full">
+              <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 6 8" aria-hidden="true">
+                <rect x="0" y="0" width="2" height="8" rx="0.5" />
+                <rect x="4" y="0" width="2" height="8" rx="0.5" />
+              </svg>
+              Paused
+            </span>
+          )}
 
           {/* 강사 이름 입력 */}
           <div className="flex items-center gap-1.5 px-2 py-1 bg-primaryContainer/50 rounded-lg text-sm text-onSurface">
@@ -779,27 +792,11 @@ function Lecturer() {
               onChange={(e) => setLecturerName(e.target.value)}
               onBlur={(e) => sendLecturerName(e.target.value.trim())}
               placeholder="교수명"
-              className="bg-transparent text-sm w-28 px-1 py-0.5 focus:outline-none placeholder-onSurface/40"
+              className="bg-transparent text-sm w-28 px-1 py-0.5 focus:outline-none placeholder-onSurface/70"
               maxLength={40}
             />
           </div>
 
-          {modelMode === 'switching' && (
-            <span className="px-2.5 py-1 bg-orange-500 text-white text-xs font-medium rounded-full animate-pulse">
-              AI 전환 중
-            </span>
-          )}
-          {isLectureStarted && (
-            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-error text-white text-xs font-semibold rounded-full">
-              <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
-              LIVE
-            </span>
-          )}
-          {isPaused && (
-            <span className="px-2.5 py-1 bg-yellow-500 text-white text-xs font-semibold rounded-full">
-              Paused
-            </span>
-          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -919,7 +916,7 @@ function Lecturer() {
                           slideFilename.replace(/\.pdf$/i, '') ||
                           '미기재 시 업로드한 파일명으로 표기됩니다.'
                         }
-                        className="w-full px-3 py-2.5 bg-primaryContainer/40 border border-primaryContainer rounded-lg text-sm text-onSurface placeholder-onSurface/40 focus:outline-none focus:ring-2 focus:ring-primary"
+                        className="w-full px-3 py-2.5 bg-white border border-primaryContainer rounded-lg text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-primary"
                         maxLength={80}
                       />
                     </div>
@@ -1298,7 +1295,7 @@ function Lecturer() {
                   onChange={(e) => setChatInput(e.target.value)}
                   placeholder={isConnected ? '메시지 입력...' : '연결 중...'}
                   disabled={!isConnected}
-                  className="flex-1 bg-primaryContainer/40 text-onSurface placeholder-onSurface/40 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-60"
+                  className="flex-1 bg-primaryContainer/40 text-onSurface placeholder-onSurface/70 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-60"
                   maxLength={200}
                 />
                 <button
@@ -1315,7 +1312,6 @@ function Lecturer() {
                   participants={participants}
                   fallbackStudentCount={studentCount}
                   onClose={() => setShowParticipants(false)}
-                  variant="light"
                 />
               )}
             </div>
@@ -1330,7 +1326,6 @@ function Lecturer() {
                 participants={participants}
                 fallbackStudentCount={studentCount}
                 onClose={() => setShowParticipants(false)}
-                variant="light"
               />
             </div>
           )}

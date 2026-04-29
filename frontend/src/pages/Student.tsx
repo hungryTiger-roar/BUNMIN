@@ -8,8 +8,8 @@ import {
   type AspectRatio,
 } from '@/stores/preferencesStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
-import ConnectionStatus from '@/components/common/ConnectionStatus'
 import ParticipantsPanel from '@/components/common/ParticipantsPanel'
+import MaterialViewToggle from '@/components/common/MaterialViewToggle'
 import { StudentCursorOverlay, useCursorOverlay } from '@/components/student/StudentCursorOverlay'
 import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
 
@@ -102,6 +102,7 @@ function Student() {
     lectureTitle,
     slideFilename,
     sessionId,
+    materialMode,
   } = useLectureStore()
 
   const displayTitle =
@@ -208,7 +209,7 @@ function Student() {
 
   const currentSlideImage = slidePages[currentPage - 1]?.imageUrl
   const slideImageUrl = currentSlideImage
-    ? `${API_BASE}${currentSlideImage}`
+    ? `${API_BASE}${currentSlideImage}${materialMode === 'translated' ? '?translated=true' : ''}`
     : null
 
   const latestSubtitle = subtitles[subtitles.length - 1]
@@ -269,16 +270,19 @@ function Student() {
       <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-primaryContainer bg-surface backdrop-blur-md shadow-sm flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
           <h1 className="text-lg font-special-gothic tracking-wide">Aunion AI</h1>
-          <ConnectionStatus isConnected={isConnected} />
-          {isLectureStarted && (
+          {isLectureStarted && !isPaused && (
             <span className="flex items-center gap-1.5 px-2.5 py-1 bg-error text-white text-xs font-semibold rounded-full shadow-lg shadow-error/30">
               <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
               LIVE
             </span>
           )}
           {isPaused && (
-            <span className="px-2.5 py-1 bg-yellow-500/80 text-white text-xs font-semibold rounded-full">
-              일시정지
+            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-yellow-500 text-white text-xs font-semibold rounded-full shadow-lg shadow-yellow-500/30">
+              <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 6 8" aria-hidden="true">
+                <rect x="0" y="0" width="2" height="8" rx="0.5" />
+                <rect x="4" y="0" width="2" height="8" rx="0.5" />
+              </svg>
+              Paused
             </span>
           )}
           {slideStatus === 'ready' && totalPages > 0 && (
@@ -358,6 +362,11 @@ function Student() {
           >
             {/* 강의자 커서 오버레이 (ref 기반, 리렌더링 없음) */}
             <StudentCursorOverlay spotlightRef={spotlightRef} />
+
+            {/* 강의자료 원본/번역 토글 (슬라이드 표시 중일 때만) */}
+            {presentationMode === 'slide' && slideStatus === 'ready' && slideImageUrl && (
+              <MaterialViewToggle className="absolute top-3 right-3 z-30" />
+            )}
 
             {/* 상단 강의 제목 바 — 마우스 올렸을 때만 표시 */}
             {displayTitle && (
@@ -758,7 +767,8 @@ function Student() {
 
         {/* 우측 사이드: 강의자료 + 채팅 */}
         <aside className="w-80 flex flex-col gap-3 min-h-0">
-          {/* 오늘의 강의 자료 */}
+          {/* 오늘의 강의 자료 — 강의 시작 후에만 노출 */}
+          {isLectureStarted && (
           <div
             className="flex-shrink-0 flex flex-col bg-surface text-onSurface backdrop-blur-md rounded-xl border border-primaryContainer shadow-sm overflow-hidden"
             style={{ maxHeight: '50%' }}
@@ -841,6 +851,7 @@ function Student() {
               )}
             </div>
           </div>
+          )}
 
           {/* 채팅 패널 (참여자 패널이 오버레이로 덮음) */}
           <div className="relative flex-1 flex flex-col bg-surface text-onSurface backdrop-blur-md rounded-xl border border-primaryContainer shadow-sm overflow-hidden min-h-0">
@@ -919,7 +930,6 @@ function Student() {
                 participants={participants}
                 fallbackStudentCount={studentCount}
                 onClose={() => setShowParticipants(false)}
-                variant="dark"
               />
             )}
           </div>

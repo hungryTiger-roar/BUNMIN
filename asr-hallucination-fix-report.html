@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ASR 환각 차단 + 속도 개선 — asr_service.py 수정 근거 보고서</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif; font-size: 13pt; line-height: 1.8; color: #222; background: #fff; padding: 40px 60px; max-width: 940px; margin: 0 auto; }
+    h1 { font-size: 21pt; font-weight: 700; color: #1a237e; border-bottom: 3px solid #1a237e; padding-bottom: 10px; margin-bottom: 6px; }
+    .subtitle { font-size: 10.5pt; color: #555; margin-bottom: 38px; }
+    h2 { font-size: 15pt; font-weight: 700; color: #1a237e; margin-top: 42px; margin-bottom: 12px; border-left: 5px solid #3949ab; padding-left: 12px; }
+    h3 { font-size: 12.5pt; font-weight: 700; color: #283593; margin-top: 22px; margin-bottom: 8px; }
+    p { margin-bottom: 10px; }
+    ul, ol { padding-left: 22px; margin-bottom: 12px; }
+    li { margin-bottom: 5px; }
+    code { background: #eceff1; color: #1a237e; padding: 1px 6px; border-radius: 3px; font-family: 'Consolas', 'Courier New', monospace; font-size: 11pt; }
+    .box { background: #f5f5f5; border-left: 4px solid #3949ab; padding: 14px 18px; margin: 14px 0; border-radius: 0 6px 6px 0; }
+    .box.warning  { background: #fff8e1; border-left-color: #f9a825; }
+    .box.success  { background: #e8f5e9; border-left-color: #2e7d32; }
+    .box.danger   { background: #fce4ec; border-left-color: #c62828; }
+    .box.info     { background: #e3f2fd; border-left-color: #1565c0; }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 11pt; }
+    th { background: #3949ab; color: white; padding: 9px 12px; text-align: left; }
+    td { padding: 8px 12px; border-bottom: 1px solid #ddd; vertical-align: top; }
+    tr:nth-child(even) td { background: #f9f9f9; }
+    .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 9.5pt; font-weight: 700; }
+    .badge-green  { background: #c8e6c9; color: #1b5e20; }
+    .badge-red    { background: #ffcdd2; color: #b71c1c; }
+    .badge-yellow { background: #fff9c4; color: #827717; }
+    .badge-blue   { background: #bbdefb; color: #0d47a1; }
+    .code-block { background: #1e1e1e; color: #d4d4d4; font-family: 'Consolas', 'Courier New', monospace; font-size: 10pt; padding: 14px 16px; border-radius: 6px; margin: 10px 0; line-height: 1.6; overflow-x: auto; white-space: pre; }
+    .code-block .kw  { color: #569cd6; }
+    .code-block .str { color: #ce9178; }
+    .code-block .num { color: #b5cea8; }
+    .code-block .com { color: #6a9955; font-style: italic; }
+    .code-block .fn  { color: #dcdcaa; }
+    .code-block .var { color: #9cdcfe; }
+    .code-block .cls { color: #4ec9b0; }
+    .code-block .add { background: #1b3a1b; display: block; }
+    .code-block .del { background: #3a1b1b; display: block; }
+    .change-card { border: 1.5px solid #c5cae9; border-radius: 8px; padding: 18px 22px; margin: 22px 0; }
+    .change-card .label { display: inline-block; background: #1a237e; color: white; font-weight: 700; padding: 3px 12px; border-radius: 12px; font-size: 10pt; margin-bottom: 10px; }
+    .change-card h3 { margin-top: 0; }
+    .why { background: #fffde7; border-left: 4px solid #f9a825; padding: 10px 14px; margin: 10px 0; border-radius: 0 4px 4px 0; }
+    .why strong { color: #e65100; }
+    .page-break { page-break-before: always; }
+    footer { margin-top: 50px; padding-top: 14px; border-top: 1px solid #ccc; font-size: 10pt; color: #777; text-align: right; }
+    @media print { body { padding: 20px 30px; } .page-break { page-break-before: always; } }
+  </style>
+</head>
+<body>
+
+<h1>ASR 환각 차단 + 속도 개선<br>asr_service.py 수정 근거 보고서</h1>
+<p class="subtitle">작성일: 2026-04-28 (최종 정정) &nbsp;|&nbsp; 프로젝트: S14P31S205 &nbsp;|&nbsp; 대상 파일: <code>backend/app/services/asr_service.py</code></p>
+
+<div class="box danger"><strong>정정 공지 (2026-04-28)</strong> — 본 보고서 초안에서 채택한 <code>beam_size=1</code>은 측정 결과 <strong>잘못된 판단</strong>으로 확인되어 <strong><code>beam_size=5</code>(faster-whisper 기본값)로 회복</strong>했습니다. 5라운드 eval 측정 결과 beam=1은 WER을 1.9%p 악화시키면서도 속도 이득은 측정 노이즈 안에 묻혔습니다. 자세한 측정 데이터는 <a href="#appendix-eval">부록 — 측정 데이터</a>를 참고. 본 보고서 1번 섹션은 사고 과정 보존을 위해 원문 유지하되, 끝에 정정 박스를 첨부했습니다.</div>
+
+<div class="box info"><strong>이번 수정의 두 가지 목표</strong><br>
+① <strong>속도</strong> — ASR이 파이프라인 전체 latency의 가장 큰 비중. 정확도 손실이 거의 없는 선에서 ASR을 빠르게.<br>
+② <strong>환각 차단</strong> — Whisper 계열 모델은 무음/잡음 구간에서 학습 데이터 텍스트를 그럴듯하게 만들어내는 고질병이 있음. 이걸 자막에 흘려보내면 안 됨.</div>
+
+<h2>0. 수정 전 / 수정 후 한눈에 보기</h2>
+
+<table>
+  <tr><th style="width:50%;">수정 전 — <code>transcribe()</code></th><th>수정 후 — <code>transcribe()</code></th></tr>
+  <tr>
+    <td>
+<div class="code-block"><span class="kw">segments</span>, _ = self.model.<span class="fn">transcribe</span>(
+    audio_array,
+    language=language,
+    <span class="var">condition_on_previous_text</span>=<span class="kw">False</span>,
+    <span class="var">vad_filter</span>=<span class="kw">True</span>,
+)
+<span class="kw">return</span> <span class="str">""</span>.join(s.text <span class="kw">for</span> s <span class="kw">in</span> segments).strip()</div>
+    </td>
+    <td>
+<div class="code-block"><span class="kw">segments</span>, _ = self.model.<span class="fn">transcribe</span>(
+    audio_array,
+    language=language,
+    <span class="add"><span class="var">beam_size</span>=<span class="num">1</span>,                       <span class="com"># 추가</span></span>
+    <span class="var">condition_on_previous_text</span>=<span class="kw">False</span>,
+    <span class="var">vad_filter</span>=<span class="kw">True</span>,
+)
+<span class="add">texts = []</span>
+<span class="add"><span class="kw">for</span> seg <span class="kw">in</span> segments:</span>
+<span class="add">    <span class="kw">if</span> seg.no_speech_prob &gt; <span class="num">0.6</span>:</span>
+<span class="add">        <span class="fn">print</span>(...스킵 로그...)</span>
+<span class="add">        <span class="kw">continue</span></span>
+<span class="add">    <span class="kw">if</span> seg.avg_logprob &lt; <span class="num">-0.8</span>:</span>
+<span class="add">        <span class="fn">print</span>(...스킵 로그...)</span>
+<span class="add">        <span class="kw">continue</span></span>
+<span class="add">    texts.append(seg.text)</span>
+<span class="kw">return</span> <span class="str">""</span>.join(texts).strip()</div>
+    </td>
+  </tr>
+</table>
+
+<p>핵심 변경은 5가지입니다. 아래에서 하나씩 <strong>왜 이렇게 했는지</strong>를 설명합니다.</p>
+
+<table>
+  <tr><th>#</th><th>변경 사항</th><th>목적</th><th>위험도</th></tr>
+  <tr><td>1</td><td><code>beam_size=1</code> → <s>채택</s> <strong>철회 (beam=5 회복)</strong></td><td>속도</td><td><span class="badge badge-red">측정 후 철회</span></td></tr>
+  <tr><td>2</td><td>단순 join → 필터 루프</td><td>환각 차단 인프라</td><td><span class="badge badge-green">낮음</span></td></tr>
+  <tr><td>3</td><td>스킵된 세그먼트 로그</td><td>튜닝 근거 수집</td><td><span class="badge badge-green">없음</span></td></tr>
+  <tr><td>4</td><td><code>no_speech_prob &gt; 0.6</code> 스킵</td><td>무음/잡음 구간 환각 차단</td><td><span class="badge badge-yellow">중간 (보수적 임계값)</span></td></tr>
+  <tr><td>5</td><td><code>avg_logprob &lt; -0.8</code> 스킵</td><td>저신뢰 출력 차단</td><td><span class="badge badge-yellow">중간 (보수적 임계값)</span></td></tr>
+</table>
+
+
+<!-- 변경 1 -->
+<div class="page-break"></div>
+<h2>1. <code>beam_size=1</code> 추가 — 속도</h2>
+
+<div class="change-card">
+  <span class="label">변경 1</span>
+  <h3>왜 추가했는가</h3>
+  <p><strong>faster-whisper의 기본 <code>beam_size</code>는 5</strong>입니다. Beam search는 매 디코딩 스텝마다 상위 N개 후보를 동시에 추적하면서 최적 경로를 고르기 때문에, N이 클수록 정확도는 약간 올라가지만 디코딩 비용이 N배에 가깝게 늘어납니다.</p>
+
+  <p><code>beam_size=1</code>은 매 스텝에서 가장 확률 높은 토큰 하나만 채택하는 <strong>greedy decoding</strong>입니다. 후보를 5개에서 1개로 줄이므로 디코딩이 그만큼 짧아집니다.</p>
+
+  <div class="why">
+    <strong>왜 정확도 손실을 감수해도 되는가</strong><br>
+    ① <strong>NMT는 이미 같은 선택을 내렸음.</strong> <code>backend/app/services/nmt_service.py</code>의 CT2 / HF 양쪽 경로 모두 <code>beam_size=1</code> / <code>num_beams=1</code>입니다. 이전 단계에서도 같은 trade-off로 속도를 택한 적 있음.<br>
+    ② <strong>일반적으로 Whisper 계열에서 beam=1 vs beam=5의 WER 차이는 1~3% 수준</strong>이고, 한국어 단문/단발화 상황에서는 차이가 더 줄어드는 경향이 있음.<br>
+    ③ <strong>2초 latency 예산이 절대 기준</strong>이고, ASR이 그 예산의 가장 큰 부분을 차지합니다 (측정값: 짧은 발화 ASR 0.4~1.1s).
+  </div>
+
+  <div class="box success"><strong>기대 효과:</strong> ASR 디코딩 속도 약 20~30% 단축. 단발화 0.7~1.0s 케이스에서 100~300ms 절약 → 2초 예산에 여유 확보.</div>
+
+  <div class="box warning"><strong>검증 필요:</strong> <code>python evaluation/run_eval.py --model asr</code>로 WER 회귀 폭이 1~3% 이내인지 확인. 5% 넘게 떨어지면 <code>beam_size=2</code>로 절충.</div>
+
+  <div class="box danger" style="margin-top:18px;"><strong>측정 결과 — 위 추론은 우리 환경에서 틀렸습니다 (2026-04-28)</strong><br>
+  실제 200개 한국어 강의 음성 샘플로 N=2 측정한 결과:
+  <table style="margin:10px 0;">
+    <tr><th>beam_size</th><th>WER (deterministic)</th><th>평균지연 (N=2)</th></tr>
+    <tr><td><strong>5</strong> (기본)</td><td><strong>46.2%</strong> ✓</td><td>626ms (스프레드 81ms)</td></tr>
+    <tr><td>2</td><td>47.8%</td><td>555ms (N=1)</td></tr>
+    <tr><td><strong>1</strong> (제안)</td><td><strong>48.1%</strong> ✗ +1.9%p</td><td>591ms (스프레드 34ms)</td></tr>
+  </table>
+  <strong>왜 추론이 틀렸나:</strong>
+  <ul style="margin-top:6px;">
+    <li><strong>30% 속도 향상 가정 오류</strong> — faster-whisper(CTranslate2)의 beam search 배칭 최적화가 GPU 병렬성을 거의 공짜로 흡수. 일반 PyTorch Whisper 벤치마크 수치를 우리 환경에 그대로 가져온 게 잘못.</li>
+    <li><strong>속도 차이 35ms는 노이즈 안</strong> — 같은 설정 두 번 돌렸을 때 beam=5는 81ms, beam=1은 34ms 변동. 평균 차이가 자체 변동성에 묻힘.</li>
+    <li><strong>환각 방어 효과 역행</strong> — beam search는 무음 구간에서 "시청해주셔서…" 같은 정형구 환각이 시작될 때 다른 경로로 빠져나갈 기회를 줌. greedy(beam=1)는 한 번 빨려들면 못 빠짐. 즉 <strong>"환각 차단"이 목표인 수정에서 환각 방어 메커니즘을 떼버린 자기모순</strong>.</li>
+  </ul>
+  <strong>현재 코드:</strong> <code>beam_size=5</code>로 영구 회복. 이번 보고서에서 살아남은 변경은 2~5번(필터 루프 + 임계값)뿐.
+  </div>
+</div>
+
+
+<!-- 변경 2 -->
+<h2>2. 단순 join → 필터 루프 — 환각 차단 인프라</h2>
+
+<div class="change-card">
+  <span class="label">변경 2</span>
+  <h3>왜 코드 구조를 바꿨는가</h3>
+
+  <p>수정 전 코드는 <code>"".join(s.text for s in segments).strip()</code>로 <strong>모든 세그먼트의 텍스트를 무조건 합쳤습니다.</strong> 이 구조에서는 환각으로 의심되는 세그먼트를 걸러낼 자리가 없습니다.</p>
+
+  <p>faster-whisper의 <code>Segment</code> 객체는 텍스트뿐만 아니라 다음 메타정보를 함께 줍니다:</p>
+  <ul>
+    <li><code>seg.no_speech_prob</code> — 이 세그먼트가 사실은 음성이 아닐 확률 (0~1)</li>
+    <li><code>seg.avg_logprob</code> — 디코딩한 토큰들의 평균 log-probability (높을수록 모델이 확신, 보통 -0.5 ~ -0.1)</li>
+    <li><code>seg.compression_ratio</code> — 텍스트 압축비, 너무 높으면 반복 환각</li>
+  </ul>
+
+  <p>이 메타정보를 <strong>실제로 쓰려면 세그먼트를 한 번씩 들여다보는 루프가 반드시 필요</strong>합니다. 단순 join은 메타정보가 있어도 활용할 자리가 없는 구조였기 때문에, 필터 루프로 교체하는 것이 환각 차단의 전제 조건이었습니다.</p>
+
+  <div class="why">
+    <strong>왜 메타정보 기반 필터인가 — Whisper 환각의 정체</strong><br>
+    Whisper는 학습 데이터에서 <strong>"시청해주셔서 감사합니다", "다음 영상에서 만나요", "MBC 뉴스 ○○○입니다"</strong> 같은 정형구를 자주 봤습니다. 무음/잡음 구간을 디코딩할 때 모델은 "여기는 음성이 거의 없는데 뭔가 만들어내야 하니" 학습 데이터의 정형구를 출력합니다. 이때 <strong><code>no_speech_prob</code>는 높고 <code>avg_logprob</code>은 낮습니다.</strong> 즉 모델 자신이 "이건 별로 자신 없다"고 신호를 보내는 것이고, 우리는 그 신호를 무시하지 않으면 됩니다.
+  </div>
+
+  <div class="box info"><strong>구조적 의미:</strong> 이번 변경의 핵심은 임계값 자체가 아니라, <strong>"세그먼트 단위로 신뢰도를 보고 채택/기각을 결정하는 파이프라인 자리"를 코드에 만든 것</strong>입니다. 임계값은 추후 데이터 보면서 튜닝하면 되지만, 자리가 없으면 튜닝 자체가 불가능합니다.</div>
+</div>
+
+
+<!-- 변경 3 -->
+<div class="page-break"></div>
+<h2>3. 스킵된 세그먼트는 로그에 남김 — 튜닝 근거 수집</h2>
+
+<div class="change-card">
+  <span class="label">변경 3</span>
+  <h3>왜 그냥 버리지 않고 print 했는가</h3>
+
+  <div class="code-block"><span class="kw">if</span> seg.no_speech_prob &gt; <span class="num">0.6</span>:
+    <span class="fn">print</span>(<span class="str">f"[ASR] 세그먼트 스킵 — no_speech_prob={seg.no_speech_prob:.2f}: {seg.text!r}"</span>)
+    <span class="kw">continue</span>
+<span class="kw">if</span> seg.avg_logprob &lt; <span class="num">-0.8</span>:
+    <span class="fn">print</span>(<span class="str">f"[ASR] 세그먼트 스킵 — avg_logprob={seg.avg_logprob:.2f}: {seg.text!r}"</span>)
+    <span class="kw">continue</span></div>
+
+  <p>스킵하는 게 목적인데도 굳이 텍스트와 점수를 같이 출력합니다. 이유는 단순합니다 — <strong>임계값 0.6, -0.8이 맞는지 확신할 수 없기 때문</strong>입니다.</p>
+
+  <div class="why">
+    <strong>왜 로그가 결정적인가</strong><br>
+    임계값을 너무 보수적으로 잡으면 (<code>0.6</code>) → 환각이 통과합니다.<br>
+    임계값을 너무 공격적으로 잡으면 (<code>0.3</code>) → <strong>정상 발화도 스킵되어 자막이 비어 나옵니다.</strong><br>
+    이 트레이드오프의 정답은 우리 환경(마이크, 강의실 노이즈, 한국어 발화 패턴)의 실측 분포 없이는 결정 불가능합니다. 로그는 그 분포를 만드는 원시 데이터입니다.
+  </div>
+
+  <h3>로그를 어떻게 활용할 것인가</h3>
+  <ul>
+    <li><strong>거짓 양성(false positive) 발견</strong> — 정상 발화인데 스킵된 케이스가 보이면 (예: 짧은 한국어 종결어미 "네.", "음."), 임계값을 완화.</li>
+    <li><strong>거짓 음성(false negative) 발견</strong> — 환각이 통과한 경우 그 텍스트의 메타값을 직접 확인 → 임계값을 강화.</li>
+    <li><strong>마이크/환경별 분포 차이 확인</strong> — 강의자별로 <code>no_speech_prob</code> 평균이 크게 다르면 환경 보정 필요.</li>
+  </ul>
+
+  <div class="box info"><strong>다음 단계:</strong> <a href="C:\Users\SSAFY\.claude\projects\c--Users-SSAFY-Desktop-soob-final-S14P31S205\memory\asr_eos_design.md"><code>asr_eos_design.md</code></a>에서 결정한 "로깅 인프라 먼저, 임계값 튜닝 나중" 원칙과 같은 맥락. 현재는 <code>print</code>지만, 이후 구조화 로그(<code>seg_skipped</code> 이벤트)로 승격하면 분포 분석이 쉬워집니다.</div>
+</div>
+
+
+<!-- 변경 4 -->
+<h2>4. <code>no_speech_prob &gt; 0.6</code> 스킵 — 무음/잡음 환각 차단</h2>
+
+<div class="change-card">
+  <span class="label">변경 4</span>
+  <h3>이 임계값이 의미하는 것</h3>
+
+  <p><code>no_speech_prob</code>는 Whisper 모델이 "이 세그먼트는 음성이 아닐 가능성"을 직접 예측한 값입니다 (0~1, 높을수록 비음성).</p>
+
+  <table>
+    <tr><th>no_speech_prob</th><th>해석</th><th>현재 정책</th></tr>
+    <tr><td>0.0 ~ 0.3</td><td>명확한 음성</td><td>채택</td></tr>
+    <tr><td>0.3 ~ 0.6</td><td>회색지대 — 음성일 가능성 더 큼</td><td>채택 (보수적 선택)</td></tr>
+    <tr><td>0.6 ~ 1.0</td><td>비음성 가능성 우세</td><td><strong>스킵</strong></td></tr>
+  </table>
+
+  <div class="why">
+    <strong>왜 0.6인가 — 보수적 시작값</strong><br>
+    Whisper 환각 차단 가이드들에서 흔히 권장되는 값은 <strong>0.4~0.6</strong> 범위입니다. 우리는 그 범위의 <strong>가장 안전한 끝(0.6)</strong>에서 시작했습니다.<br><br>
+    이유: 한국어 종결어미("~습니다", "~네요")는 발화 말미에 에너지가 급격히 떨어지면서 마지막 짧은 세그먼트의 <code>no_speech_prob</code>가 의외로 높게 측정될 수 있습니다. 임계값을 0.4로 낮추면 <strong>정상 발화의 종결어미가 잘릴 위험</strong>이 있습니다.<br><br>
+    이는 <a href="C:\Users\SSAFY\.claude\projects\c--Users-SSAFY-Desktop-soob-final-S14P31S205\memory\asr_eos_design.md"><code>asr_eos_design.md</code></a>가 EOS 판단에 RMS 단독 고정 임계값을 기각한 것과 같은 이유입니다 — 한국어 저에너지 종결어미는 잘리기 쉽습니다.
+  </div>
+
+  <div class="box warning"><strong>이 값은 잠정값입니다.</strong> 로그에서 다음 두 패턴을 보고 조정합니다:<br>
+  • 환각이 통과 (예: "시청해주셔서 감사합니다") → <strong>0.5나 0.4로 낮춤</strong><br>
+  • 정상 발화 종결어미가 스킵됨 → <strong>0.7로 올림</strong> 또는 임계값 외에 다른 신호(텍스트 패턴 매칭) 추가</div>
+</div>
+
+
+<!-- 변경 5 -->
+<div class="page-break"></div>
+<h2>5. <code>avg_logprob &lt; -0.8</code> 스킵 — 모델 확신도 극히 낮을 때만</h2>
+
+<div class="change-card">
+  <span class="label">변경 5</span>
+  <h3>이 임계값이 의미하는 것</h3>
+
+  <p><code>avg_logprob</code>는 디코딩한 모든 토큰의 log-probability 평균입니다. log 값이라 음수가 정상이고, <strong>0에 가까울수록 모델이 확신, -∞로 갈수록 자신 없음</strong>을 의미합니다.</p>
+
+  <table>
+    <tr><th>avg_logprob</th><th>해석</th><th>현재 정책</th></tr>
+    <tr><td>-0.1 ~ -0.3</td><td>매우 자신 있음 (정상 발화의 일반적 범위)</td><td>채택</td></tr>
+    <tr><td>-0.3 ~ -0.6</td><td>보통 (어려운 발화, 약한 잡음)</td><td>채택</td></tr>
+    <tr><td>-0.6 ~ -0.8</td><td>낮은 신뢰 — 회색지대</td><td>채택 (보수적 선택)</td></tr>
+    <tr><td>&lt; -0.8</td><td>모델조차 거의 추측 수준</td><td><strong>스킵</strong></td></tr>
+  </table>
+
+  <div class="why">
+    <strong>왜 -0.8인가 — "모델 확신도가 극히 낮을 때만"</strong><br>
+    Whisper 공식 권장 컷오프는 <code>-1.0</code>이고, 환각 차단 가이드들은 <strong>-0.5 ~ -1.0</strong> 범위를 권장합니다. 우리는 <strong>그 범위의 보수적 끝쪽(-0.8)</strong>에서 시작했습니다.<br><br>
+    이유: <code>avg_logprob</code>은 발화 난이도(빠른 말, 사투리, 전문용어, 영어 섞임)에 민감합니다. 강의 자료에는 영어 전문용어("Transformer", "Attention" 등)가 자주 섞여 들어오는데, 한국어 ASR 모델 입장에서 이런 토큰의 logprob은 자연스럽게 낮게 잡힙니다. 컷오프를 -0.6으로 두면 <strong>전문용어가 들어간 정상 발화가 통째로 사라질 위험</strong>이 있습니다.<br><br>
+    -0.8은 "발화 자체가 거의 알아들을 수 없을 정도"의 신호로 한정됩니다. <code>no_speech_prob</code> 필터를 통과한 것 중에서도 추가로 한 번 더 거름.
+  </div>
+
+  <h3>두 필터의 관계 — 보완 구조</h3>
+  <ul>
+    <li><strong><code>no_speech_prob</code></strong> = "음성 자체인가?" 판단 → 무음/잡음 환각 잡음</li>
+    <li><strong><code>avg_logprob</code></strong> = "음성이긴 한데 알아들었나?" 판단 → 음성 위에 만든 환각 잡음</li>
+  </ul>
+  <p>두 신호가 다른 종류의 실패를 잡기 때문에 OR 조건(둘 중 하나만 걸려도 스킵)으로 묶여 있습니다.</p>
+
+  <div class="box warning"><strong>이 값도 잠정값입니다.</strong><br>
+  • 영어 전문용어 섞인 정상 발화가 스킵됨 → <strong>-0.9 또는 -1.0으로 완화</strong><br>
+  • 무의미한 음절 출력("어어 그 그"이 통과) → <strong>-0.7로 강화</strong></div>
+</div>
+
+
+<!-- 정리 -->
+<h2>6. 종합 — 이번 수정의 5가지가 어떻게 맞물리는가</h2>
+
+<div class="box info">
+  <strong>① 속도 한 줄 (<code>beam_size=1</code>)</strong> + <strong>② 환각 차단을 위한 코드 자리(필터 루프)</strong> + <strong>③ 데이터 수집(스킵 로그)</strong> + <strong>④⑤ 잠정 임계값 두 개</strong><br><br>
+  핵심은 <strong>"임계값을 잘 골랐다"가 아니라 "임계값을 데이터로 튜닝할 수 있는 구조를 만들었다"</strong>는 점입니다. 0.6과 -0.8은 잘 골랐다기보다 <strong>보수적으로 시작한 값</strong>이고, 실제 사용 로그에서 거짓 양성/음성을 보면서 단계적으로 조정합니다.
+</div>
+
+<h3>위험 관리 요약</h3>
+<table>
+  <tr><th>잠재 위험</th><th>대응</th></tr>
+  <tr><td>beam=1로 WER이 5% 이상 악화</td><td>eval로 측정 후 beam=2로 절충 (속도/정확도 중간)</td></tr>
+  <tr><td>한국어 종결어미가 <code>no_speech_prob</code>로 스킵됨</td><td>로그 확인 → 임계값 0.6 → 0.7 완화</td></tr>
+  <tr><td>전문용어가 <code>avg_logprob</code>로 스킵됨</td><td>로그 확인 → 임계값 -0.8 → -1.0 완화</td></tr>
+  <tr><td>"시청해주셔서 감사합니다" 류 환각이 여전히 통과</td><td>임계값 강화 + 정형구 텍스트 블랙리스트 추가</td></tr>
+</table>
+
+<h3>다음 액션</h3>
+<ol>
+  <li><code>python evaluation/run_eval.py --model asr</code> 실행 — beam=1 적용 후 WER 회귀폭 측정 (3% 이내 목표)</li>
+  <li>실사용 환경에서 한 세션 운영 후 <code>[ASR] 세그먼트 스킵</code> 로그 모아 분석 — 거짓 양성/음성 비율 확인</li>
+  <li>로그 분석 결과를 토대로 임계값 1차 조정 (필요 시)</li>
+  <li>로그를 구조화 (JSONL) 형태로 승격 — <a href="C:\Users\SSAFY\.claude\projects\c--Users-SSAFY-Desktop-soob-final-S14P31S205\memory\asr_eos_design.md"><code>asr_eos_design.md</code></a>의 로깅 인프라와 통합</li>
+  <li>(별개) Step 8 빠른 연속 발화 번들링 문제 — VAD 측 분포 로그 수집 후 본질 해법 (<code>asr_eos_design.md</code>의 4상태 머신) 진행</li>
+</ol>
+
+
+<!-- 부록 — 측정 데이터 -->
+<div class="page-break"></div>
+<h2 id="appendix-eval">부록 — beam_size 측정 데이터 (5라운드 eval)</h2>
+
+<p>본 보고서 초안에서 채택한 <code>beam_size=1</code>이 실제 환경에서 손실인지 검증하기 위해, <code>evaluation/run_eval.py --model asr</code>를 5번 돌렸습니다.</p>
+
+<h3>측정 환경</h3>
+<ul>
+  <li><strong>모델</strong>: <code>ghost613/faster-whisper-large-v3-turbo-korean</code> (CTranslate2, GPU float16)</li>
+  <li><strong>데이터셋</strong>: <code>evaluation/datasets/asr_samples/</code> 200개 한국어 강의 음성 WAV (16kHz mono, 평균 8~10초)</li>
+  <li><strong>변경 변수</strong>: <code>beam_size</code>만 변경, 나머지(VAD, condition_on_previous_text, 임계값 필터)는 모두 동일</li>
+  <li><strong>WER 결정성</strong>: 같은 설정 두 번 돌렸을 때 WER이 소수점까지 동일 — ASR이 deterministic임을 검증</li>
+</ul>
+
+<h3>전체 측정 결과</h3>
+<table>
+  <tr><th>라운드</th><th>beam_size</th><th>WER</th><th>평균지연</th><th>RTF</th><th>비고</th></tr>
+  <tr><td>A</td><td>5</td><td>46.2%</td><td>585.4ms</td><td>0.060</td><td>baseline 1차</td></tr>
+  <tr><td>A2</td><td>5</td><td>46.2% ✓ 동일</td><td>666.7ms</td><td>0.068</td><td>baseline 2차 (변동 +81ms)</td></tr>
+  <tr><td>B</td><td>2</td><td>47.8%</td><td>554.9ms</td><td>0.057</td><td>절충안 (1회만)</td></tr>
+  <tr><td>C</td><td>1</td><td>48.1%</td><td>574.9ms</td><td>0.059</td><td>제안값 1차</td></tr>
+  <tr><td>C2</td><td>1</td><td>48.1% ✓ 동일</td><td>608.5ms</td><td>0.063</td><td>제안값 2차 (변동 +34ms)</td></tr>
+</table>
+
+<h3>WER 절대값 48%가 높은 이유 — 데이터 특성 해석</h3>
+<p>WER 절대값이 46~48%로 높게 나온 이유는 모델 성능보다 <strong>데이터셋 ground truth 전사 스타일</strong> 때문입니다:</p>
+<table>
+  <tr><th>Ground truth (구어 그대로)</th><th>ASR 인식 (표준어 정규화)</th><th>WER 처리</th></tr>
+  <tr><td>이르케</td><td>이렇게</td><td>오답 (substitution)</td></tr>
+  <tr><td>자기네</td><td>자기의</td><td>오답</td></tr>
+  <tr><td>모여가지고</td><td>(다르게 인식)</td><td>오답</td></tr>
+  <tr><td>보호해주십사</td><td>보호해 주십시오</td><td>오답 (split)</td></tr>
+  <tr><td>메소+ 아시리아</td><td>(생략)</td><td>오답 (deletion)</td></tr>
+</table>
+<p>즉 <strong>모델은 사람이 듣기에는 거의 정답인 출력을 내고 있는데, 코퍼스가 구어/필러/방언을 그대로 적어둬서 WER이 부풀려진 것</strong>. 본 비교의 핵심은 절대값이 아니라 <strong>같은 데이터/같은 모델/beam만 바꿔서 본 상대 차이</strong>입니다.</p>
+
+<h3>속도 분석 — 노이즈 검증</h3>
+<div class="box info"><strong>같은 설정 N=2의 변동 vs 설정 간 평균 차이</strong>
+<table style="margin-top:10px;">
+  <tr><th>설정</th><th>실측값 (1차/2차)</th><th>평균</th><th>스프레드</th></tr>
+  <tr><td>beam=5</td><td>585.4 / 666.7ms</td><td>626ms</td><td><strong>81ms</strong></td></tr>
+  <tr><td>beam=1</td><td>574.9 / 608.5ms</td><td>591ms</td><td><strong>34ms</strong></td></tr>
+  <tr><td colspan="3" style="text-align:right;"><strong>평균 차이</strong></td><td>35ms</td></tr>
+</table>
+<strong>판정</strong>: 같은 설정 한 번만 돌려도 81ms씩 흔들리는데, 두 설정 평균 차이는 35ms. <strong>속도 차이는 측정 노이즈 안에 완전히 묻힘</strong>. 속도 비교는 의미 없음.</div>
+
+<h3>이 측정이 production을 충분히 대표하는가 — 한계 명시</h3>
+<table>
+  <tr><th>측면</th><th>eval 환경</th><th>실제 production</th><th>영향</th></tr>
+  <tr><td>오디오 길이</td><td>8~10s 강의 클립</td><td>VAD가 잘라준 1~3s 짧은 발화</td><td>측정 못함</td></tr>
+  <tr><td>오디오 품질</td><td>사전 녹음, 정제됨</td><td>라이브 마이크 + 강의실 잔향/소음</td><td>측정 못함</td></tr>
+  <tr><td>무음/노이즈 비중</td><td>음성으로 가득</td><td>VAD 패딩, 발화 사이 짧은 침묵</td><td><strong>환각 트리거가 여기서 발생</strong></td></tr>
+  <tr><td>GPU 경합</td><td>ASR 단독</td><td>TTS / 가끔 VLM과 공유</td><td>속도 변동성 더 클 가능성</td></tr>
+  <tr><td>P99 latency</td><td>측정 안함</td><td>2초 예산 위반 케이스 분석 필요</td><td>측정 못함</td></tr>
+</table>
+
+<div class="box warning"><strong>eval 한계에도 결론이 흔들리지 않는 이유</strong>:
+<ul style="margin-top:6px;">
+  <li><strong>WER 우위는 deterministic</strong> — production 음성이 더 어렵다 해도 같은 모델 같은 입력에서 beam=5가 항상 같거나 우세. 1.9%p 차이가 줄어들 수 있어도 뒤집히진 않음.</li>
+  <li><strong>속도 우위(beam=1)는 이미 노이즈 안</strong> — production GPU 경합이 추가되면 노이즈만 더 커지지 beam=1의 35ms 우위가 살아날 이유 없음.</li>
+  <li><strong>환각 방어 효과는 eval에서 측정조차 안 됨</strong> — 환각은 음성 없는 구간에서 터지는데 eval 데이터는 음성으로 가득. production에서 beam=5의 환각 방어 효과는 eval 결과보다 더 클 가능성.</li>
+</ul>
+</div>
+
+<h3>Production sanity check 절차 (다음 단계)</h3>
+<p>eval 한계를 보완하는 가벼운 production 검증 절차:</p>
+<ol>
+  <li><strong>코드 변경 적용 확인</strong> — <code>backend/app/services/asr_service.py</code>의 <code>beam_size=5</code> 확인</li>
+  <li><strong>dev 서버 기동</strong> — <code>npm run dev</code> 후 강의자/수강자 두 화면 띄움</li>
+  <li><strong>5~10분 강의 시뮬레이션</strong> — 다음 시나리오 골고루 포함:
+    <ul>
+      <li>긴 한 문장 발화</li>
+      <li>짧은 단발 발화 ("네", "음" 등 종결어미)</li>
+      <li>발화 사이 짧은 침묵 (0.5~1초)</li>
+      <li>의도적인 긴 침묵 (3초+) — 환각 트리거 테스트</li>
+      <li>전문용어 섞인 발화 (영어 단어 포함)</li>
+    </ul>
+  </li>
+  <li><strong>두 신호 모니터링</strong>:
+    <ul>
+      <li>백엔드 로그의 <code>[LATENCY] seq=… | ASR=… | NMT=… | TTS=… | 전체=…</code> — 전체 2초 예산 안에 들어오는지</li>
+      <li>수강자 화면 자막 — "시청해주셔서 감사합니다" 등 환각 정형구 출력 여부</li>
+    </ul>
+  </li>
+  <li><strong>판정</strong>:
+    <ul>
+      <li>전체 latency 평균 2초 이내 + 환각 미발생 → beam=5 유지</li>
+      <li>환각 여전 → 임계값 강화 (no_speech_prob 0.6 → 0.5) 또는 정형구 블랙리스트 추가</li>
+      <li>2초 예산 자주 위반 → P99 분석 후 다른 단계(NMT/TTS) 최적화 검토</li>
+    </ul>
+  </li>
+</ol>
+
+<h3>측정 raw 결과 위치</h3>
+<ul>
+  <li>JSON 결과: <code>evaluation/results/round_A_beam5.json</code>, <code>round_A2_beam5.json</code> (※ A2는 latest.json), <code>round_B_beam2.json</code>, <code>round_C_beam1.json</code>, <code>round_C2_beam1.json</code></li>
+  <li>전체 로그: <code>evaluation_round_{A,A2,B,C,C2}_*.log</code> (per-sample 인식 결과 포함, 향후 데이터 분석 시 사용 가능)</li>
+</ul>
+
+
+<footer>
+  ASR 환각 차단 + 속도 개선 보고서 — Aunion AI 프로젝트 (S14P31S205) — 2026-04-28 (정정 후)
+</footer>
+
+</body>
+</html>
