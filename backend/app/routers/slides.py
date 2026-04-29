@@ -59,37 +59,66 @@ class SlideStatus(BaseModel):
 
 
 _BASELINE_SECONDS_PER_PAGE = {
-    "ocr": 10.0,       # Surya OCR 한 장 처리 추정치 (초)
-    "translate": 30.0,  # Qwen3-VL 한 장 번역 추정치 (4bit GPU)
+    "ocr": 15.0,       # Surya OCR 한 장 처리 추정치 (초) — 실측보다 약간 여유롭게
+    "translate":50.0,  # Qwen3-VL 한 장 번역 추정치 (4bit GPU) — 실측보다 여유롭게 잡아 "잠시만" 시간 단축
 }
 _BUNDLING_BASELINE = 3.0  # PDF 묶기 짧은 고정값
 
 
-def _unified_remaining(stage: str, total: int, current: int, avg: float) -> Optional[float]:
+def _unified_remaining(stage: str, total: int, current: int, avg: float, elapsed_on_current: float) -> Optional[float]:
     """현재 단계 + 후속 단계의 남은 작업 시간을 합산.
-    OCR 단계에서는 OCR 잔여 + 번역 전체 baseline 까지 포함 → 단계 전환 시 ETA가 0으로
-    내려갔다가 다시 올라가는 현상 제거."""
-    remaining_in_stage = max(0, total - current)
+    진행 중 페이지가 baseline을 초과하면 ETA가 자연스럽게 0까지 떨어진다 (overrun floor 없음).
+    번역 마지막 페이지 overrun 시점에는 bundling baseline도 빼서 ETA=0 → '잠시만 기다려주세요'가 안정적으로 유지되도록."""
+    pages_remaining = max(0, total - current)
+
+    def _in_progress(per_page: float) -> float:
+        return max(0.0, per_page - elapsed_on_current)
 
     if stage == "ocr":
-        ocr_per_page = avg if avg > 0 else _BASELINE_SECONDS_PER_PAGE["ocr"]
-        ocr_remaining = ocr_per_page * remaining_in_stage
+        per_page = avg if avg > 0 else _BASELINE_SECONDS_PER_PAGE["ocr"]
+        ocr_remaining = (_in_progress(per_page) + per_page * (pages_remaining - 1)) if pages_remaining > 0 else 0.0
         translate_remaining = _BASELINE_SECONDS_PER_PAGE["translate"] * total  # 아직 시작 안 한 단계
         return ocr_remaining + translate_remaining + _BUNDLING_BASELINE
 
     if stage == "translate":
-        translate_per_page = avg if avg > 0 else _BASELINE_SECONDS_PER_PAGE["translate"]
-        return translate_per_page * remaining_in_stage + _BUNDLING_BASELINE
+        per_page = avg if avg > 0 else _BASELINE_SECONDS_PER_PAGE["translate"]
+        if pages_remaining > 0:
+            ip = _in_progress(per_page)
+            translate_remaining = ip + per_page * (pages_remaining - 1)
+        else:
+            translate_remaining = 0.0
+        # bundling baseline은 더하지 않음 — 더하면 카운트다운이 3초에서 잠시만으로 점프(거의 다 됨/2초/1초 스킵)
+        # bundling은 어차피 짧고(~3초) bundling 단계로 전환되면 그 안에서 따로 카운트다운됨
+        return translate_remaining
 
     if stage == "bundling":
-        return _BUNDLING_BASELINE
+        return max(0.0, _BUNDLING_BASELINE - elapsed_on_current)
 
     return None
 
 
+def _compute_eta_seconds(s: dict, now: float) -> Optional[float]:
+    """현재 상태로부터 ETA 즉시 계산 — /status 응답 시점에 호출.
+    anchor 캐싱 안 함 → 현재 페이지가 baseline 초과해도 ETA가 0으로 떨어지지 않음."""
+    stage = s.get("stage", "pending")
+    if stage in ("pending", "completed", "failed"):
+        return None
+
+    total = s.get("stage_total", 0)
+    current = s.get("stage_current", 0)
+    avg = s.get("avg_page_duration", 0.0)
+
+    if stage == "bundling":
+        elapsed = max(0.0, now - s.get("stage_started_at", now))
+    else:
+        elapsed = max(0.0, now - s.get("last_page_at", now))
+
+    return _unified_remaining(stage, total, current, avg, elapsed)
+
+
 def _set_stage(slide_id: str, stage: str, total: int) -> None:
-    """현재 처리 단계 전환 — 카운터/타이머 리셋 + 통합 ETA 시드.
-    avg는 단계마다 리셋(다른 작업이라 평균 의미 다름), ETA 앵커는 후속 단계 baseline까지 포함."""
+    """현재 처리 단계 전환 — 카운터/타이머 리셋. avg는 단계마다 리셋(다른 작업이라 평균 의미 다름).
+    ETA는 /status 응답 시점에 _compute_eta_seconds 가 즉시 계산하므로 따로 저장 안 함."""
     s = slide_status.get(slide_id)
     if s is None:
         return
@@ -100,13 +129,11 @@ def _set_stage(slide_id: str, stage: str, total: int) -> None:
     s["stage_started_at"] = now
     s["last_page_at"] = now
     s["avg_page_duration"] = 0.0
-    s["eta_anchor_at"] = now
-    s["eta_anchor_seconds"] = _unified_remaining(stage, total, current=0, avg=0.0)
 
 
 def _page_completed(slide_id: str, current: int) -> None:
-    """페이지 완료 시점에 통합 ETA 앵커 갱신.
-    잦은 점프 완화: 첫 페이지는 baseline과 실측치를 5:5로 블렌딩, 이후는 느린 EMA(alpha=0.25)."""
+    """페이지 완료 시점에 평균 갱신.
+    첫 페이지는 baseline과 실측치를 5:5로 블렌딩, 이후는 느린 EMA(alpha=0.25)."""
     s = slide_status.get(slide_id)
     if s is None:
         return
@@ -125,10 +152,6 @@ def _page_completed(slide_id: str, current: int) -> None:
     else:
         # 두 번째부터는 느린 EMA — 페이지간 편차에 덜 휘둘림
         s["avg_page_duration"] = 0.75 * prev + 0.25 * duration
-
-    total = s.get("stage_total", 0)
-    s["eta_anchor_seconds"] = _unified_remaining(stage, total, current, s["avg_page_duration"])
-    s["eta_anchor_at"] = now
 
 
 class OverlayItem(BaseModel):
@@ -188,8 +211,6 @@ async def upload_slide(
         "stage_started_at": now,
         "last_page_at": now,
         "avg_page_duration": 0.0,
-        "eta_anchor_seconds": None,
-        "eta_anchor_at": now,
         "error": None,
         "filename": file.filename or f"{slide_id}.pdf",
     }
@@ -224,12 +245,9 @@ async def get_status(slide_id: str) -> SlideStatus:
 
     status = slide_status[slide_id]
 
-    # ETA 앵커에서 현재 시점까지 흐른 시간만큼 감산해서 반환
-    anchor = status.get("eta_anchor_seconds")
-    eta_seconds: Optional[float] = None
-    if anchor is not None:
-        elapsed_since_anchor = max(0.0, time.time() - status.get("eta_anchor_at", time.time()))
-        eta_seconds = max(0.0, anchor - elapsed_since_anchor)
+    # ETA: 현재 상태 + 진행 중 페이지의 elapsed 시간을 반영해 매 응답마다 즉시 계산
+    # (anchor 캐싱하면 페이지가 baseline 초과할 때 ETA가 0으로 떨어져버림)
+    eta_seconds = _compute_eta_seconds(status, time.time())
 
     return SlideStatus(
         slide_id=slide_id,
