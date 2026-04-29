@@ -377,7 +377,7 @@ async def process_slide(slide_id: str, pdf_path: Path):
         try:
             from translate_slide_v3 import (
                 stage_ocr_surya, stage_translate, stage_overlay,
-                unload_surya_models, unload_vlm_model,
+                unload_vlm_model,
                 build_glossary_from_ocr_results
             )
             vlm_available = True
@@ -407,11 +407,6 @@ async def process_slide(slide_id: str, pdf_path: Path):
                 ocr_results.append((image_path, None))
 
             _page_completed(slide_id, i + 1)
-
-        # Surya 모델 언로드 (GPU 메모리 확보)
-        if vlm_available:
-            print(f"[Slides] Surya OCR 완료, 모델 언로드...")
-            await asyncio.to_thread(unload_surya_models)
 
         # ========== 용어집 빌드 (전체 슬라이드 1회) ==========
         glossary = {}
@@ -511,9 +506,8 @@ async def process_slide(slide_id: str, pdf_path: Path):
         print(f"[Slides] {slide_id} 처리 실패: {e}")
         # 예외 발생 시에도 VLM 언로드 보장
         try:
-            from translate_slide_v3 import unload_vlm_model, unload_surya_models
+            from translate_slide_v3 import unload_vlm_model
             await asyncio.to_thread(unload_vlm_model)
-            await asyncio.to_thread(unload_surya_models)
         except Exception:
             pass
 

@@ -6,14 +6,13 @@ HuggingFace Hub에서 필요한 모델들을 미리 다운로드합니다.
     python scripts/download_models.py
 
 필요 조건:
-    pip install huggingface_hub requests
+    pip install huggingface_hub
 """
 
 import os
 import sys
 from pathlib import Path
 from huggingface_hub import snapshot_download
-import requests
 
 # ─── HF 캐시 경로를 백엔드와 동일하게 설정 ────────────────────────────────────
 _PROJECT_ROOT = Path(__file__).parent.parent
@@ -23,7 +22,6 @@ os.environ.setdefault("HF_HOME", str(_HF_HOME))
 
 # 모델 저장 경로
 MODELS_DIR = _PROJECT_ROOT / "models"
-TTS_MODEL_DIR = _PROJECT_ROOT / "backend" / "app" / "services" / "models"
 
 # ============================================
 # 다운로드할 모델 목록
@@ -64,15 +62,6 @@ NMT_MODEL = {
     "local_dir": MODELS_DIR / "opus-mt-ct2",
     "description": "NMT 실시간 번역 모델 (CTranslate2 int8)",
     "size": "~150MB",
-}
-
-# TTS 모델 (음성 합성) - Piper
-TTS_MODEL = {
-    "base_url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium",
-    "files": ["en_US-lessac-medium.onnx", "en_US-lessac-medium.onnx.json"],
-    "local_dir": TTS_MODEL_DIR,
-    "description": "TTS 음성합성 모델 (Piper)",
-    "size": "~60MB",
 }
 
 # RapidOCR 한국어 모델 — 로컬 평탄 디렉토리 (Windows 심볼릭 회피)
@@ -291,38 +280,6 @@ def convert_asr_ct2(model: dict, step: str) -> bool:
         return False
 
 
-def download_tts(model: dict, step: str) -> bool:
-    """TTS Piper 모델 다운로드"""
-    print(f"\n[{step}] {model['description']} ({model['size']})")
-    print(f"      경로: {model['local_dir']}")
-    print("-" * 60)
-
-    try:
-        model["local_dir"].mkdir(parents=True, exist_ok=True)
-
-        for fname in model["files"]:
-            file_path = model["local_dir"] / fname
-            if file_path.exists():
-                print(f"  {fname} 이미 존재, 스킵")
-                continue
-
-            print(f"  다운로드 중: {fname}")
-            url = f"{model['base_url']}/{fname}"
-            resp = requests.get(url, stream=True)
-            resp.raise_for_status()
-
-            with open(file_path, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            print(f"  ✓ {fname} 완료")
-
-        print(f"✓ {model['description']} 다운로드 완료!")
-        return True
-    except Exception as e:
-        print(f"✗ {model['description']} 다운로드 실패: {e}")
-        return False
-
-
 def main():
     print("=" * 60)
     print("Aunion AI 모델 다운로드")
@@ -332,33 +289,29 @@ def main():
     print(f"  2. {VLM_LORA['description']} ({VLM_LORA['size']})")
     print(f"  3. {ASR_MODEL['description']} ({ASR_MODEL['size']})")
     print(f"  4. {NMT_MODEL['description']} ({NMT_MODEL['size']})")
-    print(f"  5. {TTS_MODEL['description']} ({TTS_MODEL['size']})")
-    print(f"  6. {RAPIDOCR_KOREAN['description']} ({RAPIDOCR_KOREAN['size']})")
-    print(f"  7. {SURYA_OCR['description']} ({SURYA_OCR['size']})")
-    print(f"\n총 예상 용량: ~21GB (최초 1회만 다운로드)")
+    print(f"  5. {RAPIDOCR_KOREAN['description']} ({RAPIDOCR_KOREAN['size']})")
+    print(f"  6. {SURYA_OCR['description']} ({SURYA_OCR['size']})")
+    print(f"\n총 예상 용량: ~20GB (최초 1회만 다운로드)")
 
     results = []
 
     # 1. VLM Base 모델 (로컬 디렉토리 — HF 캐시 심볼릭 이슈 회피)
-    results.append(("VLM Base", download_to_local(VLM_BASE, "1/7")))
+    results.append(("VLM Base", download_to_local(VLM_BASE, "1/6")))
 
     # 2. VLM LoRA 어댑터
-    results.append(("VLM LoRA", download_to_local(VLM_LORA, "2/7")))
+    results.append(("VLM LoRA", download_to_local(VLM_LORA, "2/6")))
 
     # 3. ASR 모델 (CTranslate2 int8 변환)
-    results.append(("ASR", convert_asr_ct2(ASR_MODEL, "3/7")))
+    results.append(("ASR", convert_asr_ct2(ASR_MODEL, "3/6")))
 
     # 4. NMT 모델 (CTranslate2 변환)
-    results.append(("NMT", convert_nmt_ct2(NMT_MODEL, "4/7")))
+    results.append(("NMT", convert_nmt_ct2(NMT_MODEL, "4/6")))
 
-    # 5. TTS 모델
-    results.append(("TTS", download_tts(TTS_MODEL, "5/7")))
+    # 5. RapidOCR 한국어 모델 (로컬 디렉토리)
+    results.append(("RapidOCR Korean", download_to_local(RAPIDOCR_KOREAN, "5/6")))
 
-    # 6. RapidOCR 한국어 모델 (로컬 디렉토리)
-    results.append(("RapidOCR Korean", download_to_local(RAPIDOCR_KOREAN, "6/7")))
-
-    # 7. Surya OCR 모델 (Transformer 기반)
-    results.append(("Surya OCR", download_surya_ocr(SURYA_OCR, "7/7")))
+    # 6. Surya OCR 모델 (Transformer 기반)
+    results.append(("Surya OCR", download_surya_ocr(SURYA_OCR, "6/6")))
 
     # 결과 출력
     print("\n" + "=" * 60)

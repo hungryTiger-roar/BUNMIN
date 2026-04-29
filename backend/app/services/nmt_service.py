@@ -71,6 +71,15 @@ class NMTService:
             ],
             check=True,
         )
+        # SentencePiece 파일은 변환기가 생성하지 않으므로 HF에서 직접 받아 복사
+        # (CT2 번역기 로드 후 self._sp_src.Load()에서 필요)
+        from huggingface_hub import hf_hub_download
+        for spm in ["source.spm", "target.spm"]:
+            hf_hub_download(
+                repo_id=self.model_name,
+                filename=spm,
+                local_dir=str(_CT2_MODEL_DIR),
+            )
         print("[NMT] 변환 완료!")
 
     # ── HuggingFace 폴백 ─────────────────────────────────────────────────────
