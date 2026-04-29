@@ -48,6 +48,7 @@ tqdm>=4.66.0
 requests>=2.31.0
 huggingface-hub>=0.20.0,<1.0.0  # 1.x 메이저 변경 방지
 pyyaml>=6.0.0  # config.yaml 설정 파일 로드
+openai>=1.0.0  # 용어집 빌드 (GPT API)
 
 # 평가 지표
 nltk>=3.8.0
