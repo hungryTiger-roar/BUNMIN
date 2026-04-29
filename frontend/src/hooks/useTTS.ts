@@ -1,73 +1,153 @@
 /**
- * useTTS — 브라우저 WASM TTS 훅 (kokoro-js / onnxruntime-web)
+ * useTTS — piper-tts-web (메인 스레드, 내부 Worker로 비동기 처리)
+ *
+ * piper-tts-web은 내부적으로 OnnxWebWorker / PhonemizeWebWorker를 spawn하므로
+ * 별도의 tts.worker.ts 없이 메인 스레드에서 직접 사용해야 한다.
+ * (Worker 안에서 사용하면 pthread nested-worker 문제로 WASM init 실패)
+ *
+ * OOM 방지 전략:
+ *   - audioLang 변경 시 이전 엔진 참조 해제 → 내부 Worker GC → WASM 메모리 해제
+ *   - 새 엔진은 현재 언어 모델 하나만 warm-up → 메모리에 모델 1개만 유지
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { GenerateOptions } from 'kokoro-js'
+import { PiperWebEngine, OnnxWebRuntime, PhonemizeWebRuntime } from 'piper-tts-web'
+import type { TranslationLang } from '@/stores/preferencesStore'
 
-type VoiceId = NonNullable<GenerateOptions['voice']>
-
+export type TTSMode   = 'piper' | null
 export type TTSStatus = 'idle' | 'loading' | 'ready' | 'error'
 
-export function useTTS(enabled = true) {
-  const workerRef   = useRef<Worker | null>(null)
-  const audioCtxRef = useRef<AudioContext | null>(null)
-  const gainRef     = useRef<GainNode | null>(null)
-  const gainValueRef = useRef(0.7)   // 0.0 – 1.0, default 70 %
-  const pendingRef  = useRef<Map<string, (samples: Float32Array, sr: number) => void>>(new Map())
+// TranslationLang → Piper voice ID (https://huggingface.co/rhasspy/piper-voices)
+// ko, both, off 는 Piper 미지원 → undefined (TTS 스킵)
+const VOICE_MAP: Partial<Record<TranslationLang, string>> = {
+  en: 'en_US-lessac-medium',
+  de: 'de_DE-thorsten-medium',
+  es: 'es_MX-ald-medium',
+  ru: 'ru_RU-irina-medium',
+}
 
-  // statusRef: synthesize 내부에서 stale closure 없이 최신 상태 참조
-  const statusRef = useRef<TTSStatus>('idle')
+export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
+  const engineRef        = useRef<PiperWebEngine | null>(null)
+  const audioCtxRef      = useRef<AudioContext | null>(null)
+  const gainRef          = useRef<GainNode | null>(null)
+  const gainValueRef     = useRef(0.7)
+  const statusRef        = useRef<TTSStatus>('idle')
+  const nextPlayTimeRef  = useRef(0)
+  const activeSourcesRef = useRef<AudioBufferSourceNode[]>([])
 
-  const [status, setStatus] = useState<TTSStatus>('idle')
+  // 직렬 큐 — generate() 동시 호출 방지
+  const busyRef            = useRef(false)
+  const synthesizeQueueRef = useRef<Array<{ text: string; voice: string }>>([])
+  const preloadQueueRef    = useRef<Array<{ lang: string; voice: string }>>([])
+  const processNextRef     = useRef<() => void>(() => {})
+
+  const [status,          setStatus]          = useState<TTSStatus>('idle')
   const [loadingProgress, setLoadingProgress] = useState(0)
-  const [error, setError] = useState<string | null>(null)
+  const [error,           setError]           = useState<string | null>(null)
+  const [mode,            setMode]            = useState<TTSMode>(null)
 
-  const updateStatus = (s: TTSStatus) => {
+  const updateStatus = useCallback((s: TTSStatus) => {
     statusRef.current = s
     setStatus(s)
-  }
+  }, [])
 
+  // audioLang 이 deps에 포함 → 언어 변경 시 cleanup → 새 엔진 생성 → WASM 메모리 초기화
   useEffect(() => {
-    if (!enabled) return
+    async function processNext() {
+      if (busyRef.current || !engineRef.current) return
 
-    const worker = new Worker(
-      new URL('../workers/tts.worker.ts', import.meta.url),
-      { type: 'module' },
-    )
+      const synTask = synthesizeQueueRef.current.shift()
+      if (synTask) {
+        busyRef.current = true
+        try {
+          const response = await engineRef.current.generate(synTask.text, synTask.voice, 0)
+          const arrayBuffer = await response.file.arrayBuffer()
 
-    worker.onmessage = (e: MessageEvent) => {
-      const { type } = e.data
-      if (type === 'ready') {
-        updateStatus('ready')
-        setLoadingProgress(100)
-        console.log('[TTS] 모델 로드 완료')
-      } else if (type === 'loading') {
-        updateStatus('loading')
-        setLoadingProgress(e.data.progress as number)
-      } else if (type === 'error') {
-        updateStatus('error')
-        setError(e.data.message as string)
-        console.error('[TTS Worker]', e.data.message)
-      } else if (type === 'audio') {
-        const { id, samples, sampleRate } = e.data as {
-          id: string; samples: Float32Array; sampleRate: number
+          const ctx = audioCtxRef.current
+          if (ctx && ctx.state !== 'closed') {
+            if (ctx.state === 'suspended') await ctx.resume()
+            const audioBuffer = await ctx.decodeAudioData(arrayBuffer)
+            const now = ctx.currentTime
+            const startTime = nextPlayTimeRef.current < now + 0.05
+              ? now + 0.05
+              : nextPlayTimeRef.current
+            nextPlayTimeRef.current = startTime + audioBuffer.duration
+
+            const source = ctx.createBufferSource()
+            source.buffer = audioBuffer
+            source.connect(gainRef.current ?? ctx.destination)
+            source.start(startTime)
+            source.onended = () => {
+              activeSourcesRef.current = activeSourcesRef.current.filter(s => s !== source)
+            }
+            activeSourcesRef.current.push(source)
+          }
+        } catch (err) {
+          console.error('[TTS] synthesize 실패:', err)
         }
-        pendingRef.current.get(id)?.(samples, sampleRate)
-        pendingRef.current.delete(id)
+        busyRef.current = false
+        processNext()
+        return
+      }
+
+      const preTask = preloadQueueRef.current.shift()
+      if (preTask) {
+        busyRef.current = true
+        try {
+          await engineRef.current.generate('Hello.', preTask.voice, 0)
+          console.log(`[TTS] ${preTask.lang} 모델 warm-up 완료`)
+        } catch (err) {
+          console.warn(`[TTS] ${preTask.lang} 모델 warm-up 실패:`, err)
+        }
+        busyRef.current = false
+        processNext()
       }
     }
 
-    workerRef.current = worker
+    processNextRef.current = processNext
+
+    if (!enabled) return
+
+    // 큐 초기화 (이전 언어 작업 제거)
+    busyRef.current = false
+    synthesizeQueueRef.current = []
+    preloadQueueRef.current = []
+
     updateStatus('loading')
-    worker.postMessage({ type: 'init', dtype: 'q8' })
+
+    const init = async () => {
+      try {
+        const engine = new PiperWebEngine({
+          onnxRuntime: new OnnxWebRuntime(),
+          phonemizeRuntime: new PhonemizeWebRuntime(),
+        })
+        engineRef.current = engine
+        updateStatus('ready')
+        setLoadingProgress(100)
+        setMode('piper')
+
+        // 현재 언어 모델만 warm-up (메모리에 모델 1개만 유지)
+        const voice = VOICE_MAP[audioLang]
+        if (voice) {
+          preloadQueueRef.current.push({ lang: audioLang, voice })
+          processNext()
+          console.log(`[TTS] piper 초기화 완료, ${audioLang} 모델 warm-up 시작`)
+        }
+      } catch (err) {
+        setError(String(err))
+        updateStatus('error')
+        console.error('[TTS] 초기화 실패:', err)
+      }
+    }
+
+    init()
 
     return () => {
-      worker.terminate()
-      workerRef.current = null
-      audioCtxRef.current?.close()
-      audioCtxRef.current = null
+      // 이전 엔진 참조 해제 → 내부 OnnxWebWorker / PhonemizeWebWorker GC 대상
+      // → WASM 힙 메모리 해제 → 새 언어 모델 로드 시 OOM 방지
+      engineRef.current = null
+      // AudioContext 는 세션 내내 유지 (unlockAudio에서 생성, 언어 변경과 무관)
     }
-  }, [enabled])
+  }, [enabled, audioLang, updateStatus])
 
   const unlockAudio = useCallback(() => {
     if (!audioCtxRef.current) {
@@ -79,7 +159,6 @@ export function useTTS(enabled = true) {
     if (audioCtxRef.current.state === 'suspended') {
       audioCtxRef.current.resume()
     }
-    // 1샘플 재생으로 Chrome 자동재생 잠금 해제
     const buf = audioCtxRef.current.createBuffer(1, 1, 22050)
     const src = audioCtxRef.current.createBufferSource()
     src.buffer = buf
@@ -88,17 +167,19 @@ export function useTTS(enabled = true) {
     console.log('[TTS] AudioContext unlock 완료')
   }, [])
 
-  // vol: 0–100, muted: boolean
   const setVolume = useCallback((vol: number, muted: boolean) => {
-    gainValueRef.current = muted ? 0 : vol / 100
-    if (gainRef.current) {
-      gainRef.current.gain.value = gainValueRef.current
-    }
+    const v = muted ? 0 : vol / 100
+    gainValueRef.current = v
+    if (gainRef.current) gainRef.current.gain.value = v
   }, [])
 
-  // statusRef를 사용해 stale closure 없이 항상 최신 status 참조
-  const synthesize = useCallback(async (text: string, voice: VoiceId = 'af_heart') => {
-    if (!workerRef.current || statusRef.current !== 'ready') {
+  const synthesize = useCallback((text: string, lang: TranslationLang = 'en') => {
+    const voice = VOICE_MAP[lang]
+    if (!voice) {
+      console.warn('[TTS] 미지원 언어 스킵 — lang:', lang)
+      return
+    }
+    if (!engineRef.current || statusRef.current !== 'ready') {
       console.warn('[TTS] synthesize 스킵 — status:', statusRef.current)
       return
     }
@@ -106,25 +187,11 @@ export function useTTS(enabled = true) {
       console.warn('[TTS] synthesize 스킵 — AudioContext 없음 (unlockAudio 먼저 호출 필요)')
       return
     }
+    nextPlayTimeRef.current = 0
+    synthesizeQueueRef.current.push({ text, voice })
+    processNextRef.current()
+    console.log('[TTS] synthesize 요청:', lang, text.slice(0, 40))
+  }, [])
 
-    const id = crypto.randomUUID()
-
-    const samples = await new Promise<{ data: Float32Array; sr: number }>((resolve) => {
-      pendingRef.current.set(id, (data, sr) => resolve({ data, sr }))
-      workerRef.current!.postMessage({ type: 'synthesize', id, text, voice })
-    })
-
-    const ctx = audioCtxRef.current
-    if (ctx.state === 'suspended') await ctx.resume()
-
-    const audioBuffer = ctx.createBuffer(1, samples.data.length, samples.sr)
-    audioBuffer.copyToChannel(new Float32Array(samples.data), 0)
-
-    const source = ctx.createBufferSource()
-    source.buffer = audioBuffer
-    source.connect(gainRef.current ?? ctx.destination)
-    source.start()
-  }, []) // deps 없음 — statusRef/workerRef/audioCtxRef 모두 ref라 stale closure 없음
-
-  return { status, loadingProgress, error, synthesize, unlockAudio, setVolume }
+  return { status, loadingProgress, error, mode, synthesize, unlockAudio, setVolume }
 }
