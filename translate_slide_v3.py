@@ -31,6 +31,63 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 # ============================================================
+# 용어집 빌더 (GPT API, 캐시 기반)
+# ============================================================
+_glossary_builder = None
+
+def get_glossary_builder():
+    """GlossaryBuilder 싱글톤 인스턴스 반환 (지연 로드)"""
+    global _glossary_builder
+    if _glossary_builder is None:
+        try:
+            from backend.app.services.glossary_builder import GlossaryBuilder
+            _glossary_builder = GlossaryBuilder()
+            print("[Glossary] GlossaryBuilder 초기화됨")
+        except Exception as e:
+            print(f"[Glossary] GlossaryBuilder 로드 실패 (무시됨): {e}")
+            _glossary_builder = False  # 실패 마커
+    return _glossary_builder if _glossary_builder else None
+
+
+def build_glossary_from_ocr_results(ocr_results: list, lecture_title: str = "Lecture") -> dict:
+    """
+    전체 슬라이드 OCR 결과에서 용어집 빌드 (1회 호출)
+
+    Args:
+        ocr_results: [(image_path, regions), ...] OCR 결과 리스트
+        lecture_title: 강의 제목 (맥락용)
+
+    Returns:
+        dict: {한글: 영어} 전문용어 매핑
+    """
+    builder = get_glossary_builder()
+    if not builder:
+        return {}
+
+    # 모든 페이지의 OCR 텍스트 수집
+    all_texts = []
+    for image_path, regions in ocr_results:
+        if regions:
+            for r in regions:
+                text = r.get("ocr_text", "")
+                if text:
+                    all_texts.append(text)
+
+    if not all_texts:
+        print("[Glossary] OCR 텍스트 없음, 용어집 스킵")
+        return {}
+
+    print(f"\n[Glossary] 전체 슬라이드에서 용어집 빌드 ({len(all_texts)}개 텍스트)")
+
+    try:
+        glossary = builder.build_glossary(all_texts, lecture_title)
+        return glossary
+    except Exception as e:
+        print(f"[Glossary] 빌드 실패: {e}")
+        return {}
+
+
+# ============================================================
 # 설정 파일 로드
 # ============================================================
 _config = None
@@ -294,11 +351,6 @@ def estimate_prefix_pixel_width(prefix: str, bbox: list, img_np=None) -> int:
 _vlm_model = None
 _vlm_processor = None
 
-# Surya OCR 모델 캐싱
-_surya_det_model = None
-_surya_det_processor = None
-_surya_rec_model = None
-_surya_rec_processor = None
 
 
 def get_vlm_model():
@@ -963,54 +1015,636 @@ def classify_text_regions(regions: list, image_size: tuple) -> list:
 
 
 # ============================================================
-# Surya OCR 모델 싱글톤
+# Translation Block 시스템 (레이아웃 기반 번역 단위)
 # ============================================================
-def get_surya_models():
-    """Surya OCR 모델 싱글톤 - 최초 1회만 로드"""
-    global _surya_det_model, _surya_det_processor, _surya_rec_model, _surya_rec_processor
-
-    if _surya_det_model is not None:
-        return (_surya_det_model, _surya_det_processor, _surya_rec_model, _surya_rec_processor)
-
-    print("[Surya] OCR 모델 최초 로드 중...")
-
-    from surya.detection import DetectionPredictor
-    from surya.recognition import RecognitionPredictor
-
-    # Detection 모델 로드
-    print("  Detection 모델 로드...")
-    _surya_det_processor = DetectionPredictor()
-
-    # Recognition 모델 로드
-    print("  Recognition 모델 로드...")
-    _surya_rec_processor = RecognitionPredictor()
-
-    print("[Surya] 모델 로드 완료! (전역 캐시됨)")
-    return (_surya_det_model, _surya_det_processor, _surya_rec_model, _surya_rec_processor)
+# 디버그 모드 (True로 설정 시 병합/분리 로그 출력)
+DEBUG_TRANSLATION_BLOCKS = True
 
 
-def unload_surya_models():
-    """Surya OCR 모델 언로드 (메모리 해제)"""
-    global _surya_det_model, _surya_det_processor, _surya_rec_model, _surya_rec_processor
+# --- 레이아웃 판단 함수 ---
 
-    if _surya_det_processor is None:
-        print("[Surya] 언로드할 모델 없음")
-        return
+def tb_same_column(prev_bbox: list, curr_bbox: list, threshold: int = 40) -> bool:
+    """x좌표 기준 같은 컬럼인지 판단"""
+    prev_x1, _, prev_x2, _ = prev_bbox
+    curr_x1, _, curr_x2, _ = curr_bbox
 
-    print("[Surya] 모델 언로드 중...")
-    del _surya_det_model, _surya_det_processor, _surya_rec_model, _surya_rec_processor
-    _surya_det_model = None
-    _surya_det_processor = None
-    _surya_rec_model = None
-    _surya_rec_processor = None
+    # 좌측 정렬 기준
+    x_start_close = abs(prev_x1 - curr_x1) < threshold
 
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    # 또는 x 범위 겹침
+    overlap = min(prev_x2, curr_x2) - max(prev_x1, curr_x1)
+    min_width = min(prev_x2 - prev_x1, curr_x2 - curr_x1)
+    significant_overlap = overlap / max(1, min_width) > 0.5
 
-    print("[Surya] 모델 언로드 완료")
+    return x_start_close or significant_overlap
 
 
+def tb_close_y_gap(prev_bbox: list, curr_bbox: list) -> bool:
+    """y 간격이 충분히 가까운지 (글자 높이 기반)"""
+    prev_y2 = prev_bbox[3]
+    curr_y1 = curr_bbox[1]
+
+    gap = curr_y1 - prev_y2
+    prev_height = prev_bbox[3] - prev_bbox[1]
+
+    # 글자 높이의 1.2배 이내면 가까움
+    return 0 <= gap <= prev_height * 1.2
+
+
+def tb_similar_height(prev_bbox: list, curr_bbox: list) -> bool:
+    """텍스트 높이가 비슷한지 (폰트 크기 추정)"""
+    h1 = prev_bbox[3] - prev_bbox[1]
+    h2 = curr_bbox[3] - curr_bbox[1]
+
+    # 0.6 ~ 1.6 배 범위면 비슷
+    return 0.6 <= h2 / max(1, h1) <= 1.6
+
+
+def tb_similar_x_start(prev_bbox: list, curr_bbox: list, threshold: int = 20) -> bool:
+    """x 시작점이 거의 같은지 (같은 들여쓰기)"""
+    return abs(prev_bbox[0] - curr_bbox[0]) < threshold
+
+
+def tb_is_far_apart(prev_bbox: list, curr_bbox: list) -> bool:
+    """y 간격이 2줄 이상 떨어져 있는지"""
+    prev_height = prev_bbox[3] - prev_bbox[1]
+    gap = curr_bbox[1] - prev_bbox[3]
+    return gap > prev_height * 2.0
+
+
+def tb_is_different_column(prev_bbox: list, curr_bbox: list, threshold: int = 100) -> bool:
+    """x 범위가 전혀 겹치지 않는지 (명확히 다른 컬럼)"""
+    return curr_bbox[0] > prev_bbox[2] + threshold or prev_bbox[0] > curr_bbox[2] + threshold
+
+
+# --- 구조 판단 함수 ---
+
+def tb_starts_with_bullet(text: str) -> bool:
+    """bullet/번호로 시작하는지"""
+    text = text.strip()
+    if not text:
+        return False
+
+    bullets = ['•', '●', '○', '◦', '▶', '►', '■', '□', '·', '-', '>', '※', '★', '☆', 'ㆍ']
+
+    # bullet 문자로 시작
+    if any(text.startswith(b) for b in bullets):
+        return True
+
+    # 숫자 + 마침표/괄호로 시작 (1. 2) 3> 등)
+    if re.match(r'^\d+[\.\)\>]\s*', text):
+        return True
+
+    return False
+
+
+def tb_looks_like_title(region: dict, page_height: int) -> bool:
+    """제목처럼 보이는지 (top + short + large 조합)"""
+    bbox = region["bbox"]
+    text = region.get("ocr_text", "").strip()
+    height = bbox[3] - bbox[1]
+
+    is_top = bbox[1] < page_height * 0.15    # 상단 15%에 위치
+    is_short = len(text) < 40                 # 텍스트가 짧음
+    is_large = height > 30                    # 폰트가 큼 (높이로 추정)
+
+    # 세 조건 모두 충족해야 제목
+    return is_top and is_short and is_large
+
+
+def tb_looks_like_footer(text: str) -> bool:
+    """footer 패턴 (저작권, 페이지 번호 등)"""
+    patterns = [
+        r'©|copyright|all rights?',
+        r'page\s*\d+|\d+\s*/\s*\d+',
+        r'\d{4}\.\d{2}\.\d{2}',
+    ]
+    text_lower = text.lower()
+    return any(re.search(p, text_lower) for p in patterns)
+
+
+def tb_count_regions_same_row(region: dict, all_regions: list, y_tolerance: int = 15) -> int:
+    """같은 y 라인에 있는 region 개수"""
+    bbox = region["bbox"]
+    center_y = (bbox[1] + bbox[3]) / 2
+
+    count = 0
+    for r in all_regions:
+        r_bbox = r["bbox"]
+        r_center_y = (r_bbox[1] + r_bbox[3]) / 2
+        if abs(center_y - r_center_y) < y_tolerance:
+            count += 1
+
+    return count
+
+
+def tb_looks_like_table_cell(region: dict, all_regions: list) -> bool:
+    """표/차트 셀처럼 보이는지"""
+    text = region.get("ocr_text", "").strip()
+
+    is_short = len(text) <= 20
+    has_numeric_or_unit = bool(re.search(r'\d|%|kg|cm|년|위|순위', text))
+
+    # 1. 숫자/단위 + 짧은 텍스트 → 표 셀 가능성 높음
+    if len(text) <= 10 and has_numeric_or_unit:
+        return True
+
+    # 2. 같은 y 라인에 여러 region + (짧은 텍스트 또는 숫자/단위)
+    same_row_count = tb_count_regions_same_row(region, all_regions)
+    if same_row_count >= 3 and (is_short or has_numeric_or_unit):
+        return True
+
+    return False
+
+
+def tb_classify_region_type(region: dict, image_size: tuple, all_regions: list) -> str:
+    """region 타입 분류"""
+    page_width, page_height = image_size
+    bbox = region["bbox"]
+    text = region.get("ocr_text", "").strip()
+
+    # 1. 제목 감지 (looks_like_title 함수 사용)
+    if tb_looks_like_title(region, page_height):
+        return "title"
+
+    # 2. 위치 기반: 푸터
+    if bbox[3] > page_height * 0.9:
+        if tb_looks_like_footer(text):
+            return "footer"
+
+    # 3. 표 셀 감지
+    if tb_looks_like_table_cell(region, all_regions):
+        return "table_cell"
+
+    # 4. 텍스트 패턴 기반: bullet
+    if tb_starts_with_bullet(text):
+        return "bullet"
+
+    # 5. 기본값
+    return "paragraph"
+
+
+# --- 문법 판단 함수 (보조) ---
+
+def tb_has_continuation_marker(text: str) -> bool:
+    """이어짐 마커로 끝나는지 (보조 신호)"""
+    text = text.strip()
+    markers = [',', '과', '와', '및', '또는', '하고', '하며', '하여',
+               '위한', '따른', '통해', '등', '의', '로', '으로', '에서', '에게']
+
+    for marker in markers:
+        if text.endswith(marker):
+            return True
+    return False
+
+
+def tb_ends_with_terminal(text: str) -> bool:
+    """확실한 문장 종결로 끝나는지"""
+    text = text.strip()
+    # 마침표, 물음표, 느낌표
+    return text.endswith(('.', '?', '!', '。'))
+
+
+# --- 점수 기반 병합 로직 ---
+
+MERGE_THRESHOLD = 5  # 병합 임계값
+
+
+def tb_calculate_merge_score(prev_region: dict, curr_region: dict) -> int:
+    """두 region의 병합 점수 계산 (높을수록 병합)"""
+    score = 0
+    prev_bbox = prev_region["bbox"]
+    curr_bbox = curr_region["bbox"]
+    prev_text = prev_region.get("ocr_text", "")
+    curr_text = curr_region.get("ocr_text", "")
+
+    # ========== 1순위: 레이아웃 ==========
+
+    # 같은 컬럼 (+3)
+    if tb_same_column(prev_bbox, curr_bbox):
+        score += 3
+
+    # 가까운 y 간격 (+3)
+    if tb_close_y_gap(prev_bbox, curr_bbox):
+        score += 3
+
+    # 비슷한 텍스트 높이 (+2)
+    if tb_similar_height(prev_bbox, curr_bbox):
+        score += 2
+
+    # x 시작점 유사 (+2)
+    if tb_similar_x_start(prev_bbox, curr_bbox):
+        score += 2
+
+    # 다른 컬럼이면 (-5)
+    if tb_is_different_column(prev_bbox, curr_bbox):
+        score -= 5
+
+    # ========== 2순위: 구조 (이미 분류된 _type 사용) ==========
+
+    # bullet으로 시작하면 새 항목 (-5)
+    if tb_starts_with_bullet(curr_text):
+        score -= 5
+
+    # 제목이면 (-4)
+    if curr_region.get("_tb_type") == "title":
+        score -= 4
+
+    # ========== 3순위: 문법 (보조) ==========
+
+    # 이어짐 마커로 끝나면 (+1)
+    if tb_has_continuation_marker(prev_text):
+        score += 1
+
+    # 확실한 문장 종결 (-3)
+    if tb_ends_with_terminal(prev_text):
+        score -= 3
+
+    return score
+
+
+# --- Hard Blocker (병합 금지 조건) ---
+
+def tb_would_exceed_bbox_limit(current_block: list, new_region: dict, image_size: tuple) -> bool:
+    """병합 시 union bbox가 너무 커지는지 체크 (병합 단계에서 차단)"""
+    page_width, page_height = image_size
+    image_area = page_width * page_height
+
+    # 현재 블록 + 새 region의 union bbox 계산
+    all_regions = current_block + [new_region]
+    x1 = min(r["bbox"][0] for r in all_regions)
+    y1 = min(r["bbox"][1] for r in all_regions)
+    x2 = max(r["bbox"][2] for r in all_regions)
+    y2 = max(r["bbox"][3] for r in all_regions)
+
+    union_area = (x2 - x1) * (y2 - y1)
+    union_width_ratio = (x2 - x1) / page_width
+
+    # 이미지의 20% 초과 또는 가로 80% 초과 시 병합 금지
+    return union_area / image_area > 0.20 or union_width_ratio > 0.8
+
+
+def tb_cannot_merge(prev_region: dict, curr_region: dict,
+                    current_block: list = None, image_size: tuple = None) -> str:
+    """병합 금지 조건 (hard blocker)
+
+    Returns:
+        str: 차단 사유 (차단되면 사유 문자열, 차단 안 되면 빈 문자열)
+    """
+    # 1. 번역 스킵 대상은 병합 X
+    if prev_region.get("skip_translate") or curr_region.get("skip_translate"):
+        return "skip_translate"
+
+    # 2. 특수 타입은 병합 X (1차: paragraph만 병합 허용)
+    blocked_types = ["title", "footer", "table_cell", "bullet"]
+    if prev_region.get("_tb_type") in blocked_types:
+        return f"prev_type:{prev_region.get('_tb_type')}"
+    if curr_region.get("_tb_type") in blocked_types:
+        return f"curr_type:{curr_region.get('_tb_type')}"
+
+    # 3. bullet 시작은 새 블록 (타입 분류 전 텍스트 기반 체크)
+    if tb_starts_with_bullet(curr_region.get("ocr_text", "")):
+        return "bullet_start"
+
+    # 4. y 간격이 너무 멀면 X
+    if tb_is_far_apart(prev_region["bbox"], curr_region["bbox"]):
+        return "far_apart"
+
+    # 5. 명확히 다른 컬럼
+    if tb_is_different_column(prev_region["bbox"], curr_region["bbox"]):
+        return "different_column"
+
+    # 6. 병합 시 union bbox가 너무 커지면 X (위험한 병합 방지)
+    if current_block and image_size:
+        if tb_would_exceed_bbox_limit(current_block, curr_region, image_size):
+            return "bbox_too_large"
+
+    return ""  # 차단 안 됨
+
+
+def tb_should_merge(prev_region: dict, curr_region: dict,
+                    current_block: list = None, image_size: tuple = None) -> tuple:
+    """병합 여부 최종 결정
+
+    Returns:
+        tuple: (should_merge: bool, reason: str)
+    """
+    # 1. Hard blocker 먼저 체크
+    block_reason = tb_cannot_merge(prev_region, curr_region, current_block, image_size)
+    if block_reason:
+        return (False, f"blocked:{block_reason}")
+
+    # 2. 점수 기반 판단
+    score = tb_calculate_merge_score(prev_region, curr_region)
+    if score >= MERGE_THRESHOLD:
+        return (True, f"score:{score}")
+    else:
+        return (False, f"low_score:{score}")
+
+
+# --- Translation Block 생성 ---
+
+def tb_create_translation_block(regions: list) -> dict:
+    """region 리스트로 Translation Block 생성"""
+    # 원본 줄들 보존
+    source_lines = [r.get("ocr_text", "").strip() for r in regions]
+
+    # 텍스트 합치기 (두 가지 버전)
+    source_text = " ".join(line for line in source_lines if line)  # 공백 연결
+    prompt_text = "\n".join(line for line in source_lines if line)  # 줄바꿈 유지 (프롬프트용)
+
+    # union bbox 계산
+    x1 = min(r["bbox"][0] for r in regions)
+    y1 = min(r["bbox"][1] for r in regions)
+    x2 = max(r["bbox"][2] for r in regions)
+    y2 = max(r["bbox"][3] for r in regions)
+    union_bbox = [x1, y1, x2, y2]
+
+    return {
+        "block_id": None,  # 나중에 할당
+        "region_indices": [r["_tb_orig_index"] for r in regions],  # 원본 인덱스 사용
+        "source_lines": source_lines,
+        "source_text": source_text,      # 공백 연결 버전
+        "prompt_text": prompt_text,      # 줄바꿈 유지 버전 (프롬프트 입력용)
+        "bbox": union_bbox,              # 렌더링에 사용할 bbox (= union bbox)
+        "use_union_bbox": len(regions) > 1,  # 다중 region이면 union bbox 사용
+        "type": regions[0].get("_tb_type", "paragraph"),
+        "english": None,  # 번역 후 채움
+    }
+
+
+def build_translation_blocks(regions: list, image_size: tuple) -> list:
+    """OCR regions를 Translation Blocks로 그룹화
+
+    Args:
+        regions: OCR region 리스트 (원본)
+        image_size: (width, height) 이미지 크기
+
+    Returns:
+        Translation Block 리스트
+    """
+    if not regions:
+        return []
+
+    if DEBUG_TRANSLATION_BLOCKS:
+        print(f"\n[BlockBuilder] 입력 regions={len(regions)}")
+
+    # 0. 원본 인덱스 부여 (필터링/정렬 전에)
+    for i, region in enumerate(regions):
+        region["_tb_orig_index"] = i
+
+    # 1. 번역 대상만 필터링 (skip_translate 제외)
+    translatable = [r for r in regions if not r.get("skip_translate", False)]
+
+    if not translatable:
+        if DEBUG_TRANSLATION_BLOCKS:
+            print(f"[BlockBuilder] 번역 대상 없음")
+        return []
+
+    if DEBUG_TRANSLATION_BLOCKS:
+        print(f"[BlockBuilder] 번역 대상={len(translatable)}")
+
+    # 2. y좌표로 정렬 (위에서 아래로, 같은 y면 x로)
+    sorted_regions = sorted(translatable, key=lambda r: (r["bbox"][1], r["bbox"][0]))
+
+    # 3. 타입 분류 (정렬 후)
+    for region in sorted_regions:
+        region["_tb_type"] = tb_classify_region_type(region, image_size, sorted_regions)
+
+    # 4. should_merge() 기반 그룹화 (hard blocker + 점수 판단)
+    blocks = []
+    current_block = [sorted_regions[0]]
+
+    for i in range(1, len(sorted_regions)):
+        prev = current_block[-1]  # 현재 블록의 마지막 region
+        curr = sorted_regions[i]
+
+        # should_merge()는 cannot_merge() 체크 + 점수 판단을 모두 수행
+        merge, reason = tb_should_merge(prev, curr, current_block, image_size)
+
+        # 디버그 로그
+        if DEBUG_TRANSLATION_BLOCKS:
+            prev_text = prev.get("ocr_text", "")[:15]
+            curr_text = curr.get("ocr_text", "")[:15]
+            action = "Merge" if merge else "Split"
+            print(f"[{action}] '{prev_text}...' + '{curr_text}...' → {reason}")
+
+        if merge:
+            current_block.append(curr)
+        else:
+            # 현재 블록 저장하고 새 블록 시작
+            blocks.append(tb_create_translation_block(current_block))
+            current_block = [curr]
+
+    # 마지막 블록 저장
+    if current_block:
+        blocks.append(tb_create_translation_block(current_block))
+
+    # 5. 블록 ID 부여
+    for i, block in enumerate(blocks):
+        block["block_id"] = i
+
+    if DEBUG_TRANSLATION_BLOCKS:
+        print(f"[BlockBuilder] 결과 blocks={len(blocks)}")
+        for block in blocks:
+            region_count = len(block["region_indices"])
+            text_preview = block["source_text"][:30]
+            print(f"  Block {block['block_id']}: {region_count} regions, "
+                  f"type={block['type']}, text='{text_preview}...'")
+
+    return blocks
+
+
+def translate_blocks(blocks: list, glossary: dict = None) -> list:
+    """Translation Block 단위로 번역 수행
+
+    Args:
+        blocks: build_translation_blocks()로 생성된 블록 리스트
+        glossary: 전문용어 사전 {한글: 영어}
+
+    Returns:
+        번역이 완료된 블록 리스트 (block["english"] 채워짐)
+    """
+    if not blocks:
+        return blocks
+
+    # 번역 대상 블록 필터링 (footer 등 제외)
+    to_translate = []
+    for block in blocks:
+        # footer는 번역하지 않음
+        if block["type"] == "footer":
+            block["english"] = block["source_text"]
+            continue
+        to_translate.append(block)
+
+    if not to_translate:
+        print("  [Block번역] 번역 대상 블록 없음")
+        return blocks
+
+    print(f"\n  [Block번역] {len(to_translate)}개 블록 번역 시작")
+
+    # VLM 모델 가져오기
+    model, processor = get_vlm_model()
+
+    # 용어집 섹션 생성
+    glossary_section = ""
+    if glossary:
+        glossary_lines = [f'  "{ko}": "{en}"' for ko, en in list(glossary.items())[:20]]
+        glossary_section = "\n[GLOSSARY]\n" + "\n".join(glossary_lines)
+        print(f"  [Block번역] 용어집: {len(glossary)}개 전문용어")
+
+    # 블록별 번역 텍스트 생성
+    # 형식: "1. line1\nline2\nline3"
+    block_texts = []
+    for i, block in enumerate(to_translate):
+        # prompt_text 사용 (줄바꿈 유지)
+        block_num = i + 1
+        block_texts.append(f"{block_num}. {block['prompt_text']}")
+
+    text_list = "\n\n".join(block_texts)  # 블록 사이는 빈 줄로 구분
+    total_blocks = len(to_translate)
+
+    # 블록 단위 번역 프롬프트 (핵심!)
+    BLOCK_PROMPT = f"""Translate Korean lecture slide text into natural English.
+
+IMPORTANT: Each numbered item is a LAYOUT-BASED TEXT BLOCK, not separate sentences.
+Korean lines within one block are often fragments that form a single meaning.
+{glossary_section}
+
+[TRANSLATE]
+{text_list}
+
+RULES:
+1. Output EXACTLY {total_blocks} translations, format: "1. translation"
+2. Each block = ONE coherent English sentence or phrase
+3. Do NOT translate each Korean line separately inside a block
+4. RECONSTRUCT all lines within one block into ONE natural English output
+5. Reorder phrases naturally in English - do NOT preserve Korean word order
+6. Use GLOSSARY translations for technical terms if provided
+7. Prefer concise slide-style English over long prose
+8. KEEP: numbers, units, proper nouns, technical terms
+9. Never romanize Korean - translate to English
+
+Translate each block as ONE unit:"""
+
+    # VLM 호출
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": BLOCK_PROMPT}],
+        },
+    ]
+
+    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = processor(text=[text], images=None, return_tensors="pt").to(model.device)
+
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=2048,
+            temperature=0.3,
+            do_sample=True,
+        )
+
+    input_len = inputs["input_ids"].shape[1]
+    response = processor.decode(outputs[0][input_len:], skip_special_tokens=True).strip()
+
+    print(f"\n  [Block번역] VLM 응답:\n{response[:400]}...")
+
+    # 응답 파싱
+    lines = response.strip().split("\n")
+    translation_map = {}
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        # "1. translation" 형식 파싱
+        match = re.match(r'^(\d+)\s*[\.:\)\-]\s*(.+)$', line)
+        if match:
+            try:
+                num = int(match.group(1))
+                trans = match.group(2).strip().strip('"\'')
+                if trans and 1 <= num <= total_blocks:
+                    translation_map[num] = trans
+            except ValueError:
+                pass
+
+    print(f"  [Block번역] 파싱 결과: {len(translation_map)}/{total_blocks}개 블록")
+
+    # 블록에 번역 결과 적용
+    for i, block in enumerate(to_translate):
+        block_num = i + 1
+        if block_num in translation_map:
+            english = translation_map[block_num]
+            # HTML 태그 제거
+            english = strip_html_tags(english.strip())
+            block["english"] = english
+            print(f"    Block {block['block_id']}: '{block['source_text'][:20]}...' → '{english[:30]}...'")
+        else:
+            # 번역 실패 시 원본 유지
+            block["english"] = block["source_text"]
+            print(f"    Block {block['block_id']}: (번역 실패, 원본 유지)")
+
+    return blocks
+
+
+def apply_block_translations_to_regions(blocks: list, regions: list) -> list:
+    """블록 번역 결과를 regions에 적용
+
+    각 region에 해당하는 block의 번역을 적용.
+    다중 region 블록의 경우, 첫 region에 전체 번역을 넣고 나머지는 빈 문자열.
+
+    Args:
+        blocks: 번역 완료된 블록 리스트
+        regions: 원본 region 리스트
+
+    Returns:
+        번역이 적용된 regions
+    """
+    # region_idx → block 매핑 생성
+    region_to_block = {}
+    for block in blocks:
+        for idx in block["region_indices"]:
+            region_to_block[idx] = block
+
+    for i, region in enumerate(regions):
+        if region.get("skip_translate"):
+            # 스킵 대상은 원본 유지
+            if "english" not in region:
+                region["english"] = region.get("ocr_text", "")
+            continue
+
+        if i in region_to_block:
+            block = region_to_block[i]
+            block_indices = block["region_indices"]
+
+            if i == block_indices[0]:
+                # 첫 번째 region → 전체 블록 번역
+                region["english"] = block.get("english", block["source_text"])
+                region["_block_id"] = block["block_id"]
+                region["_is_block_primary"] = True
+
+                # union bbox 사용 시 bbox 업데이트
+                if block.get("use_union_bbox") and len(block_indices) > 1:
+                    region["_original_bbox"] = region["bbox"]
+                    region["bbox"] = block["bbox"]
+            else:
+                # 나머지 region → 렌더링 스킵 (첫 region에서 처리)
+                region["english"] = ""
+                region["_block_id"] = block["block_id"]
+                region["_is_block_primary"] = False
+                region["render_skip"] = True  # 렌더링에서 제외
+        else:
+            # 블록에 포함되지 않은 region (skip_translate 등)
+            if "english" not in region:
+                region["english"] = region.get("ocr_text", "")
+
+    return regions
+
+
+# ============================================================
 # ============================================================
 # 1단계: OCR - Surya OCR (Transformer 기반, 한글 정확도 향상)
 # ============================================================
@@ -1320,8 +1954,14 @@ def stage_ocr_rapid(image_path: str) -> list:
 # ============================================================
 # 2단계: 번역 - 전체 이미지 + OCR 텍스트 활용
 # ============================================================
-def stage_translate(image_path: str, regions: list) -> list:
-    """전체 슬라이드 맥락 + OCR 텍스트로 번역 (환각 방지)"""
+def stage_translate(image_path: str, regions: list, glossary: dict = None) -> list:
+    """전체 슬라이드 맥락 + OCR 텍스트로 번역 (환각 방지)
+
+    Args:
+        image_path: 슬라이드 이미지 경로
+        regions: OCR 영역 리스트
+        glossary: 전문용어 사전 (외부에서 전달, 없으면 내부 빌드)
+    """
     print("\n" + "=" * 60)
     print("[2/3] 번역: 전체 슬라이드 맥락 + OCR 텍스트 (Qwen3-VL)")
     print("=" * 60)
@@ -1335,6 +1975,10 @@ def stage_translate(image_path: str, regions: list) -> list:
 
     # 레이아웃 기반 분류 적용
     regions = classify_text_regions(regions, image_size)
+
+    # ============================================================
+    # 기존 줄 단위 번역 사용 (Translation Block 비활성화)
+    # ============================================================
 
     # 번역할 텍스트 필터링
     to_translate = []
@@ -1444,24 +2088,32 @@ def stage_translate(image_path: str, regions: list) -> list:
     page_context = ", ".join(page_context_items[:20])  # 최대 20개 (토큰 제한)
     print(f"\n  페이지 맥락: {len(page_context_items)}개 텍스트 영역")
 
+    # 용어집 프롬프트 섹션 생성 (외부 전달 glossary 사용)
+    glossary_section = ""
+    if glossary:
+        glossary_lines = [f'  "{ko}": "{en}"' for ko, en in list(glossary.items())[:15]]
+        glossary_section = "\n[GLOSSARY]\n" + "\n".join(glossary_lines) + "\n"
+        print(f"\n  용어집 사용: {len(glossary)}개 전문용어")
+
     def call_vlm_and_parse(text_list: str, total_lines: int, attempt: int = 1) -> dict:
         """VLM 호출 + 응답 파싱 (재시도 지원)"""
         PROMPT = f"""Translate Korean to English for a lecture slide.
 
 [PAGE CONTEXT]
 {page_context}
-
+{glossary_section}
 [TRANSLATE]
 {text_list}
 
 RULES:
 1. Output EXACTLY {total_lines} lines, format: "1. translation"
 2. Use PAGE CONTEXT to disambiguate ambiguous/short terms
-3. Standard academic terminology (supervised, regression, etc.)
-4. Never romanize - translate to English
-5. KEEP: emails, URLs, filenames, code syntax (printf, cout, %d, <<, >>)
-6. SHORT labels (1-3 words) → CONCISE translation (1-3 words)
-7. No extra words, no HTML tags, no [OCR] tags
+3. Use GLOSSARY translations for technical terms if provided
+4. Standard academic terminology (supervised, regression, etc.)
+5. Never romanize - translate to English
+6. KEEP: emails, URLs, filenames, code syntax (printf, cout, %d, <<, >>)
+7. SHORT labels (1-3 words) → CONCISE translation (1-3 words)
+8. No extra words, no HTML tags, no [OCR] tags
 
 Translate:"""
 
@@ -1715,7 +2367,7 @@ def stage_overlay(image_path: str, regions: list, output_path: str):
         for font_path in font_paths:
             try:
                 return ImageFont.truetype(font_path, size)
-            except:
+            except Exception:
                 continue
         return ImageFont.load_default()
 
@@ -1868,6 +2520,7 @@ def stage_overlay(image_path: str, regions: list, output_path: str):
 
     # 1단계: 번역 대상 영역 수집 및 마스크 생성
     print("  [1/2] 마스크 생성 중...")
+
     for region in regions:
         bbox = region["bbox"]
         x_min, y_min, x_max, y_max = bbox
@@ -1887,7 +2540,6 @@ def stage_overlay(image_path: str, regions: list, output_path: str):
             continue
 
         # 세로 텍스트: 이미지에는 렌더링하지 않음 (원본 유지)
-        # render_skip 플래그는 stage_translate에서 이미 설정됨
         if region.get("render_skip", False):
             print(f"    [Vertical Skip] '{region['ocr_text'][:15]}' (w={int(width)}, h={int(height)})")
             continue
@@ -2026,7 +2678,7 @@ def stage_overlay(image_path: str, regions: list, output_path: str):
                 bg_color = (pixel, pixel, pixel)
             else:
                 bg_color = pixel[:3]
-        except:
+        except Exception:
             bg_color = (255, 255, 255)
 
         # 텍스트 맞추기 (줄바꿈 + 폰트 축소)
@@ -2095,8 +2747,6 @@ def translate_slide(image_path: str, output_path: str = None, ocr_engine: str = 
         # 파이프라인 실행 (OCR 엔진 선택)
         if ocr_engine == "surya":
             regions = stage_ocr_surya(image_path)
-            # Surya 모델 언로드 (VLM 로드 전 GPU 메모리 확보)
-            unload_surya_models()
         elif ocr_engine == "rapid":
             regions = stage_ocr_rapid(image_path)
         else:

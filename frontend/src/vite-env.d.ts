@@ -10,7 +10,6 @@ interface ModelEntry {
 interface ModelMap {
   asr: ModelEntry
   nmt_asr: ModelEntry
-  tts: ModelEntry
   ocr: ModelEntry
   vlm: ModelEntry
 }

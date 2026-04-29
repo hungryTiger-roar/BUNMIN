@@ -45,7 +45,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    exclude: ['@ricky0123/vad-web', 'onnxruntime-web', 'kokoro-js', 'piper-tts-web'],
+    exclude: ['@ricky0123/vad-web', 'onnxruntime-web', 'piper-tts-web'],
   },
   server: {
     port: 3000,

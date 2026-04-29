@@ -76,7 +76,7 @@ function subtitleStyleToCss(style: SubtitleStyle): CSSProperties {
         ].join(', '),
       }
     default:
-      return { color: 'black' }
+      return {}
   }
 }
 

@@ -52,9 +52,9 @@ hiddenimports = [
     'torch',
     'numpy',
     'soundfile',
-    # ASR - CohereLabs/cohere-transcribe-03-2026
+    # ASR - ghost613/faster-whisper-large-v3-turbo-korean (CTranslate2)
     'accelerate',
-    # NMT-ASR - facebook/nllb-200-distilled-1.3B
+    # NMT-ASR - Helsinki-NLP/opus-mt-ko-en (CTranslate2 CT2 우선, HF 폴백)
     'sentencepiece',
     # OCR - RapidOCR + Korean PP-OCRv4
     'rapidocr_onnxruntime',

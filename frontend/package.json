@@ -10,8 +10,7 @@
   "dependencies": {
     "@ricky0123/vad-web": "^0.0.30",
     "aunion-ai": "file:..",
-    "kokoro-js": "^1.2.1",
-    "onnxruntime-web": "^1.24.3",
+"onnxruntime-web": "^1.24.3",
     "piper-tts-web": "^1.1.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",

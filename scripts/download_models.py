@@ -45,12 +45,15 @@ VLM_LORA = {
     "size": "~665MB",
 }
 
-# ASR 모델 (음성 인식) — 로컬 평탄 디렉토리 (Windows 심볼릭 회피, Electron 배포 호환)
+# ASR 모델 (음성 인식) — openai 원본 turbo를 CTranslate2 int8로 변환
+# ghost613 한국어 fine-tune은 한국 뉴스 정형구 환각이 심해 교체 (S14P31S205-64)
+# 변환 시 --copy_files 로 tokenizer.json + preprocessor_config.json 복사 필수
+# (large-v3는 128 mel — 안 넣으면 mel 미스매치 ValueError)
 ASR_MODEL = {
-    "repo_id": "ghost613/faster-whisper-large-v3-turbo-korean",
-    "local_dir": MODELS_DIR / "asr-faster-whisper-large-v3-turbo-ko",
-    "description": "ASR 음성인식 모델",
-    "size": "~3GB",
+    "repo_id": "openai/whisper-large-v3-turbo",
+    "local_dir": MODELS_DIR / "whisper-large-v3-turbo-ct2-int8",
+    "description": "ASR 음성인식 모델 (CTranslate2 int8)",
+    "size": "~800MB (변환 후)",
 }
 
 # NMT 모델 (실시간 번역) — CTranslate2 변환 대상
@@ -230,6 +233,53 @@ def convert_nmt_ct2(model: dict, step: str) -> bool:
         return False
 
 
+def convert_asr_ct2(model: dict, step: str) -> bool:
+    """openai/whisper-large-v3-turbo를 CTranslate2 int8 포맷으로 변환.
+    --copy_files로 tokenizer.json + preprocessor_config.json 복사 (large-v3는 128 mel — 안 넣으면 mel 미스매치 ValueError)."""
+    import subprocess
+
+    print(f"\n[{step}] {model['description']} ({model['size']})")
+    print(f"      저장소: {model['repo_id']}")
+    print(f"      경로: {model['local_dir']}")
+    print("-" * 60)
+
+    # CTranslate2 + faster-whisper가 요구하는 필수 파일 — 부분 변환 상태 차단
+    required = ["model.bin", "config.json", "vocabulary.json", "tokenizer.json", "preprocessor_config.json"]
+    if model["local_dir"].exists():
+        missing = [f for f in required if not (model["local_dir"] / f).exists()]
+        if not missing:
+            print(f"✓ 이미 변환됨 → 스킵")
+            return True
+        print(f"⚠ 부분 변환 상태 (누락: {missing}) → 재변환")
+        import shutil
+        shutil.rmtree(model["local_dir"])
+
+    try:
+        print("CTranslate2 변환 중 (int8 양자화)...")
+        model["local_dir"].parent.mkdir(parents=True, exist_ok=True)
+        converter = _find_ct2_converter()
+        subprocess.run(
+            [
+                converter,
+                "--model", model["repo_id"],
+                "--output_dir", str(model["local_dir"]),
+                "--copy_files", "tokenizer.json", "preprocessor_config.json",
+                "--quantization", "int8",
+                "--force",
+            ],
+            check=True,
+        )
+        print(f"✓ {model['description']} 변환 완료!")
+        return True
+    except FileNotFoundError:
+        print(f"✗ ct2-transformers-converter 를 찾을 수 없습니다.")
+        print(f"  ctranslate2 패키지가 설치됐는지 확인: pip install ctranslate2")
+        return False
+    except Exception as e:
+        print(f"✗ {model['description']} 변환 실패: {e}")
+        return False
+
+
 def main():
     print("=" * 60)
     print("Aunion AI 모델 다운로드")
@@ -251,8 +301,8 @@ def main():
     # 2. VLM LoRA 어댑터
     results.append(("VLM LoRA", download_to_local(VLM_LORA, "2/6")))
 
-    # 3. ASR 모델 (로컬 디렉토리)
-    results.append(("ASR", download_to_local(ASR_MODEL, "3/6")))
+    # 3. ASR 모델 (CTranslate2 int8 변환)
+    results.append(("ASR", convert_asr_ct2(ASR_MODEL, "3/6")))
 
     # 4. NMT 모델 (CTranslate2 변환)
     results.append(("NMT", convert_nmt_ct2(NMT_MODEL, "4/6")))

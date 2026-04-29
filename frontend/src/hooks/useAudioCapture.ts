@@ -75,8 +75,9 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
         ortConfig: (ort: any) => {
           ort.env.wasm.numThreads = 1
         },
-        // 묵음 0.6초 지속 시 발화 종료 판정
-        redemptionMs: 600,
+        // 묵음 0.3초 지속 시 발화 종료 판정 — 600/400 모두 빠른 호흡 화자에서 번들링 발생
+        // 종결어미("~습니다.") 잘릴 위험 ↑ 하지만 빠른 분리 우선
+        redemptionMs: 300,
         // 발화 감지 직전 프레임 2개 포함 (발화 시작 잘림 방지, 1프레임 ≈ 96ms)
         preSpeechPadFrames: 2,
         submitUserSpeechOnPause: false,
@@ -161,7 +162,6 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
 
     stopKeepAlive()
     vadRef.current?.pause()
-    stopStream()
     setIsCapturing(false)
     console.log('[AudioCapture] 캡처 중지')
   }, [])

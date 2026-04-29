@@ -266,10 +266,10 @@ step(7, TOTAL, '설치 검증...')
     }
   }
 
-  // ASR 모델 (faster-whisper) — 로컬 디렉토리 + model.bin
-  const asrDir = path.join(ROOT, 'models', 'asr-faster-whisper-large-v3-turbo-ko')
+  // ASR 모델 (faster-whisper CTranslate2 int8) — 로컬 디렉토리 + model.bin
+  const asrDir = path.join(ROOT, 'models', 'whisper-large-v3-turbo-ct2-int8')
   if (!fs.existsSync(path.join(asrDir, 'model.bin'))) {
-    console.error('  ✗ 누락: models/asr-faster-whisper-large-v3-turbo-ko/model.bin (ASR)')
+    console.error('  ✗ 누락: models/whisper-large-v3-turbo-ct2-int8/model.bin (ASR)')
     ok = false
   }
 

@@ -243,6 +243,7 @@ def _load_models_sync():
         _model_status["message"] = "슬라이드 번역 전용 모드 — 준비 완료"
         _model_status["progress"] = 100
         _emit_status()
+        mode._current_mode = mode.Mode.SLIDE
         print("=" * 50, flush=True)
         print("[모드] 슬라이드 번역 전용 모드 — VLM 다운로드 완료, 메모리 로드는 사용 시점에", flush=True)
         print("=" * 50, flush=True)
@@ -334,6 +335,7 @@ def _load_models_sync():
         _model_status["status"] = "ok"
         _model_status["message"] = "모든 모델 로드 완료 ✓"
         _model_status["progress"] = 100
+        mode._current_mode = mode.Mode.REALTIME
     _emit_status()  # Electron에 완료/실패 신호 전달
 
 
