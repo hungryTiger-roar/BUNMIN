@@ -1,4 +1,4 @@
-﻿import { useEffect, useState, useRef, type CSSProperties } from 'react'
+import { useEffect, useState, useRef, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import {
@@ -26,9 +26,9 @@ const AUDIO_LANG_OPTIONS = LANG_OPTIONS
 const SUBTITLE_LANG_OPTIONS = LANG_OPTIONS
 
 const STYLE_LABEL: Record<SubtitleStyle, string> = {
-  plain: '기본',
-  outline: '테두리',
-  glow: '글로우',
+  plain: 'Plain',
+  outline: 'Outline',
+  glow: 'Glow',
 }
 
 const ASPECT_OPTIONS: { value: AspectRatio; label: string; className: string }[] = [
@@ -48,7 +48,6 @@ interface MaterialItem {
 function subtitleStyleToCss(style: SubtitleStyle): CSSProperties {
   switch (style) {
     case 'outline':
-      // 또렷한 2px 검정 외곽선 — 8방향 shadow로 fill 굵기 손상 없이
       return {
         textShadow: [
           '-2px -2px 0 #000',
@@ -66,7 +65,6 @@ function subtitleStyleToCss(style: SubtitleStyle): CSSProperties {
         ].join(', '),
       }
     case 'glow':
-      // 순수 하얀 빛 할로 — 단계적 블러 레이어
       return {
         textShadow: [
           '0 0 8px rgba(0,0,0,0.8)',
@@ -96,7 +94,6 @@ function Student() {
     isPaused,
     presentationMode,
     currentScreen,
-    isSubtitleOn,
     subtitles,
     studentName,
     studentCount,
@@ -127,8 +124,6 @@ function Student() {
     toggleTheme,
   } = usePreferencesStore()
 
-  // ref 기반 커서 오버레이 (React 상태 없이 DOM 직접 조작)
-  // slideRef를 전달해서 컨테이너 크기 기준으로 px 변환
   const { spotlightRef, onCursor } = useCursorOverlay(slideRef)
 
   const { isConnected, connect, sendChat, unlockAudio, isAudioUnlocked } = useWebSocket(
@@ -140,9 +135,9 @@ function Student() {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [volume, setVolume] = useState(70)
   const [isMuted, setIsMuted] = useState(false)
+  const [ccEnabled, setCcEnabled] = useState(true)
+  const [settingsPanel, setSettingsPanel] = useState<null | 'main' | 'aspect' | 'language' | 'fontSize' | 'style'>(null)
   const [chatInput, setChatInput] = useState('')
-  const [showSubtitleSettings, setShowSubtitleSettings] = useState(false)
-  const [showLangPanel, setShowLangPanel] = useState(false)
   const [showParticipants, setShowParticipants] = useState(false)
   const [materials, setMaterials] = useState<MaterialItem[]>([])
   const [showTranscriptModal, setShowTranscriptModal] = useState(false)
@@ -204,7 +199,6 @@ function Student() {
     if (!trimmed) return
     sendChat(trimmed)
     setChatInput('')
-    // 커서 유지
     requestAnimationFrame(() => chatInputRef.current?.focus())
   }
 
@@ -431,7 +425,7 @@ function Student() {
             )}
 
             {/* 자막 오버레이 */}
-            {isSubtitleOn && (primaryText || secondaryText) && (
+            {ccEnabled && (primaryText || secondaryText) && (
               <div
                 className={`absolute left-1/2 -translate-x-1/2 max-w-[90%] px-4 text-center text-white pointer-events-none z-10 ${
                   subtitleSettings.position === 'top' ? 'top-6' : 'bottom-20'
@@ -454,8 +448,12 @@ function Student() {
               </div>
             )}
 
-            {/* 화면 내부 하단 컨트롤 바 — 마우스 올렸을 때만 표시 */}
-            <div className="absolute left-3 right-3 bottom-3 z-30 flex items-center gap-2 flex-wrap opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity duration-200">
+            {/* 화면 내부 하단 컨트롤 바 — 마우스 올렸을 때만 표시 (설정 열려있으면 항상 표시) */}
+            <div className={`absolute left-3 right-3 bottom-3 z-30 flex items-center gap-2 transition-opacity duration-200 ${
+              settingsPanel !== null
+                ? 'opacity-100 pointer-events-auto'
+                : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
+            }`}>
               {/* 볼륨 — 스피커 아이콘에 마우스 올리면 슬라이더 표시 */}
               <div className="group/vol flex items-center bg-black/60 backdrop-blur-sm rounded-full pl-2 pr-2 py-1.5 group-hover/vol:pr-3 transition-all">
                 <button
@@ -496,67 +494,45 @@ function Student() {
 
               <div className="flex-1" />
 
-              {/* 화면 비율 */}
-              <div className="flex bg-black/60 backdrop-blur-sm rounded-full p-1">
-                {ASPECT_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    type="button"
-                    onClick={() => setAspectRatio(opt.value)}
-                    className={`px-2.5 py-0.5 rounded-full text-xs font-medium transition-colors ${
-                      aspectRatio === opt.value
-                        ? 'bg-white text-gray-900'
-                        : 'text-white/80 hover:text-white'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
-              </div>
-
-              {/* 언어 팝업 */}
+              {/* CC 버튼 */}
               <button
                 type="button"
-                onClick={() => {
-                  setShowLangPanel((v) => !v)
-                  setShowSubtitleSettings(false)
-                }}
+                onClick={() => setCcEnabled((v) => !v)}
                 className={`p-2 rounded-lg transition-colors ${
-                  showLangPanel ? 'bg-white text-gray-900' : 'bg-black/60 text-white hover:bg-black/80'
+                  ccEnabled ? 'bg-white text-gray-900' : 'bg-black/60 text-white hover:bg-black/80'
                 }`}
-                aria-label="언어 선택"
-                title="언어 선택"
+                aria-label={ccEnabled ? 'Turn off subtitles' : 'Turn on subtitles'}
+                title={ccEnabled ? 'Turn off subtitles' : 'Turn on subtitles'}
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <rect x="2" y="5" width="20" height="14" rx="2" />
+                  <path strokeLinecap="round" d="M10 9H8a2 2 0 000 4h2M17 9h-2a2 2 0 000 4h2" />
                 </svg>
               </button>
 
-              {/* 자막 커스텀 */}
+              {/* 설정 버튼 */}
               <button
                 type="button"
-                onClick={() => {
-                  setShowSubtitleSettings((v) => !v)
-                  setShowLangPanel(false)
-                }}
+                onClick={() => setSettingsPanel((v) => (v ? null : 'main'))}
                 className={`p-2 rounded-lg transition-colors ${
-                  showSubtitleSettings ? 'bg-white text-gray-900' : 'bg-black/60 text-white hover:bg-black/80'
+                  settingsPanel ? 'bg-white text-gray-900' : 'bg-black/60 text-white hover:bg-black/80'
                 }`}
-                aria-label="자막 설정"
-                title="자막 설정"
+                aria-label="Settings"
+                title="Settings"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
               </button>
 
-              {/* 전체화면 */}
+              {/* 전체화면 버튼 */}
               <button
                 type="button"
                 onClick={toggleFullscreen}
                 className="p-2 bg-black/60 text-white rounded-lg hover:bg-black/80"
-                aria-label={isFullscreen ? '전체화면 종료' : '전체화면'}
-                title={isFullscreen ? '전체화면 종료' : '전체화면'}
+                aria-label={isFullscreen ? 'Exit full screen' : 'Full screen'}
+                title={isFullscreen ? 'Exit full screen' : 'Full screen'}
               >
                 {isFullscreen ? (
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -570,96 +546,210 @@ function Student() {
               </button>
             </div>
 
-            {/* 언어 선택 팝업 (화면 내부) */}
-            {showLangPanel && (
+            {/* 설정 패널 */}
+            {settingsPanel && (
               <>
                 <div
-                  className="absolute inset-0 bg-black/40 z-40"
-                  onClick={() => setShowLangPanel(false)}
+                  className="absolute inset-0 z-40"
+                  onClick={() => setSettingsPanel(null)}
                 />
-                <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[min(90%,800px)] max-h-[80%] overflow-y-auto bg-black/80 backdrop-blur-md text-white rounded-xl shadow-2xl p-8 grid grid-cols-3 gap-12">
-                  <LangColumn
-                    title="Audio"
-                    value={audioLang}
-                    onChange={setAudioLang}
-                    options={AUDIO_LANG_OPTIONS}
-                  />
-                  <LangColumn
-                    title="Subtitles"
-                    value={subtitleLang}
-                    onChange={setSubtitleLang}
-                    options={SUBTITLE_LANG_OPTIONS}
-                  />
-                  <LangColumn
-                    title="Secondary Subtitles"
-                    value={secondarySubtitleLang}
-                    onChange={setSecondarySubtitleLang}
-                    options={SUBTITLE_LANG_OPTIONS}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowLangPanel(false)}
-                    className="absolute top-3 right-3 w-7 h-7 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10"
-                    aria-label="닫기"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </>
-            )}
+                <div className="absolute right-3 bottom-14 z-50">
+                  {settingsPanel === 'main' && (
+                    <div className="w-72 bg-black/90 backdrop-blur-md text-white rounded-xl shadow-2xl overflow-hidden">
+                      {/* 화면 비율 */}
+                      <button
+                        type="button"
+                        onClick={() => setSettingsPanel('aspect')}
+                        className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/10 transition-colors"
+                      >
+                        <span>Aspect Ratio</span>
+                        <div className="flex items-center gap-2 text-white/60">
+                          <span className="text-sm">{aspectRatio.replace('/', ':')}</span>
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
+                        </div>
+                      </button>
 
-            {/* 자막 설정 팝업 (화면 내부) */}
-            {showSubtitleSettings && (
-              <>
-                <div
-                  className="absolute inset-0 bg-black/40 z-40"
-                  onClick={() => setShowSubtitleSettings(false)}
-                />
-                <div className="absolute right-3 bottom-16 z-50 w-72 bg-surface text-onSurface rounded-xl shadow-2xl p-4 border border-black/5">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="font-semibold">자막 설정</h3>
-                    <button
-                      onClick={() => setShowSubtitleSettings(false)}
-                      className="text-onSurface/60 hover:text-onSurface"
-                    >
-                      ✕
-                    </button>
-                  </div>
+                      <div className="h-px bg-white/10" />
 
-                  <div className="mb-4">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label className="text-sm">글자 크기</label>
-                      <span className="text-sm text-onSurface/70">{subtitleSettings.fontSize}px</span>
+                      {/* 언어 설정 */}
+                      <button
+                        type="button"
+                        onClick={() => setSettingsPanel('language')}
+                        className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/10 transition-colors"
+                      >
+                        <span>Language</span>
+                        <svg className="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </button>
+
+                      <div className="h-px bg-white/10" />
+
+                      {/* 글자 크기 */}
+                      <button
+                        type="button"
+                        onClick={() => setSettingsPanel('fontSize')}
+                        className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/10 transition-colors"
+                      >
+                        <span>Font Size</span>
+                        <div className="flex items-center gap-2 text-white/60">
+                          <span className="text-sm">{subtitleSettings.fontSize}px</span>
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
+                        </div>
+                      </button>
+
+                      <div className="h-px bg-white/10" />
+
+                      {/* 스타일 */}
+                      <button
+                        type="button"
+                        onClick={() => setSettingsPanel('style')}
+                        className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/10 transition-colors"
+                      >
+                        <span>Style</span>
+                        <div className="flex items-center gap-2 text-white/60">
+                          <span className="text-sm">{STYLE_LABEL[subtitleSettings.style]}</span>
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          </svg>
+                        </div>
+                      </button>
                     </div>
-                    <input
-                      type="range"
-                      min={12}
-                      max={36}
-                      step={1}
-                      value={subtitleSettings.fontSize}
-                      onChange={(e) => setSubtitleSettings({ fontSize: Number(e.target.value) })}
-                      className="w-full accent-overlaySurface"
-                    />
-                  </div>
+                  )}
 
-                  <div>
-                    <label className="text-sm block mb-1.5">스타일</label>
-                    <div className="grid grid-cols-3 gap-2">
-                      {(Object.keys(STYLE_LABEL) as SubtitleStyle[]).map((s) => (
+                  {settingsPanel === 'aspect' && (
+                    <div className="w-72 bg-black/90 backdrop-blur-md text-white rounded-xl shadow-2xl overflow-hidden">
+                      <div className="flex items-center gap-2 px-3 py-3 border-b border-white/10">
                         <button
-                          key={s}
-                          onClick={() => setSubtitleSettings({ style: s })}
-                          className={`py-2 text-sm rounded-lg border transition-colors ${
-                            subtitleSettings.style === s
-                              ? 'bg-overlaySurface text-onOverlaySurface border-overlaySurface'
-                              : 'bg-primaryContainer text-onSurface border-transparent hover:bg-primaryContainer/80'
-                          }`}
+                          type="button"
+                          onClick={() => setSettingsPanel('main')}
+                          className="p-1 rounded hover:bg-white/10"
+                          aria-label="뒤로"
                         >
-                          {STYLE_LABEL[s]}
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                          </svg>
+                        </button>
+                        <span className="font-medium">Aspect Ratio</span>
+                      </div>
+                      {ASPECT_OPTIONS.map((opt) => (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          onClick={() => { setAspectRatio(opt.value); setSettingsPanel('main') }}
+                          className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/10 transition-colors"
+                        >
+                          <span className={`w-4 text-sm ${aspectRatio === opt.value ? 'opacity-100' : 'opacity-0'}`}>✓</span>
+                          <span className={aspectRatio === opt.value ? 'font-medium' : ''}>{opt.label}</span>
                         </button>
                       ))}
                     </div>
-                  </div>
+                  )}
+
+                  {settingsPanel === 'language' && (
+                    <div className="w-[min(90%,700px)] bg-black/90 backdrop-blur-md text-white rounded-xl shadow-2xl overflow-hidden">
+                      <div className="flex items-center gap-2 px-3 py-3 border-b border-white/10">
+                        <button
+                          type="button"
+                          onClick={() => setSettingsPanel('main')}
+                          className="p-1 rounded hover:bg-white/10"
+                          aria-label="뒤로"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                          </svg>
+                        </button>
+                        <span className="font-medium">Language</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-8 p-6">
+                        <LangColumn
+                          title="Audio"
+                          value={audioLang}
+                          onChange={setAudioLang}
+                          options={AUDIO_LANG_OPTIONS}
+                        />
+                        <LangColumn
+                          title="Subtitles"
+                          value={subtitleLang}
+                          onChange={setSubtitleLang}
+                          options={SUBTITLE_LANG_OPTIONS}
+                        />
+                        <LangColumn
+                          title="Secondary Subtitles"
+                          value={secondarySubtitleLang}
+                          onChange={setSecondarySubtitleLang}
+                          options={SUBTITLE_LANG_OPTIONS}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 글자 크기 서브패널 */}
+                  {settingsPanel === 'fontSize' && (
+                    <div className="w-72 bg-black/90 backdrop-blur-md text-white rounded-xl shadow-2xl overflow-hidden">
+                      <div className="flex items-center gap-2 px-3 py-3 border-b border-white/10">
+                        <button
+                          type="button"
+                          onClick={() => setSettingsPanel('main')}
+                          className="p-1 rounded hover:bg-white/10"
+                          aria-label="뒤로"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                          </svg>
+                        </button>
+                        <span className="font-medium">Font Size</span>
+                      </div>
+                      <div className="px-4 py-4">
+                        <div className="flex justify-end items-center mb-3">
+                          <span className="text-base font-medium">{subtitleSettings.fontSize}px</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={12}
+                          max={36}
+                          step={1}
+                          value={subtitleSettings.fontSize}
+                          onChange={(e) => setSubtitleSettings({ fontSize: Number(e.target.value) })}
+                          className="w-full accent-white"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 스타일 서브패널 */}
+                  {settingsPanel === 'style' && (
+                    <div className="w-72 bg-black/90 backdrop-blur-md text-white rounded-xl shadow-2xl overflow-hidden">
+                      <div className="flex items-center gap-2 px-3 py-3 border-b border-white/10">
+                        <button
+                          type="button"
+                          onClick={() => setSettingsPanel('main')}
+                          className="p-1 rounded hover:bg-white/10"
+                          aria-label="뒤로"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                          </svg>
+                        </button>
+                        <span className="font-medium">Style</span>
+                      </div>
+                      {(Object.keys(STYLE_LABEL) as SubtitleStyle[]).map((s) => (
+                        <button
+                          key={s}
+                          type="button"
+                          onClick={() => { setSubtitleSettings({ style: s }); setSettingsPanel('main') }}
+                          className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/10 transition-colors"
+                        >
+                          <span className={`w-4 text-sm ${subtitleSettings.style === s ? 'opacity-100' : 'opacity-0'}`}>✓</span>
+                          <span className={subtitleSettings.style === s ? 'font-medium' : ''}>{STYLE_LABEL[s]}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </>
             )}
