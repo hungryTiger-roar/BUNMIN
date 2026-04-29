@@ -228,15 +228,6 @@ step(7, TOTAL, '설치 검증...')
     }
   }
 
-  // TTS 모델 파일 확인
-  const ttsDir = path.join(ROOT, 'backend', 'app', 'services', 'models')
-  for (const f of ['en_US-lessac-medium.onnx', 'en_US-lessac-medium.onnx.json']) {
-    if (!fs.existsSync(path.join(ttsDir, f))) {
-      console.error(`  ✗ 누락: backend/app/services/models/${f}`)
-      ok = false
-    }
-  }
-
   // NMT CTranslate2 모델 확인 — 필수 파일 5개 모두 존재해야 함
   // (sentencepiece spm 파일 누락 시 nmt_service가 HF 폴백으로 떨어져 성능 저하)
   const nmtDir = path.join(ROOT, 'models', 'opus-mt-ct2')
