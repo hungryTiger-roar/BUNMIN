@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useLectureStore } from '@/stores/lectureStore'
 import { usePreferencesStore, type AspectRatio } from '@/stores/preferencesStore'
 import { API_BASE } from '@/lib/api'
+import MaterialViewToggle from '@/components/common/MaterialViewToggle'
 
 const ASPECT_CLASS: Record<AspectRatio, string> = {
   '16/9': 'aspect-[16/9]',
@@ -27,6 +28,7 @@ function SlideViewer({ onPageChange, children, containerRef }: SlideViewerProps)
     setSlidePages,
     nextPage,
     prevPage,
+    materialMode,
   } = useLectureStore()
 
   // 슬라이드 페이지 목록 로드
@@ -82,6 +84,9 @@ function SlideViewer({ onPageChange, children, containerRef }: SlideViewerProps)
   }, [nextPage, prevPage])
 
   const currentSlideImage = slidePages[currentPage - 1]?.imageUrl
+  const slideImageUrl = currentSlideImage
+    ? `${API_BASE}${currentSlideImage}${materialMode === 'translated' ? '?translated=true' : ''}`
+    : null
 
   // aspect 박스 한 개만 렌더 — 페이지 네비/썸네일은 Lecturer에서 별도 배치
   return (
@@ -89,9 +94,9 @@ function SlideViewer({ onPageChange, children, containerRef }: SlideViewerProps)
       ref={containerRef}
       className={`relative bg-slate-900 rounded-xl overflow-hidden ${aspectClass} max-h-full h-full max-w-full group shadow-2xl`}
     >
-      {currentSlideImage ? (
+      {slideImageUrl ? (
         <img
-          src={`${API_BASE}${currentSlideImage}`}
+          src={slideImageUrl}
           alt={`슬라이드 ${currentPage}`}
           className="w-full h-full object-contain"
         />
@@ -100,6 +105,9 @@ function SlideViewer({ onPageChange, children, containerRef }: SlideViewerProps)
           <div className="animate-pulse">로딩 중...</div>
         </div>
       )}
+
+      {/* 강의자료 원본/번역 토글 (우측 상단) */}
+      <MaterialViewToggle className="absolute top-3 right-3 z-20" />
 
       {/* 이전/다음 버튼 (호버 시 표시) */}
       <button

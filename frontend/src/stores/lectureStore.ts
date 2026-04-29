@@ -80,6 +80,10 @@ interface LectureState {
   nextPage: () => void
   prevPage: () => void
 
+  // 강의자료(슬라이드) 보기 모드 — 강의자/수강자 공통, 자막용 viewMode와 별개
+  materialMode: 'original' | 'translated'
+  setMaterialMode: (mode: 'original' | 'translated') => void
+
   // 수강자 상태
   viewMode: 'original' | 'translated'
   isAudioOn: boolean
@@ -133,6 +137,7 @@ const initialState = {
   currentPage: 1,
   totalPages: 0,
   slidePages: [],
+  materialMode: 'translated' as const,
   viewMode: 'original' as const,
   isAudioOn: true,
   isSubtitleOn: true,
@@ -184,6 +189,9 @@ export const useLectureStore = create<LectureState>((set, get) => ({
       set({ currentPage: currentPage - 1 })
     }
   },
+
+  // 강의자료 보기 모드
+  setMaterialMode: (mode) => set({ materialMode: mode }),
 
   // 수강자 상태
   setViewMode: (mode) => set({ viewMode: mode }),

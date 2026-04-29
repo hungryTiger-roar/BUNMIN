@@ -94,22 +94,22 @@ export default function Start() {
       </button>
 
       <div className="text-center mb-16">
-        <h1 className="text-6xl font-special-gothic text-onPrimary mb-3">
+        <h1 className="text-6xl font-special-gothic text-white mb-3">
           Aunion AI LECTURE
         </h1>
-        <p className="font-a2z text-onPrimary text-lg tracking-wide">
+        <p className="font-a2z text-white text-lg tracking-wide">
           {t.subtitle}
         </p>
       </div>
 
-      <h2 className="font-a2z text-onPrimary text-2xl mb-8 leading-snug whitespace-nowrap tracking-wide">
+      <h2 className="font-a2z text-white text-2xl mb-8 leading-snug whitespace-nowrap tracking-wide">
         {t.prompt}
       </h2>
 
       <div className="w-full max-w-sm">
         <form onSubmit={handleSubmit} className="space-y-5">
           <div>
-            <label className="text-onPrimary/80 text-sm mb-1.5 flex items-center gap-1">
+            <label className="text-white/80 text-sm mb-1.5 flex items-center gap-1">
               {t.nameLabel}
               <span className="text-error">*</span>
             </label>
@@ -144,7 +144,7 @@ export default function Start() {
               onChange={(e) => setSaveInfo(e.target.checked)}
               className="w-4 h-4 accent-primary"
             />
-            <span className="text-onPrimary/80 text-sm">{t.saveInfo}</span>
+            <span className="text-white/80 text-sm">{t.saveInfo}</span>
           </label>
 
           <button
@@ -156,7 +156,7 @@ export default function Start() {
         </form>
       </div>
 
-      <p className="absolute bottom-6 right-6 text-sm text-onPrimary/70">
+      <p className="absolute bottom-6 right-6 text-sm text-white/70">
         {t.footer}
       </p>
     </div>

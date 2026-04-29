@@ -414,40 +414,70 @@ result = translate_slide(
 
 ### 6.2 FastAPI 엔드포인트
 
+실제 서비스는 단일 이미지 `/translate` 엔드포인트가 아닌 **PDF 업로드 → 비동기 처리 → 폴링** 흐름으로 동작합니다.
+
 ```python
 # backend/app/routers/slides.py
 
-@router.post("/translate")
-async def translate_slide_endpoint(file: UploadFile):
-    # 1. 파일 저장
-    image_path = save_upload(file)
+# 1. PDF 업로드 (백그라운드에서 OCR + VLM 번역 시작)
+@router.post("/upload")
+async def upload_slide(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    slide_id = str(uuid.uuid4())[:8]
+    # 파일 저장 후 백그라운드 태스크에 process_slide() 등록
+    background_tasks.add_task(process_slide, slide_id, save_path)
+    return {"slide_id": slide_id, "message": "업로드 완료, 처리 시작"}
 
-    # 2. 번역 실행
-    result = translate_slide(image_path, output_path)
+# 2. 처리 상태 폴링 (프론트엔드가 2초마다 호출)
+@router.get("/status/{slide_id}")
+async def get_status(slide_id: str) -> SlideStatus:
+    # stage, stage_current/total, eta_seconds 포함 응답
+    ...
 
-    # 3. 결과 반환
-    return {
-        "original": image_path,
-        "translated": result["translated_image"],
-        "regions": result["regions"]
-    }
+# 3. 슬라이드 이미지 조회 (?translated=true → 번역본)
+@router.get("/image/{slide_id}/{page_number}")
+async def get_image(slide_id: str, page_number: int, translated: bool = False):
+    ...
+
+# 4. PDF 다운로드 (?type=original 또는 ?type=translated)
+@router.get("/download/{slide_id}")
+async def download_pdf(slide_id: str, type: str = "original"):
+    ...
+
+# 5. 업로드된 강의자료 목록 (수강자 다운로드용)
+@router.get("/list")
+async def list_slides():
+    # slide_id, filename, status, has_translated 목록 반환
+    ...
 ```
 
 ### 6.3 프론트엔드 연동
 
-```typescript
-// 원본/번역 토글
-const [showOriginal, setShowOriginal] = useState(false);
+원본/번역 전환은 `MaterialViewToggle` 컴포넌트(`src/components/common/MaterialViewToggle.tsx`)가 담당합니다.
+Zustand `lectureStore`의 `materialMode` 상태를 읽고 토글합니다.
 
-return (
-  <div>
-    <button onClick={() => setShowOriginal(!showOriginal)}>
-      {showOriginal ? "번역본 보기" : "원본 보기"}
+```typescript
+// src/components/common/MaterialViewToggle.tsx
+import { useLectureStore } from '@/stores/lectureStore'
+
+function MaterialViewToggle({ className = '' }) {
+  const { materialMode, setMaterialMode } = useLectureStore()
+  const toggle = () =>
+    setMaterialMode(materialMode === 'original' ? 'translated' : 'original')
+
+  return (
+    <button type="button" onClick={toggle} className={`...backdrop-blur... ${className}`}>
+      <span className={materialMode === 'original' ? 'bg-white text-gray-900' : 'text-white/70'}>
+        원본
+      </span>
+      <span className={materialMode === 'translated' ? 'bg-primary text-onPrimary' : 'text-white/70'}>
+        번역
+      </span>
     </button>
-    <img src={showOriginal ? originalUrl : translatedUrl} />
-  </div>
-);
+  )
+}
 ```
+
+슬라이드 이미지를 표시하는 `SlideViewer`에서는 `materialMode`를 읽어 `/slides/image/{id}/{page}?translated=true` 여부를 결정합니다.
 
 ---
 
@@ -509,7 +539,7 @@ rendering:
 hyphenation:
   suffix_patterns: ["tion", "sion", "ness"]
 
-# 9. Prefix 기호 처리 (신규)
+# 9. Prefix 기호 처리
 prefix_symbols:
   pixel_preserve_prefixes: ["☑", "☐", "📦"]
   force_render_prefixes: ["-", "•", "▶"]
@@ -529,6 +559,12 @@ inpainting:
 output:
   save_json: true
   save_translated_image: true
+
+# 13. 제외: 번역 용어 glossary
+# term_glossary:
+#   사용하지 않음.
+#   이유: 도메인 용어는 하드코딩하지 않음.
+#   추후 pgvector 기반 용어 검색/RAG로 처리.
 ```
 
 ---

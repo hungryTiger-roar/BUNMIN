@@ -1,5 +1,12 @@
 # 레이아웃 기반 번역 블록 설계
 
+> **구현 상태: 설계 완료 / 코드 미적용**
+>
+> `build_translation_blocks()` 및 `translate_blocks()` 함수가 `translate_slide_v3.py`에 정의되어 있으나,
+> 현재 `stage_translate()` 함수는 **줄 단위(region별) 번역**을 사용합니다.
+> Translation Block 시스템은 설계대로 구현되어 있지만 활성화되지 않은 상태입니다.
+> 활성화하려면 `stage_translate()` 내부에서 `build_translation_blocks()` → `translate_blocks()` 호출로 교체해야 합니다.
+
 ## 개요
 
 OCR 줄 단위 번역의 문제점을 해결하기 위해 **Translation Block** 개념을 도입한다.
