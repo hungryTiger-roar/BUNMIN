@@ -376,14 +376,16 @@ def get_vlm_model():
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=torch.float16,
             bnb_4bit_use_double_quant=True,
-            llm_int8_enable_fp32_cpu_offload=True,
+            # llm_int8_enable_fp32_cpu_offload은 INT8 전용 옵션 — 4bit 설정에서 사용하면
+            # 일부 레이어가 meta device에 남아 PeftModel.from_pretrained 시
+            # "Tensor.item() cannot be called on meta tensors" 오류 발생
         )
         model_kwargs = {
             "quantization_config": bnb_config,
             "device_map": "auto",
             "trust_remote_code": True,
-            "low_cpu_mem_usage": True,
-            "max_memory": {0: VLM_MAX_GPU_MEMORY, "cpu": "16GB"},
+            # low_cpu_mem_usage=True + device_map="auto" + BnB 4bit 조합 시
+            # 레이어 일부가 meta tensor로 남아 PeftModel 적용 시 오류 발생하므로 제거
         }
     else:
         model_kwargs = {
@@ -2127,7 +2129,15 @@ Translate:"""
             },
         ]
 
-        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        # enable_thinking=False: Qwen3 thinking 모드 비활성화
+        # thinking 블록 안에 번호 붙은 줄이 들어오면 번역 파싱이 오염됨
+        # 지원하지 않는 processor는 그냥 무시하고 기본값으로 진행
+        try:
+            text = processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+            )
+        except TypeError:
+            text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = processor(text=[text], images=None, return_tensors="pt").to(model.device)
 
         # 재시도 시 temperature 약간 높임
@@ -2232,7 +2242,12 @@ Korean: {korean_text}
 English:"""
 
             messages = [{"role": "user", "content": [{"type": "text", "text": individual_prompt}]}]
-            text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            try:
+                text = processor.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+                )
+            except TypeError:
+                text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             inputs = processor(text=[text], images=None, return_tensors="pt").to(model.device)
 
             with torch.no_grad():
