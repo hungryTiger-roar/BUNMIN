@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLectureStore } from '@/stores/lectureStore'
 import { usePreferencesStore } from '@/stores/preferencesStore'
 import { API_BASE } from '@/lib/api'
-import { useTTS } from '@/hooks/useTTS'
 
 interface WebSocketMessage {
   type: string
@@ -22,22 +21,15 @@ export interface CursorMessage {
 interface UseWebSocketOptions {
   /** 커서 메시지 수신 시 콜백 (React 상태 대신 DOM 직접 업데이트용) */
   onCursor?: (cursor: CursorMessage) => void
+  /** 번역 텍스트 수신 시 콜백 (TTS 합성 등) */
+  onTranslation?: (text: string) => void
 }
 
 export function useWebSocket(url: string, role: Role = 'student', options: UseWebSocketOptions = {}) {
-  const { onCursor } = options
+  const { onCursor, onTranslation } = options
   const socketRef = useRef<WebSocket | null>(null)
   const [isConnected, setIsConnected] = useState(false)
-  const [isAudioUnlocked, setIsAudioUnlocked] = useState(false)
-  const isAudioUnlockedRef = useRef(false)  // stale closure 방지
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
-
-  // 수강자만 TTS Worker 생성 (강의자는 enabled=false)
-  const { synthesize, unlockAudio: unlockTTS, status: ttsStatus, setVolume: setTTSVolume } = useTTS(role === 'student')
-
-  // synthesize는 deps 없이 stable하지만, 혹시 교체될 경우를 위해 ref로 보관
-  const synthesizeRef = useRef(synthesize)
-  synthesizeRef.current = synthesize
 
   const {
     addSubtitle,
@@ -66,11 +58,12 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     registerNameRef.current = role === 'lecturer' ? lecturerName : studentName
   }, [role, lecturerName, studentName])
 
-  // onCursor callback ref (stale closure 방지)
+  // onCursor / onTranslation callback refs (stale closure 방지)
   const onCursorRef = useRef(onCursor)
-  useEffect(() => {
-    onCursorRef.current = onCursor
-  }, [onCursor])
+  useEffect(() => { onCursorRef.current = onCursor }, [onCursor])
+
+  const onTranslationRef = useRef(onTranslation)
+  useEffect(() => { onTranslationRef.current = onTranslation }, [onTranslation])
 
   // 슬라이드 페이지 로드
   const loadSlidePages = useCallback(async (slideId: string) => {
@@ -102,11 +95,9 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
           inputTime,
         })
 
-        // 로컬 WASM TTS 합성·재생 (수강자 + 오디오 잠금 해제 상태에서만)
-        if (role === 'student' && isAudioUnlockedRef.current && data.translated) {
-          synthesizeRef.current(data.translated as string).catch((err) =>
-            console.error('[TTS] 합성 실패:', err),
-          )
+        // 번역 텍스트 콜백 (TTS 등 상위에서 처리)
+        if (data.translated) {
+          onTranslationRef.current?.(data.translated as string)
         }
         break
       }
@@ -330,13 +321,6 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     socketRef.current = socket
   }, [url, role, setConnected, handleMessage])
 
-  const unlockAudio = useCallback(() => {
-    unlockTTS()
-    isAudioUnlockedRef.current = true
-    setIsAudioUnlocked(true)
-    console.log('[Audio] 재생 잠금 해제됨 (WASM TTS)')
-  }, [unlockTTS])
-
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current)
@@ -355,15 +339,11 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
 
   return {
     isConnected,
-    isAudioUnlocked,
-    ttsStatus,
     connect,
     disconnect,
     send,
     sendChat,
     sendLectureTitle,
     sendLecturerName,
-    unlockAudio,
-    setTTSVolume,
   }
 }

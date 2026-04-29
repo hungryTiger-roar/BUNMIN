@@ -64,7 +64,7 @@ export default function Start() {
     }
 
     setStudentName(trimmed)
-    navigate('/student')
+    navigate('/student', { state: { autoEnter: true } })
   }
 
   return (
