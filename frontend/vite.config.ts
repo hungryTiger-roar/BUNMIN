@@ -17,11 +17,16 @@ export default defineConfig({
       name: 'serve-public-mjs',
       configureServer(server) {
         server.middlewares.use((req, res, next) => {
-          if (req.url?.startsWith('/ort-wasm-simd-threaded')) {
-            const fileName = req.url.split('?')[0].slice(1)
-            const filePath = path.resolve(__dirname, 'public', fileName)
+          const url = req.url?.split('?')[0].slice(1) ?? ''
+          const isWasmFile =
+            url.startsWith('ort-wasm-simd-threaded') ||
+            url.startsWith('onnx/') ||
+            url.startsWith('piper/') ||
+            url.startsWith('worker/')
+          if (isWasmFile) {
+            const filePath = path.resolve(__dirname, 'public', url)
             if (fs.existsSync(filePath)) {
-              const contentType = fileName.endsWith('.wasm') ? 'application/wasm' : 'text/javascript'
+              const contentType = url.endsWith('.wasm') ? 'application/wasm' : 'text/javascript'
               res.setHeader('Content-Type', contentType)
               fs.createReadStream(filePath).pipe(res as any)
               return
@@ -40,7 +45,7 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    exclude: ['@ricky0123/vad-web', 'onnxruntime-web', 'kokoro-js'],
+    exclude: ['@ricky0123/vad-web', 'onnxruntime-web', 'kokoro-js', 'piper-tts-web'],
   },
   server: {
     port: 3000,
