@@ -308,11 +308,21 @@ function createWindow() {
     show: false,
   })
 
-  // 마이크/카메라 권한 자동 허가 (Electron 단독 앱 — 외부 사이트 아님)
+  // 마이크/카메라/클립보드 권한 자동 허가 (Electron 단독 앱 — 외부 사이트 아님)
+  const _allowedPermissions = new Set([
+    'media',
+    'mediaKeySystem',
+    'clipboard-read',
+    'clipboard-sanitized-write',
+  ])
   mainWindow.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
-    const ok = permission === 'media' || permission === 'mediaKeySystem'
+    const ok = _allowedPermissions.has(permission)
     devLog(`권한 요청: ${permission} → ${ok ? 'allow' : 'deny'}`)
     callback(ok)
+  })
+  // navigator.permissions.query() 호출 시도 동기 응답
+  mainWindow.webContents.session.setPermissionCheckHandler((_wc, permission) => {
+    return _allowedPermissions.has(permission)
   })
 
   if (isDev) {

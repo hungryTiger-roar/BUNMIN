@@ -79,6 +79,10 @@ hiddenimports += collect_submodules('piper')
 datas = []
 datas += collect_data_files('transformers')
 datas += collect_data_files('rapidocr_onnxruntime')
+# faster_whisper의 assets/silero_vad_v6.onnx — vad_filter=True 사용 시 필수
+datas += collect_data_files('faster_whisper')
+# piper의 espeak-ng-data — TTS 합성 시 phoneme 변환에 필수 (없으면 phontab 에러)
+datas += collect_data_files('piper')
 
 # 앱 디렉토리 포함
 datas += [
