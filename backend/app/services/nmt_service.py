@@ -9,7 +9,14 @@ NMT (Neural Machine Translation) 서비스
 import subprocess
 from pathlib import Path
 
-_CT2_MODEL_DIR = Path(__file__).parent.parent.parent.parent / "models" / "opus-mt-ct2"
+from app.config import resolve_model_dir, USER_DATA_DIR
+
+
+def _ct2_model_dir() -> Path:
+    """CT2 변환된 모델 디렉토리. resolve_model_dir로 동봉/사용자/프로젝트 검색,
+    없으면 USER_DATA_DIR/models/opus-mt-ct2/ (변환 결과 저장 위치)."""
+    found = resolve_model_dir("opus-mt-ct2")
+    return found if found is not None else USER_DATA_DIR / "models" / "opus-mt-ct2"
 
 
 class NMTService:
@@ -39,33 +46,34 @@ class NMTService:
             import ctranslate2
             import sentencepiece as spm
 
-            if not _CT2_MODEL_DIR.exists():
-                self._convert_model()
+            ct2_dir = _ct2_model_dir()
+            if not ct2_dir.exists():
+                self._convert_model(ct2_dir)
 
             self._ct2 = ctranslate2.Translator(
-                str(_CT2_MODEL_DIR),
+                str(ct2_dir),
                 device=self.device,
                 inter_threads=2,
             )
             self._sp_src = spm.SentencePieceProcessor()
-            self._sp_src.Load(str(_CT2_MODEL_DIR / "source.spm"))
+            self._sp_src.Load(str(ct2_dir / "source.spm"))
             self._sp_tgt = spm.SentencePieceProcessor()
-            self._sp_tgt.Load(str(_CT2_MODEL_DIR / "target.spm"))
+            self._sp_tgt.Load(str(ct2_dir / "target.spm"))
 
-            print(f"[NMT] CTranslate2 opus-mt-ko-en 로드 완료 ({self.device}, int8)")
+            print(f"[NMT] CTranslate2 opus-mt-ko-en 로드 완료 ({self.device}, int8) [{ct2_dir}]")
             return True
         except Exception as e:
             print(f"[NMT] CTranslate2 로드 실패 → HuggingFace 폴백: {e}")
             return False
 
-    def _convert_model(self):
-        print(f"[NMT] CTranslate2 변환 중: {self.model_name} → {_CT2_MODEL_DIR}")
-        _CT2_MODEL_DIR.parent.mkdir(parents=True, exist_ok=True)
+    def _convert_model(self, ct2_dir: Path):
+        print(f"[NMT] CTranslate2 변환 중: {self.model_name} → {ct2_dir}")
+        ct2_dir.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
             [
                 "ct2-transformers-converter",
                 "--model", self.model_name,
-                "--output_dir", str(_CT2_MODEL_DIR),
+                "--output_dir", str(ct2_dir),
                 "--quantization", "int8",
                 "--force",
             ],

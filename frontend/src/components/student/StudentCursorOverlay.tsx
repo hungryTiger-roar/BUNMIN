@@ -75,7 +75,7 @@ export function useCursorOverlay(containerRef: React.RefObject<HTMLDivElement | 
 }
 
 interface StudentCursorOverlayProps {
-  spotlightRef: React.RefObject<HTMLDivElement | null>
+  spotlightRef: React.RefObject<HTMLDivElement>
 }
 
 export function StudentCursorOverlay({ spotlightRef }: StudentCursorOverlayProps) {

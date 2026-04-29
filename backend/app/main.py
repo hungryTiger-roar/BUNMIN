@@ -12,23 +12,38 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.config import ModelConfig
+from app.config import ModelConfig, PROJECT_ROOT, resolve_model_dir
 from app.routers import ws, slides, transcripts, network, mode
 from app.utils.firewall import ensure_firewall_rule
 from app.utils.network import SERVER_PORT, get_lan_ip
 
-# VLM Base 모델 (translate_slide_v3.py와 동일한 env 사용)
-# .env 값이 상대 경로면 프로젝트 루트 기준 절대 경로로 변환, repo_id면 그대로
+# VLM Base 모델: env 미설정이면 로컬 동봉본(qwen3-vl-8b-instruct) 우선,
+# 없으면 HF repo_id로 fallback. 사용자가 env로 명시하면 그 값 그대로.
 from pathlib import Path as _Path
-_PROJECT_ROOT = _Path(__file__).parent.parent.parent
+
 def _resolve_vlm(value: str) -> str:
     p = _Path(value)
     if p.is_absolute():
         return value
-    candidate = _PROJECT_ROOT / value
-    return str(candidate) if candidate.is_dir() else value
+    # 상대 경로면 다단계 폴백 (USER_DATA → INSTALL → PROJECT_ROOT)
+    found = resolve_model_dir(_Path(value).name)
+    if found is not None:
+        return str(found)
+    # PROJECT_ROOT 직접 검사 (호환성)
+    candidate = PROJECT_ROOT / value
+    if candidate.is_dir():
+        return str(candidate)
+    return value
 
-VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL", "Qwen/Qwen3-VL-8B-Instruct"))
+
+def _vlm_default() -> str:
+    """env 미지정 시 사용할 기본값. 로컬 디렉토리가 있으면 그 경로,
+    없으면 HF repo_id로 fallback해 다운로드 트리거."""
+    found = resolve_model_dir("qwen3-vl-8b-instruct")
+    return str(found) if found is not None else "Qwen/Qwen3-VL-8B-Instruct"
+
+
+VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL") or _vlm_default())
 
 # PyInstaller 번들 여부에 따라 frontend dist 경로 결정
 if getattr(sys, 'frozen', False):
@@ -73,24 +88,45 @@ def _start_health_thread(port: int = 18765):
     print(f"[Health] 전용 서버 시작: port {port}", flush=True)
 
 
-def _is_cached(model_name: str) -> bool:
-    """HuggingFace 캐시에 모델이 완전히 있는지 확인.
-    incomplete 파일이 있거나 모델 가중치(10MB 이상 파일)가 없으면 False.
-    슬래시 없는 값(로컬 식별자)은 True로 처리 (서비스 자체에서 관리).
-    로컬 디렉토리 경로면 가중치 파일 존재로 판단."""
+def _is_local_path_format(value: str) -> bool:
+    """value가 HF repo_id가 아니라 로컬 경로 형식인지 판별."""
     from pathlib import Path
-    # 로컬 절대경로 (Windows: C:\..., Linux: /...) → 디렉토리에 가중치 파일 존재 시 캐시됨
-    p = Path(model_name)
-    if p.is_absolute():
-        if not p.is_dir():
-            return False
-        weights = list(p.glob("*.safetensors")) + list(p.glob("*.bin"))
-        return len(weights) > 0
+    if Path(value).is_absolute():
+        return True
+    return value.startswith(("models/", "models\\", "./", "../", ".\\", "..\\"))
+
+
+def _has_weights(directory) -> bool:
+    """디렉토리에 모델 가중치 파일이 있는지 (HF safetensors/bin 또는 CT2 model.bin)."""
+    from pathlib import Path
+    p = Path(directory)
+    if not p.is_dir():
+        return False
+    return (
+        any(p.rglob("*.safetensors"))
+        or any(p.rglob("*.bin"))
+        or (p / "model.bin").is_file()
+    )
+
+
+def _is_cached(model_name: str) -> bool:
+    """모델이 로컬 디렉토리 또는 HF 캐시에 있는지 판단.
+      - 로컬 경로 형식(절대/`models/...`): 디렉토리 + 가중치 존재 검사
+      - 단순 이름(piper, rapidocr): True (서비스 자체에서 처리)
+      - HF repo_id: 캐시 검사
+    """
+    from pathlib import Path
+    # 로컬 경로 형식
+    if _is_local_path_format(model_name):
+        p = Path(model_name)
+        target = p if p.is_absolute() else (PROJECT_ROOT / model_name)
+        return _has_weights(target)
+    # 서비스 내부 처리 (piper, rapidocr 등)
     if "/" not in model_name:
         return True
+    # HF repo_id → 캐시 검사
     try:
         from huggingface_hub import scan_cache_dir
-        from pathlib import Path
         cache_info = scan_cache_dir()
         for repo in cache_info.repos:
             if repo.repo_id == model_name:
@@ -158,7 +194,14 @@ def _track_all_downloads():
 
 
 def _download_one(model_key: str, repo_id: str):
-    """단일 모델 HuggingFace 다운로드 — ThreadPoolExecutor에서 병렬 실행"""
+    """단일 모델 HuggingFace 다운로드 — ThreadPoolExecutor에서 병렬 실행.
+    repo_id가 로컬 경로 형식이면 (예: 'models/...') 다운로드 대신 명확한 에러."""
+    if _is_local_path_format(repo_id):
+        raise RuntimeError(
+            f"{model_key.upper()} 모델이 지정된 로컬 경로에 없습니다: {repo_id}\n"
+            f"  해결: 'npm run setup' 재실행 또는 .env의 {model_key.upper()}_MODEL을\n"
+            f"        HuggingFace repo_id로 변경 (예: Qwen/Qwen3-VL-8B-Instruct)."
+        )
     from huggingface_hub import snapshot_download
     _thread_model_key.key = model_key  # 이 스레드의 모델 키 등록
     _model_status["models"][model_key]["status"] = "loading"
@@ -395,6 +438,22 @@ if os.path.isdir(_assets_dir):
 
 @app.get('/{path:path}', include_in_schema=False)
 async def spa_fallback(path: str):
+    # 1) frontend/dist 최상단의 정적 파일 (ort.all.min.js, vad-bundle.min.js,
+    #    silero_vad_*.onnx, vite.svg 등)은 직접 서빙. 안 그러면 index.html이
+    #    대신 반환되어 JS 파서가 '<' 토큰 에러로 죽음.
+    if path:
+        candidate = os.path.join(_FRONTEND_DIST, path)
+        try:
+            real_candidate = os.path.realpath(candidate)
+            real_dist = os.path.realpath(_FRONTEND_DIST)
+            if (
+                os.path.commonpath([real_candidate, real_dist]) == real_dist
+                and os.path.isfile(real_candidate)
+            ):
+                return FileResponse(real_candidate)
+        except (OSError, ValueError):
+            pass
+    # 2) SPA 라우트 (/, /lecturer 등) → index.html
     index = os.path.join(_FRONTEND_DIST, 'index.html')
     if os.path.isfile(index):
         return FileResponse(index)
