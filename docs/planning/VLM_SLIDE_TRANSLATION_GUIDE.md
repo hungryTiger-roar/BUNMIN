@@ -457,9 +457,9 @@ return (
 
 ```bash
 # VLM 설정
-VLM_BASE_MODEL=Qwen/Qwen3-VL-8B-Instruct
+VLM_BASE_MODEL=models/qwen3-vl-8b-instruct
 VLM_DEVICE=cuda
-VLM_MAX_GPU_MEMORY=7GB
+VLM_MAX_GPU_MEMORY=6GB
 VLM_USE_4BIT=true
 
 # OCR 설정
