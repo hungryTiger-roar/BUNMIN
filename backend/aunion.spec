@@ -56,8 +56,6 @@ hiddenimports = [
     'accelerate',
     # NMT-ASR - facebook/nllb-200-distilled-1.3B
     'sentencepiece',
-    # TTS - Piper TTS
-    'piper',
     # OCR - RapidOCR + Korean PP-OCRv4
     'rapidocr_onnxruntime',
     'PIL',
@@ -71,7 +69,6 @@ hiddenimports += collect_submodules('starlette')
 hiddenimports += collect_submodules('uvicorn')
 hiddenimports += collect_submodules('transformers')
 hiddenimports += collect_submodules('torch')
-hiddenimports += collect_submodules('piper')
 
 # 데이터 파일
 datas = []

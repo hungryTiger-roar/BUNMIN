@@ -76,7 +76,6 @@ router = APIRouter(prefix="/ws", tags=["WebSocket"])
 # 서비스 인스턴스 (main.py에서 주입)
 _asr_service = None
 _nmt_service = None
-_tts_service = None
 _ocr_service = None
 
 
@@ -88,11 +87,6 @@ def set_asr_service(service):
 def set_nmt_service(service):
     global _nmt_service
     _nmt_service = service
-
-
-def set_tts_service(service):
-    global _tts_service
-    _tts_service = service
 
 
 def set_ocr_service(service):
@@ -543,7 +537,7 @@ async def handle_student(websocket: WebSocket, pong_event: asyncio.Event | None 
 async def process_audio(message: dict):
     """
     오디오 처리 파이프라인: 오디오 → ASR(GPU) → NMT(CPU) → 수강자 전송
-    TTS는 수강자 브라우저에서 WASM(kokoro-js)으로 처리
+    TTS는 수강자 브라우저에서 WASM(piper-tts-web)으로 처리
 
     - _asr_semaphore: ASR GPU 직렬화 (한 번에 하나의 발화만 GPU 사용)
     - _nmt_semaphore: NMT CPU 모델 보호 (ASR 해제 직후 다음 발화 ASR 시작 가능)
