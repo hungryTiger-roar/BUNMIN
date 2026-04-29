@@ -51,6 +51,7 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
     return () => {
       stopKeepAlive()
       vadRef.current?.destroy()
+      vadRef.current = null
       stopStream()
     }
   }, [])
@@ -59,6 +60,7 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
     try {
       setError(null)
       vadRef.current?.destroy()
+      vadRef.current = null
       stopStream()
 
       const stream = await navigator.mediaDevices.getUserMedia({
