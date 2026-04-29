@@ -14,7 +14,7 @@ const STAGE_LABELS: Record<Stage, string> = {
 }
 
 function formatEta(seconds: number): string {
-  if (seconds < 1) return '거의 다 됨'
+  if (seconds < 1) return ''
   if (seconds < 60) return `약 ${Math.ceil(seconds)}초 남음`
   const min = Math.floor(seconds / 60)
   const sec = Math.ceil(seconds % 60)
@@ -33,6 +33,22 @@ function SlideUpload() {
   const [error, setError] = useState<string | null>(null)
 
   const { slideStatus, setSlideId, setSlideStatus, modelMode, setModelMode } = useLectureStore()
+
+  // ETA가 0에 도달한 적이 있는지 — 도달 후엔 카운트다운 대신 'AI 번역중...' 표시
+  // (백엔드 baseline과 실제 속도가 다를 때 ETA가 0에 갔다가 다음 단계 시작 시 다시 점프하는 혼란 방지)
+  const [etaReachedZero, setEtaReachedZero] = useState(false)
+
+  useEffect(() => {
+    if (displayEta !== null && displayEta <= 1 && slideStatus === 'processing') {
+      setEtaReachedZero(true)
+    }
+  }, [displayEta, slideStatus])
+
+  useEffect(() => {
+    if (slideStatus === 'none') {
+      setEtaReachedZero(false)
+    }
+  }, [slideStatus])
 
   // 1초마다 displayEta를 깎아냄 (다음 폴링까지의 부드러운 카운트다운)
   useEffect(() => {
@@ -172,6 +188,10 @@ function SlideUpload() {
     }
   }
 
+  const showAILoading =
+    (slideStatus === 'processing' && etaReachedZero) ||
+    (slideStatus === 'ready' && modelMode === 'switching')
+
   return (
     <div className="text-onSurface">
       <input
@@ -195,14 +215,23 @@ function SlideUpload() {
           <p className="text-sm text-onSurface/70">PDF 파일을 드래그하거나 클릭하세요</p>
           <p className="text-xs text-onSurface/50 mt-1">업로드 즉시 번역이 시작됩니다</p>
         </div>
+      ) : showAILoading ? (
+        <div className="flex flex-col items-center gap-3 py-8 px-2">
+          <svg className="animate-spin w-12 h-12 text-primary" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+          </svg>
+          <p className="text-base font-semibold text-onSurface">AI 번역중...</p>
+          <p className="text-sm text-onSurface/60">잠시만 기다려주세요</p>
+        </div>
       ) : slideStatus === 'uploading' || slideStatus === 'processing' ? (
         <div className="py-4 px-2">
-          <div className="flex items-center gap-2 mb-2">
-            <svg className="animate-spin w-4 h-4 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24">
+          <div className="flex items-center gap-2 mb-3">
+            <svg className="animate-spin w-5 h-5 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
             </svg>
-            <p className="text-sm text-onSurface/80">
+            <p className="text-base font-medium text-onSurface">
               {slideStatus === 'uploading'
                 ? '업로드 중...'
                 : stage === 'bundling'
@@ -216,7 +245,7 @@ function SlideUpload() {
           </div>
 
           {/* 진행률 바 — 단계별 표시 */}
-          <div className="w-full h-1.5 bg-primaryContainer/40 rounded-full overflow-hidden">
+          <div className="w-full h-2 bg-primaryContainer/40 rounded-full overflow-hidden">
             {stage === 'bundling' ? (
               <div className="h-full w-full bg-primary/60 animate-pulse" />
             ) : (
@@ -232,7 +261,7 @@ function SlideUpload() {
             )}
           </div>
 
-          <p className="text-xs text-onSurface/50 mt-2 text-center">
+          <p className="text-sm text-onSurface/60 mt-3 text-center font-medium">
             {slideStatus === 'uploading'
               ? ''
               : displayEta !== null
