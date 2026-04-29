@@ -88,16 +88,13 @@ def _resolve_model(value: str) -> str:
 
 
 class ModelConfig:
-    ASR_MODEL  = _resolve_model(os.environ.get("ASR_MODEL", "ghost613/faster-whisper-large-v3-turbo-korean"))
+    ASR_MODEL  = _resolve_model(os.environ.get("ASR_MODEL", "models/whisper-large-v3-turbo-ct2-int8"))
     ASR_DEVICE = _resolve_device("ASR_DEVICE", "asr")
     ASR_DTYPE  = _dtype(ASR_DEVICE)  # faster-whisper는 compute_type을 ASRService 내부에서 결정
 
     NMT_ASR_MODEL  = os.environ.get("NMT_ASR_MODEL", "Helsinki-NLP/opus-mt-ko-en")
     NMT_ASR_DEVICE = _resolve_device("NMT_ASR_DEVICE", "nmt_asr")
     NMT_ASR_DTYPE  = os.environ.get("NMT_ASR_DTYPE", _dtype(NMT_ASR_DEVICE))
-
-    TTS_MODEL  = os.environ.get("TTS_MODEL",  "piper")
-    TTS_DEVICE = _resolve_device("TTS_DEVICE", "tts")
 
     OCR_MODEL  = os.environ.get("OCR_MODEL",  "rapidocr")
     OCR_DEVICE = _resolve_device("OCR_DEVICE", "ocr")

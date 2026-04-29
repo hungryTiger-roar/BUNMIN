@@ -22,3 +22,10 @@ release/
 # OS
 .DS_Store
 Thumbs.db
+
+# piper-tts-web WASM 런타임 (npm install 후 복사 또는 별도 스크립트로 획득)
+public/onnx/
+public/piper/
+public/worker/
+# piper-tts-web 음성 모델 파일 (런타임에 CDN 또는 별도 스크립트로 획득)
+public/models/

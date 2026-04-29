@@ -3,7 +3,7 @@ AI 모델 통합 평가 스크립트
 품질(WER, BLEU, CER) + 속도(RTF, 지연시간, 처리량) 측정
 
 사용법:
-    python evaluation/run_eval.py               # 기본 평가 (asr, nmt, tts, pipeline, ocr_nmt)
+    python evaluation/run_eval.py               # 기본 평가 (asr, nmt, pipeline, ocr_nmt)
     python evaluation/run_eval.py --model asr   # 특정 모델만
     python evaluation/run_eval.py --all         # OCR 포함 전체 평가
     python evaluation/run_eval.py --compare     # 이전 결과와 비교
@@ -59,7 +59,7 @@ BACKEND_DIR = ROOT / "backend"
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(BACKEND_DIR))
 
-from evaluation.evaluators import eval_asr, eval_nmt, eval_tts, eval_ocr, eval_realtime_pipeline, eval_ocr_nmt
+from evaluation.evaluators import eval_asr, eval_nmt, eval_ocr, eval_realtime_pipeline, eval_ocr_nmt
 
 RESULTS_DIR = Path(__file__).parent / "results"
 RESULTS_DIR.mkdir(exist_ok=True)
@@ -99,7 +99,7 @@ def compare_results():
         mark = "[OK]" if good else "[NO]"
         print(f"  {label}: {prev_val:.4f} → {curr_val:.4f} ({sign}{abs(delta):.4f}) {mark}")
 
-    for model in ["asr", "nmt", "tts", "ocr", "pipeline", "ocr_nmt"]:
+    for model in ["asr", "nmt", "ocr", "pipeline", "ocr_nmt"]:
         p = prev.get("models", {}).get(model, {})
         c = curr.get("models", {}).get(model, {})
         if not p or not c or p.get("skipped") or c.get("skipped"):
@@ -116,9 +116,6 @@ def compare_results():
             diff("BERTScore F1", p["quality"].get("bertscore", {}).get("avg_f1"), c["quality"].get("bertscore", {}).get("avg_f1"), lower_better=False)
             diff("처리량(문장/초)", p["speed"].get("throughput_per_sec"), c["speed"].get("throughput_per_sec"), lower_better=False)
             diff("평균지연(ms)", p["speed"].get("avg_ms"), c["speed"].get("avg_ms"), lower_better=True)
-        elif model == "tts":
-            diff("평균RTF", p["speed"].get("avg_rtf"), c["speed"].get("avg_rtf"), lower_better=True)
-            diff("평균지연(ms)", p["speed"].get("avg_ms"), c["speed"].get("avg_ms"), lower_better=True)
         elif model == "ocr":
             diff("CER", p["quality"].get("avg_cer"), c["quality"].get("avg_cer"), lower_better=True)
             diff("처리량(이미지/초)", p["speed"].get("throughput_per_sec"), c["speed"].get("throughput_per_sec"), lower_better=False)
@@ -126,7 +123,6 @@ def compare_results():
         elif model == "pipeline":
             diff("ASR WER", p["quality"].get("asr_wer"), c["quality"].get("asr_wer"), lower_better=True)
             diff("NMT BERTScore F1", p["quality"].get("nmt_bertscore_f1"), c["quality"].get("nmt_bertscore_f1"), lower_better=False)
-            diff("TTS RTF", p["quality"].get("tts_avg_rtf"), c["quality"].get("tts_avg_rtf"), lower_better=True)
             diff("파이프라인 평균(ms)", p["speed"].get("pipeline_avg_ms"), c["speed"].get("pipeline_avg_ms"), lower_better=True)
         elif model == "ocr_nmt":
             diff("OCR CER", p["quality"].get("ocr_cer"), c["quality"].get("ocr_cer"), lower_better=True)
@@ -212,21 +208,6 @@ def print_friendly_summary(model: str, result: dict):
         print(f"  [처리 속도]")
         print(f"    문장 1개를 약 {avg_ms:.0f}ms({avg_ms/1000:.2f}초) 만에 번역")
 
-    elif model == "tts":
-        rtf    = s.get("avg_rtf", 9.9)
-        avg_ms = s.get("avg_ms", 0)
-        rt_ok  = s.get("realtime_capable", False)
-        grade  = "[우수]" if rtf < 0.5 else ("[보통]" if rtf < 1.0 else "[개선필요]")
-        print(f"  [음성 합성 속도] {grade}")
-        if avg_ms > 0:
-            print(f"    문장 1개 음성을 평균 {avg_ms:.0f}ms({avg_ms/1000:.1f}초) 만에 생성")
-        print(f"    실시간 비율(RTF) {rtf:.3f} => 재생 시간의 {rtf*100:.0f}% 시간에 생성")
-        if rt_ok:
-            print(f"    실시간 서비스에 적합합니다.")
-        else:
-            print(f"    실시간 사용 불가. 음성이 늦게 나올 수 있습니다.")
-        print(f"    * 음질은 직접 들어봐야 판단 가능합니다.")
-
     elif model == "ocr":
         cer = q.get("avg_cer", 1.0)
         acc = (1 - cer) * 100
@@ -250,15 +231,14 @@ def print_friendly_summary(model: str, result: dict):
     elif model == "pipeline":
         asr_wer  = q.get("asr_wer", 1.0)
         bert     = q.get("nmt_bertscore_f1")
-        tts_rtf  = q.get("tts_avg_rtf", 9.9)
         total_ms = s.get("pipeline_avg_ms", 0)
         p95_ms   = s.get("pipeline_p95_ms", 0)
         asr_ms   = s.get("asr_avg_ms", 0)
         nmt_ms   = s.get("nmt_avg_ms", 0)
-        tts_ms   = s.get("tts_avg_ms", 0)
-        print(f"  [실시간 파이프라인 전체 성능]")
-        print(f"    교수님 말씀 후 영어 음성 출력까지 평균 {total_ms:.0f}ms ({total_ms/1000:.1f}초)")
+        print(f"  [실시간 파이프라인 전체 성능 (ASR→NMT)]")
+        print(f"    교수님 말씀 후 번역 텍스트 전송까지 평균 {total_ms:.0f}ms ({total_ms/1000:.1f}초)")
         print(f"    95%의 경우 최대 {p95_ms:.0f}ms ({p95_ms/1000:.1f}초) 이내")
+        print(f"    * 음성 출력(TTS)은 수강자 브라우저 WASM에서 추가 처리됩니다.")
         if total_ms < 2000:
             delay_comment = "매우 빠릅니다. 거의 즉시 통역됩니다."
         elif total_ms < 4000:
@@ -272,7 +252,6 @@ def print_friendly_summary(model: str, result: dict):
         print(f"  [각 단계 처리 시간]")
         print(f"    듣기(ASR)  {asr_ms:.0f}ms  | 음성 -> 한국어 텍스트")
         print(f"    번역(NMT)  {nmt_ms:.0f}ms   | 한국어 -> 영어")
-        print(f"    말하기(TTS) {tts_ms:.0f}ms | 영어 텍스트 -> 음성")
         print(f"")
         print(f"  [번역 품질]")
         asr_acc = (1 - asr_wer) * 100
@@ -312,9 +291,8 @@ def print_friendly_summary(model: str, result: dict):
 MENU_ITEMS = [
     ("asr",      "ASR      (음성인식)"),
     ("nmt",      "NMT      (번역)"),
-    ("tts",      "TTS      (음성합성)"),
     ("ocr",      "OCR      (문자인식)"),
-    ("pipeline", "Pipeline (ASR→NMT→TTS 전체)"),
+    ("pipeline", "Pipeline (ASR→NMT 전체)"),
     ("ocr_nmt",  "OCR+NMT  (슬라이드 번역)"),
     ("__all__",  "전체 평가"),
     ("__cmp__",  "이전 결과와 비교"),
@@ -338,7 +316,7 @@ def select_device() -> str:
         elif raw == "2":
             os.environ["ASR_DEVICE"] = "cuda"
             os.environ["NMT_ASR_DEVICE"] = "cuda"
-            print("  → GPU 모드 (TTS/OCR은 CPU 고정)")
+            print("  → GPU 모드 (OCR은 CPU 고정)")
         else:
             print("  1 또는 2를 입력하세요.")
             continue
@@ -360,13 +338,13 @@ def interactive_menu() -> list[str] | str:
     print("-" * 60)
 
     while True:
-        raw = input("선택 (1-8): ").strip()
+        raw = input("선택 (1-7): ").strip()
         if not raw.isdigit() or not (1 <= int(raw) <= len(MENU_ITEMS)):
             print(f"  1~{len(MENU_ITEMS)} 사이 숫자를 입력하세요.")
             continue
         key, _ = MENU_ITEMS[int(raw) - 1]
         if key == "__all__":
-            return ["asr", "nmt", "tts", "ocr", "pipeline", "ocr_nmt"]
+            return ["asr", "nmt", "ocr", "pipeline", "ocr_nmt"]
         if key == "__cmp__":
             return "__compare__"
         return [key]
@@ -374,7 +352,7 @@ def interactive_menu() -> list[str] | str:
 
 def main():
     parser = argparse.ArgumentParser(description="AI 모델 평가")
-    parser.add_argument("--model", choices=["asr", "nmt", "tts", "ocr", "pipeline", "ocr_nmt"], help="특정 모델만 평가")
+    parser.add_argument("--model", choices=["asr", "nmt", "ocr", "pipeline", "ocr_nmt"], help="특정 모델만 평가")
     parser.add_argument("--all", action="store_true", help="모든 모델 평가 (OCR 포함)")
     parser.add_argument("--compare", action="store_true", help="이전 결과와 비교")
     parser.add_argument("--xcomet", action="store_true", help="NMT 평가 시 XCOMET-XL 포함 (시간 매우 오래 걸림)")
@@ -401,7 +379,6 @@ def main():
     eval_map = {
         "asr":      eval_asr,
         "nmt":      lambda: eval_nmt(use_xcomet=args.xcomet),
-        "tts":      eval_tts,
         "ocr":      eval_ocr,
         "pipeline": eval_realtime_pipeline,
         "ocr_nmt":  eval_ocr_nmt,
@@ -412,9 +389,9 @@ def main():
     elif args.model:
         targets = [args.model]
     elif args.all:
-        targets = ["asr", "nmt", "tts", "ocr", "pipeline", "ocr_nmt"]
+        targets = ["asr", "nmt", "ocr", "pipeline", "ocr_nmt"]
     else:
-        targets = ["asr", "nmt", "tts", "pipeline", "ocr_nmt"]
+        targets = ["asr", "nmt", "pipeline", "ocr_nmt"]
 
     for model in targets:
         try:
@@ -458,14 +435,12 @@ def main():
                 comet_str = comet if comet == "스킵" else f"{comet:.1f}%"
                 print(f"  NMT     | BLEU: {bleu:.1f}% | METEOR: {meteor:.1f}% | BERTScore: {bert if bert == '스킵' else f'{bert:.1f}%'} | XCOMET-XL: {comet_str} | "
                       f"처리량: {s.get('throughput_per_sec', 'N/A'):.1f}문장/초 | 지연: {s.get('avg_ms', 'N/A'):.1f}ms")
-            elif model == "tts":
-                print(f"  TTS     | RTF: {s.get('avg_rtf', 'N/A'):.3f} | 실시간: {'[OK]' if s.get('realtime_capable') else '[NO]'} | 지연: {s.get('avg_ms', 'N/A'):.1f}ms")
             elif model == "ocr":
                 print(f"  OCR     | CER: {q.get('avg_cer', 'N/A'):.1%} | 처리량: {s.get('throughput_per_sec', 'N/A'):.1f}이미지/초 | 지연: {s.get('avg_ms', 'N/A'):.1f}ms")
             elif model == "pipeline":
                 bert = q.get("nmt_bertscore_f1")
                 bert_str = f"{bert:.1f}%" if bert else "스킵"
-                print(f"  PIPELINE| ASR WER: {q.get('asr_wer', 'N/A'):.1%} | NMT BERTScore: {bert_str} | TTS RTF: {q.get('tts_avg_rtf', 'N/A'):.3f} | 전체: {s.get('pipeline_avg_ms', 'N/A'):.0f}ms")
+                print(f"  PIPELINE| ASR WER: {q.get('asr_wer', 'N/A'):.1%} | NMT BERTScore: {bert_str} | 전체: {s.get('pipeline_avg_ms', 'N/A'):.0f}ms")
             elif model == "ocr_nmt":
                 bert = result.get("quality", {}).get("pipeline_bertscore_f1")
                 bert_str = f"{bert:.1f}%" if bert else "스킵"
