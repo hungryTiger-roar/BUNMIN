@@ -33,7 +33,7 @@ _HALLUCINATION_PATTERNS = re.compile("|".join([
 
 
 class ASRService:
-    def __init__(self, model_name: str = "ghost613/faster-whisper-large-v3-turbo-korean", device: str = "cpu", dtype: str = "float32"):
+    def __init__(self, model_name: str = "models/whisper-large-v3-turbo-ct2-int8", device: str = "cpu", dtype: str = "float32"):
         self.model_name = model_name
         # faster-whisper는 "cuda:0" 대신 "cuda"만 받음
         self.device = "cuda" if device in ("cuda", "cuda:0") else "cpu"
