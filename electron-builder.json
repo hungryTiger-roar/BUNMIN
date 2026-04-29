@@ -46,6 +46,11 @@
       "from": "models/qwen3/qwen3-vl-8b-lora-r64-e3-final",
       "to": "backend/models/qwen3/qwen3-vl-8b-lora-r64-e3-final",
       "filter": ["**/*"]
+    },
+    {
+      "from": "models/rapidocr_korean",
+      "to": "backend/models/rapidocr_korean",
+      "filter": ["**/*"]
     }
   ],
   "compression": "store",

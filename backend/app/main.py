@@ -460,6 +460,22 @@ if os.path.isdir(_assets_dir):
 
 @app.get('/{path:path}', include_in_schema=False)
 async def spa_fallback(path: str):
+    # 1) frontend/dist 최상단의 정적 파일 (ort.all.min.js, vad-bundle.min.js,
+    #    silero_vad_*.onnx, vite.svg 등)은 직접 서빙. 안 그러면 index.html이
+    #    대신 반환되어 JS 파서가 '<' 토큰 에러로 죽음.
+    if path:
+        candidate = os.path.join(_FRONTEND_DIST, path)
+        try:
+            real_candidate = os.path.realpath(candidate)
+            real_dist = os.path.realpath(_FRONTEND_DIST)
+            if (
+                os.path.commonpath([real_candidate, real_dist]) == real_dist
+                and os.path.isfile(real_candidate)
+            ):
+                return FileResponse(real_candidate)
+        except (OSError, ValueError):
+            pass
+    # 2) SPA 라우트 (/, /lecturer 등) → index.html
     index = os.path.join(_FRONTEND_DIST, 'index.html')
     if os.path.isfile(index):
         return FileResponse(index)

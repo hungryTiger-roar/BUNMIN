@@ -65,6 +65,8 @@ hiddenimports = [
     'easyocr',
     'peft',
     'bitsandbytes',
+    # 프로젝트 루트의 슬라이드 번역 모듈 (run.py가 sys.path에 root 추가하면 import됨)
+    'translate_slide_v3',
 ]
 
 hiddenimports += collect_submodules('starlette')
@@ -87,7 +89,7 @@ datas += [
 
 a = Analysis(
     ['run.py'],
-    pathex=['.'],
+    pathex=['.', '..'],  # '..' = project root → translate_slide_v3.py 등 root 모듈 검색 가능
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,

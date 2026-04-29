@@ -264,6 +264,35 @@ function waitForBackend(callback, maxAttempts = 1800) {
   setTimeout(check, 1000)
 }
 
+// ─── 백엔드 HTTP 서버 빠른 헬스 체크 ─────────────────────────────────
+// waitForBackend는 모델 로딩 완료까지 기다리지만, 이 함수는 HTTP 서버 응답만 확인.
+// 프로덕션 모드에서 frontend를 file:// 대신 http://127.0.0.1:8000으로 로드하기 위함.
+// (Chromium은 file://을 secure context로 안 봐서 getUserMedia 차단됨 — http://localhost는 통과.)
+function waitForHealth(callback, maxAttempts = 60) {
+  let attempts = 0
+  const url = `http://127.0.0.1:${BACKEND_PORT}/health`
+
+  const tryConnect = () => {
+    const req = http.get(url, (res) => {
+      devLog(`waitForHealth: backend HTTP up (status=${res.statusCode})`)
+      res.resume()
+      callback(true)
+    })
+    req.on('error', () => {
+      attempts++
+      if (attempts < maxAttempts) {
+        setTimeout(tryConnect, 500)
+      } else {
+        devLog(`waitForHealth: ${maxAttempts}회 초과 — 실패`)
+        callback(false)
+      }
+    })
+    req.setTimeout(2000, () => { req.destroy() })
+  }
+  tryConnect()
+}
+
+
 function createWindow() {
   devLog('BrowserWindow 생성')
   mainWindow = new BrowserWindow({
@@ -279,14 +308,34 @@ function createWindow() {
     show: false,
   })
 
+  // 마이크/카메라 권한 자동 허가 (Electron 단독 앱 — 외부 사이트 아님)
+  mainWindow.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
+    const ok = permission === 'media' || permission === 'mediaKeySystem'
+    devLog(`권한 요청: ${permission} → ${ok ? 'allow' : 'deny'}`)
+    callback(ok)
+  })
+
   if (isDev) {
     const url = `http://127.0.0.1:${FRONTEND_PORT}/#/loading`
     devLog(`loadURL: ${url}`)
     mainWindow.loadURL(url)
     mainWindow.webContents.openDevTools({ mode: 'detach' })
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), {
-      hash: '/loading',
+    // 프로덕션: 백엔드 HTTP 서버가 frontend dist를 서빙하므로 거기서 로드.
+    // file://은 Chromium secure context 미충족으로 getUserMedia(마이크/카메라) 차단됨.
+    // file:// splash 후 swap 방식은 IPC race(file://에서 ready 받고 navigate → swap → http://에서 ready 신호 유실)
+    // 가 발생하므로, 백엔드 HTTP 응답까지 대기 후 단일 loadURL.
+    devLog('프로덕션: 백엔드 HTTP 응답 대기 후 loadURL — 1~3초 소요 가능')
+    waitForHealth((ok) => {
+      if (!mainWindow || mainWindow.isDestroyed()) return
+      if (!ok) {
+        devLog('waitForHealth 실패 — file://로 폴백 (마이크 안 될 수 있음)')
+        mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: '/loading' })
+        return
+      }
+      const url = `http://127.0.0.1:${BACKEND_PORT}/#/loading`
+      devLog(`백엔드 HTTP 준비 완료 → loadURL: ${url}`)
+      mainWindow.loadURL(url)
     })
   }
 
