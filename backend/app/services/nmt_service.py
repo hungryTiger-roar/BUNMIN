@@ -115,11 +115,15 @@ class NMTService:
 
     def _translate_ct2(self, text: str) -> str:
         tokens = self._sp_src.Encode(text, out_type=str)
-        max_decoding_length = max(30, len(tokens) * 2)
+        # 곱수 2.5(긴 문장 잘림 방지 더 여유) + floor 20
+        max_decoding_length = max(20, int(len(tokens) * 2.5))
         results = self._ct2.translate_batch(
             [tokens],
             max_decoding_length=max_decoding_length,
-            beam_size=1,
+            beam_size=2,                # beam search 활성화
+            length_penalty=1.0,         # 중립 — 0.6은 긴 번역 자르는 부작용
+            repetition_penalty=2.0,
+            no_repeat_ngram_size=2,
         )
         return self._sp_tgt.Decode(results[0].hypotheses[0]).strip()
 
@@ -127,8 +131,17 @@ class NMTService:
         import torch
         inputs = self._hf_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        # CT2 경로와 동일 정책 — 곱수 2.5 + floor 20
+        adjusted_max = min(max_length, max(20, int(inputs["input_ids"].shape[1] * 2.5)))
         with torch.no_grad():
-            outputs = self._hf_model.generate(**inputs, max_length=max_length, num_beams=1)
+            outputs = self._hf_model.generate(
+                **inputs,
+                max_length=adjusted_max,
+                num_beams=2,
+                length_penalty=1.0,
+                repetition_penalty=2.0,
+                no_repeat_ngram_size=2,
+            )
         return self._hf_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
 
     def translate_batch(

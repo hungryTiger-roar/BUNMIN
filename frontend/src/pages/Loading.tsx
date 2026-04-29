@@ -125,6 +125,7 @@ function Loading() {
   }, [logs])
 
   useEffect(() => {
+    console.log('[Loading] mount, window.electron =', !!window.electron)
     // Electron 환경
     if (window.electron) {
       window.electron.onBackendLog((log: string) => {
@@ -133,19 +134,31 @@ function Loading() {
       })
 
       window.electron.onBackendProgress((p: number) => {
+        console.log('[Loading] onBackendProgress', p)
         setOverallProgress(p)
       })
 
       window.electron.onBackendModelStatus((m: ModelMap) => {
+        console.log('[Loading] onBackendModelStatus', m)
         setModels((prev) => ({ ...prev, ...m }))
       })
 
       window.electron.onBackendReady((ready: boolean) => {
+        console.log('[Loading] onBackendReady', ready)
         if (ready) {
-          navigate('/')
+          navigate('/lecturer')
         } else {
           setFailed(true)
         }
+      })
+
+      // 마운트 직후 캐시 상태 동기화 — IPC 이벤트가 mount 전에 발생해 유실됐을 경우 대비
+      window.electron.getBackendState().then((state) => {
+        console.log('[Loading] getBackendState →', state)
+        if (state.models) setModels((prev) => ({ ...prev, ...state.models! }))
+        if (typeof state.progress === 'number') setOverallProgress(state.progress)
+        if (state.ready === true) navigate('/lecturer')
+        else if (state.ready === false) setFailed(true)
       })
 
       return
@@ -173,7 +186,7 @@ function Loading() {
             })
           }
           if (json.status === 'ok') {
-            navigate('/')
+            navigate('/lecturer')
             return
           }
           if (json.status === 'error') {

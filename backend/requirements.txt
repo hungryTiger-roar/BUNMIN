@@ -12,12 +12,14 @@ ctranslate2>=4.0.0
 # AI/ML Core
 numpy>=1.24.0,<2.0.0  # unbabel-comet, paddlex 호환성
 # torch, torchvision은 npm run setup에서 CUDA 버전으로 설치 (requirements.txt에서 제외)
-transformers>=4.50.0
-accelerate>=0.25.0
+# 상한 고정 — transformers 5.x / huggingface-hub 1.x 등 메이저 신버전이
+# 의존성 리졸버를 폭발시키는(resolution-too-deep) 문제 방지
+transformers>=4.50.0,<5.0.0
+accelerate>=0.25.0,<2.0.0
 safetensors>=0.4.0
 sentencepiece>=0.1.99
-protobuf>=4.25.0
-peft>=0.10.0
+protobuf>=4.25.0,<6.0.0
+peft>=0.10.0,<1.0.0
 bitsandbytes>=0.46.1
 python-dotenv>=1.0.0
 
@@ -44,8 +46,9 @@ pymupdf>=1.23.0
 pydantic>=2.5.0
 tqdm>=4.66.0
 requests>=2.31.0
-huggingface-hub>=0.20.0
+huggingface-hub>=0.20.0,<1.0.0  # 1.x 메이저 변경 방지
 pyyaml>=6.0.0  # config.yaml 설정 파일 로드
+openai>=1.0.0  # 용어집 빌드 (GPT API)
 
 # 평가 지표
 nltk>=3.8.0

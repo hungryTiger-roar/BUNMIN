@@ -40,6 +40,9 @@ _nmt_asr_service = None
 _tts_service = None
 _ocr_service = None
 
+# 최초 실시간 모드 로드 여부
+_first_realtime_load = True
+
 
 def set_services(asr=None, nmt_asr=None, tts=None, ocr=None):
     """main.py에서 서비스 참조 설정"""
@@ -173,7 +176,7 @@ async def switch_to_slide_mode():
 @router.post("/realtime", response_model=ModeResponse)
 async def switch_to_realtime_mode():
     """실시간 번역 모드로 전환 (VLM 언로드, ASR/NMT-ASR/TTS/OCR 로드)"""
-    global _current_mode, _asr_service, _nmt_asr_service, _tts_service, _ocr_service
+    global _current_mode, _asr_service, _nmt_asr_service, _tts_service, _ocr_service, _first_realtime_load
 
     async with _mode_lock:
         if _current_mode == Mode.REALTIME:
@@ -189,6 +192,12 @@ async def switch_to_realtime_mode():
         # 실시간 모델 로드
         loaded = []
 
+        if _first_realtime_load:
+            print()
+            print("============================================================")
+            print("[실시간 모드] AI 모델 최초 로드 중... (서버 재시작 전까지 1회)")
+            print("============================================================")
+
         try:
             from app.config import ModelConfig
             from app.services.asr_service import ASRService
@@ -198,44 +207,74 @@ async def switch_to_realtime_mode():
             from app.routers import ws, slides
 
             # ASR
-            print("[Mode] ASR 로드 중...")
-            _asr_service = ASRService(
-                model_name=ModelConfig.ASR_MODEL,
-                device=ModelConfig.ASR_DEVICE,
-                dtype=ModelConfig.ASR_DTYPE,
+            print(f"\n[1/4] ASR 음성인식 모델 로드 중...")
+            if _first_realtime_load:
+                print(f"  모델: {ModelConfig.ASR_MODEL}")
+                print(f"  디바이스: {ModelConfig.ASR_DEVICE} / {ModelConfig.ASR_DTYPE}")
+            _asr_service = await asyncio.to_thread(
+                lambda: ASRService(
+                    model_name=ModelConfig.ASR_MODEL,
+                    device=ModelConfig.ASR_DEVICE,
+                    dtype=ModelConfig.ASR_DTYPE,
+                )
             )
             ws.set_asr_service(_asr_service)
             loaded.append("asr")
+            print(f"  [1/4] ASR 로드 완료 ✓")
 
             # NMT-ASR
-            print("[Mode] NMT-ASR 로드 중...")
-            _nmt_asr_service = NMTService(
-                model_name=ModelConfig.NMT_ASR_MODEL,
-                device=ModelConfig.NMT_ASR_DEVICE,
-                dtype=ModelConfig.NMT_ASR_DTYPE,
+            print(f"\n[2/4] NMT 번역 모델 로드 중...")
+            if _first_realtime_load:
+                print(f"  모델: {ModelConfig.NMT_ASR_MODEL}")
+                print(f"  디바이스: {ModelConfig.NMT_ASR_DEVICE} / int8")
+            _nmt_asr_service = await asyncio.to_thread(
+                lambda: NMTService(
+                    model_name=ModelConfig.NMT_ASR_MODEL,
+                    device=ModelConfig.NMT_ASR_DEVICE,
+                    dtype=ModelConfig.NMT_ASR_DTYPE,
+                )
             )
             ws.set_nmt_service(_nmt_asr_service)
             loaded.append("nmt_asr")
+            print(f"  [2/4] NMT 로드 완료 ✓")
 
             # TTS
-            print("[Mode] TTS 로드 중...")
-            _tts_service = TTSService(
-                model_name=ModelConfig.TTS_MODEL,
-                device=ModelConfig.TTS_DEVICE,
+            print(f"\n[3/4] TTS 음성합성 모델 로드 중...")
+            if _first_realtime_load:
+                print(f"  모델: Piper en_US-lessac-medium")
+                print(f"  디바이스: {ModelConfig.TTS_DEVICE}")
+            _tts_service = await asyncio.to_thread(
+                lambda: TTSService(
+                    model_name=ModelConfig.TTS_MODEL,
+                    device=ModelConfig.TTS_DEVICE,
+                )
             )
             ws.set_tts_service(_tts_service)
             loaded.append("tts")
+            print(f"  [3/4] TTS 로드 완료 ✓")
 
             # OCR
-            print("[Mode] OCR 로드 중...")
-            _ocr_service = OCRService()
+            print(f"\n[4/4] OCR 모델 로드 중...")
+            if _first_realtime_load:
+                print(f"  모델: RapidOCR (Korean PP-OCRv4)")
+            _ocr_service = await asyncio.to_thread(OCRService)
             ws.set_ocr_service(_ocr_service)
             slides.set_ocr_service(_ocr_service)
             loaded.append("ocr")
+            print(f"  [4/4] OCR 로드 완료 ✓")
 
         except Exception as e:
             print(f"[Mode] 실시간 모델 로드 실패: {e}")
             raise HTTPException(status_code=500, detail=f"모델 로드 실패: {e}")
+
+        if _first_realtime_load:
+            print()
+            print("============================================================")
+            print("[실시간 모드] 모든 AI 모델 로드 완료! 실시간 번역 준비됨")
+            print("============================================================")
+            _first_realtime_load = False
+        else:
+            print("[Mode] 실시간 모드 전환 완료")
 
         _current_mode = Mode.REALTIME
         return ModeResponse(

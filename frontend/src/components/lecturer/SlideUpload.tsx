@@ -15,11 +15,10 @@ const STAGE_LABELS: Record<Stage, string> = {
 
 function formatEta(seconds: number): string {
   if (seconds < 1) return ''
+  // 1분 미만: 1초씩 카운트다운 (사용자에게 끝이 임박했다는 신호)
   if (seconds < 60) return `약 ${Math.ceil(seconds)}초 남음`
-  const min = Math.floor(seconds / 60)
-  const sec = Math.ceil(seconds % 60)
-  if (sec === 0 || sec === 60) return `약 ${sec === 60 ? min + 1 : min}분 남음`
-  return `약 ${min}분 ${sec}초 남음`
+  // 1분 이상: 분 단위 표시 — ceil 이라 매초 갱신해도 분 변화 시에만 텍스트 바뀜 → 깜빡임 없음
+  return `약 ${Math.ceil(seconds / 60)}분 남음`
 }
 
 function SlideUpload() {
