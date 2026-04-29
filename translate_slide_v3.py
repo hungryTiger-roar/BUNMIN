@@ -182,7 +182,7 @@ VLM_MAX_GPU_MEMORY = os.environ.get("VLM_MAX_GPU_MEMORY", "6GB")
 # ============================================================
 # OCR 엔진 선택 (환경변수)
 # ============================================================
-OCR_ENGINE = os.environ.get("AUNION_OCR_ENGINE", "surya")  # surya, easyocr, rapid
+OCR_ENGINE = os.environ.get("OCR_MODEL", "surya")  # surya, easyocr, rapid
 
 # ============================================================
 # Prefix 기호 픽셀 보존 정책 (config.yaml 기반)
@@ -381,11 +381,6 @@ def estimate_prefix_pixel_width(prefix: str, bbox: list, img_np=None) -> int:
 _vlm_model = None
 _vlm_processor = None
 
-# Surya OCR 모델 캐싱
-_surya_det_model = None
-_surya_det_processor = None
-_surya_rec_model = None
-_surya_rec_processor = None
 
 
 def get_vlm_model():
@@ -411,14 +406,16 @@ def get_vlm_model():
             bnb_4bit_quant_type="nf4",
             bnb_4bit_compute_dtype=torch.float16,
             bnb_4bit_use_double_quant=True,
-            llm_int8_enable_fp32_cpu_offload=True,
+            # llm_int8_enable_fp32_cpu_offload은 INT8 전용 옵션 — 4bit 설정에서 사용하면
+            # 일부 레이어가 meta device에 남아 PeftModel.from_pretrained 시
+            # "Tensor.item() cannot be called on meta tensors" 오류 발생
         )
         model_kwargs = {
             "quantization_config": bnb_config,
             "device_map": "auto",
             "trust_remote_code": True,
-            "low_cpu_mem_usage": True,
-            "max_memory": {0: VLM_MAX_GPU_MEMORY, "cpu": "16GB"},
+            # low_cpu_mem_usage=True + device_map="auto" + BnB 4bit 조합 시
+            # 레이어 일부가 meta tensor로 남아 PeftModel 적용 시 오류 발생하므로 제거
         }
     else:
         model_kwargs = {
@@ -1680,54 +1677,6 @@ def apply_block_translations_to_regions(blocks: list, regions: list) -> list:
 
 
 # ============================================================
-# Surya OCR 모델 싱글톤
-# ============================================================
-def get_surya_models():
-    """Surya OCR 모델 싱글톤 - 최초 1회만 로드"""
-    global _surya_det_model, _surya_det_processor, _surya_rec_model, _surya_rec_processor
-
-    if _surya_det_model is not None:
-        return (_surya_det_model, _surya_det_processor, _surya_rec_model, _surya_rec_processor)
-
-    print("[Surya] OCR 모델 최초 로드 중...")
-
-    from surya.detection import DetectionPredictor
-    from surya.recognition import RecognitionPredictor
-
-    # Detection 모델 로드
-    print("  Detection 모델 로드...")
-    _surya_det_processor = DetectionPredictor()
-
-    # Recognition 모델 로드
-    print("  Recognition 모델 로드...")
-    _surya_rec_processor = RecognitionPredictor()
-
-    print("[Surya] 모델 로드 완료! (전역 캐시됨)")
-    return (_surya_det_model, _surya_det_processor, _surya_rec_model, _surya_rec_processor)
-
-
-def unload_surya_models():
-    """Surya OCR 모델 언로드 (메모리 해제)"""
-    global _surya_det_model, _surya_det_processor, _surya_rec_model, _surya_rec_processor
-
-    if _surya_det_processor is None:
-        print("[Surya] 언로드할 모델 없음")
-        return
-
-    print("[Surya] 모델 언로드 중...")
-    del _surya_det_model, _surya_det_processor, _surya_rec_model, _surya_rec_processor
-    _surya_det_model = None
-    _surya_det_processor = None
-    _surya_rec_model = None
-    _surya_rec_processor = None
-
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-    print("[Surya] 모델 언로드 완료")
-
-
 # ============================================================
 # 1단계: OCR - Surya OCR (Transformer 기반, 한글 정확도 향상)
 # ============================================================
@@ -2210,7 +2159,15 @@ Translate:"""
             },
         ]
 
-        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        # enable_thinking=False: Qwen3 thinking 모드 비활성화
+        # thinking 블록 안에 번호 붙은 줄이 들어오면 번역 파싱이 오염됨
+        # 지원하지 않는 processor는 그냥 무시하고 기본값으로 진행
+        try:
+            text = processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+            )
+        except TypeError:
+            text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = processor(text=[text], images=None, return_tensors="pt").to(model.device)
 
         # 재시도 시 temperature 약간 높임
@@ -2315,7 +2272,12 @@ Korean: {korean_text}
 English:"""
 
             messages = [{"role": "user", "content": [{"type": "text", "text": individual_prompt}]}]
-            text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            try:
+                text = processor.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+                )
+            except TypeError:
+                text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             inputs = processor(text=[text], images=None, return_tensors="pt").to(model.device)
 
             with torch.no_grad():
@@ -2450,7 +2412,7 @@ def stage_overlay(image_path: str, regions: list, output_path: str):
         for font_path in font_paths:
             try:
                 return ImageFont.truetype(font_path, size)
-            except:
+            except Exception:
                 continue
         return ImageFont.load_default()
 
@@ -2761,7 +2723,7 @@ def stage_overlay(image_path: str, regions: list, output_path: str):
                 bg_color = (pixel, pixel, pixel)
             else:
                 bg_color = pixel[:3]
-        except:
+        except Exception:
             bg_color = (255, 255, 255)
 
         # 텍스트 맞추기 (줄바꿈 + 폰트 축소)
@@ -2830,8 +2792,6 @@ def translate_slide(image_path: str, output_path: str = None, ocr_engine: str = 
         # 파이프라인 실행 (OCR 엔진 선택)
         if ocr_engine == "surya":
             regions = stage_ocr_surya(image_path)
-            # Surya 모델 언로드 (VLM 로드 전 GPU 메모리 확보)
-            unload_surya_models()
         elif ocr_engine == "rapid":
             regions = stage_ocr_rapid(image_path)
         else:

@@ -12,7 +12,8 @@
 | Frontend | React + TypeScript + Vite |
 | Backend | FastAPI + uvicorn |
 | 실시간 통신 | WebSocket |
-| AI | Cohere ASR, NLLB NMT, Qwen3-VL (슬라이드), Piper TTS, RapidOCR |
+| AI (백엔드) | ASR, NMT, Qwen3-VL (슬라이드 번역), RapidOCR |
+| TTS (클라이언트) | piper-tts-web — 수강자 브라우저 내 CPU ONNX WASM |
 | 데스크탑 (선택) | Electron |
 
 ---
@@ -21,50 +22,37 @@
 
 ### 사전 준비
 
-- Node.js 18+
-- Python 3.10+
-- 루트와 프론트엔드 의존성 설치
+| 도구 | 버전 |
+|------|------|
+| Node.js | 18+ |
+| conda | Miniconda 또는 Anaconda |
+| NVIDIA 드라이버 | CUDA 12.6 호환 (GPU 사용 시) |
+
+### 초기 설치 (최초 1회)
 
 ```bash
-# 루트 (concurrently, Electron 관련 deps)
-npm install
-
-# 프론트엔드
-cd frontend && npm install && cd ..
+npm run setup
 ```
 
-- 백엔드 conda 환경
+conda 환경 생성(Python 3.11), Python 패키지 설치, AI 모델 다운로드(~20GB)까지 자동으로 처리됩니다.
 
-```bash
-conda create -n aunion python=3.10
-conda activate aunion
-pip install -r backend/requirements.txt
+> **설치 시간**: 약 20~40분 (AI 모델 다운로드 포함)  
+> **GPU 없는 환경**: 자동으로 CPU 모드로 진행됩니다. 실시간 ASR 성능이 저하될 수 있습니다.
 
-# transformers 4.50+ 필요 (CohereLabs ASR 지원)
-pip install "transformers>=4.50.0"
-```
+### .env 설정
 
-GPU 사용 시 CUDA 버전 PyTorch 재설치 (`nvidia-smi` 우측 상단 숫자 기준):
-
-```bash
-# CUDA 11.8 → cu118 / CUDA 12.1 → cu121 / CUDA 12.4 이상 or 13.x → cu124
-pip install torch --index-url https://download.pytorch.org/whl/cu124
-```
-
-- 프로젝트 루트에 `.env` 파일 생성
+`npm run setup` 실행 후 `.env`가 자동 생성됩니다. 기본값으로 바로 사용 가능합니다.
 
 ```env
-# 필수: CohereLabs ASR 모델은 gated 모델 — HuggingFace에서 접근 승인 후 토큰 입력
-HF_TOKEN=hf_xxxxxxxxxxxx
+# HuggingFace 토큰 (선택사항 — 다운로드 속도 향상)
+HF_TOKEN=
 
-ASR_MODEL=CohereLabs/cohere-transcribe-03-2026
-NMT_ASR_MODEL=facebook/nllb-200-distilled-1.3B
-TTS_MODEL=piper
+ASR_MODEL=models/whisper-large-v3-turbo-ct2-int8
+NMT_ASR_MODEL=Helsinki-NLP/opus-mt-ko-en
 OCR_MODEL=rapidocr
 
 ASR_DEVICE=cuda
-NMT_ASR_DEVICE=cuda
-TTS_DEVICE=cpu
+NMT_ASR_DEVICE=cpu
 OCR_DEVICE=cpu
 ```
 

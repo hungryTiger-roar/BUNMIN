@@ -52,12 +52,10 @@ hiddenimports = [
     'torch',
     'numpy',
     'soundfile',
-    # ASR - CohereLabs/cohere-transcribe-03-2026
+    # ASR - ghost613/faster-whisper-large-v3-turbo-korean (CTranslate2)
     'accelerate',
-    # NMT-ASR - facebook/nllb-200-distilled-1.3B
+    # NMT-ASR - Helsinki-NLP/opus-mt-ko-en (CTranslate2 CT2 우선, HF 폴백)
     'sentencepiece',
-    # TTS - Piper TTS
-    'piper',
     # OCR - RapidOCR + Korean PP-OCRv4
     'rapidocr_onnxruntime',
     'PIL',
@@ -73,7 +71,6 @@ hiddenimports += collect_submodules('starlette')
 hiddenimports += collect_submodules('uvicorn')
 hiddenimports += collect_submodules('transformers')
 hiddenimports += collect_submodules('torch')
-hiddenimports += collect_submodules('piper')
 
 # 데이터 파일
 datas = []
@@ -81,8 +78,6 @@ datas += collect_data_files('transformers')
 datas += collect_data_files('rapidocr_onnxruntime')
 # faster_whisper의 assets/silero_vad_v6.onnx — vad_filter=True 사용 시 필수
 datas += collect_data_files('faster_whisper')
-# piper의 espeak-ng-data — TTS 합성 시 phoneme 변환에 필수 (없으면 phontab 에러)
-datas += collect_data_files('piper')
 
 # 앱 디렉토리 포함
 datas += [

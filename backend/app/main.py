@@ -59,7 +59,6 @@ _model_status = {
     "models": {
         "asr": {"status": "pending", "progress": 0, "label": "ASR (음성인식)", "desc": ModelConfig.ASR_MODEL},
         "nmt_asr": {"status": "pending", "progress": 0, "label": "NMT-ASR (실시간 번역)", "desc": ModelConfig.NMT_ASR_MODEL},
-        "tts": {"status": "pending", "progress": 0, "label": "TTS (음성합성)", "desc": ModelConfig.TTS_MODEL},
         "ocr": {"status": "pending", "progress": 0, "label": "OCR (문자인식)", "desc": ModelConfig.OCR_MODEL},
         "vlm": {"status": "pending", "progress": 0, "label": "VLM (슬라이드 번역)", "desc": VLM_BASE_MODEL},
     },
@@ -226,8 +225,8 @@ def _load_models_sync():
     # 슬라이드 번역 전용 모드 - 실시간 모델 스킵 (VLM은 다운로드만 진행)
     skip_models = os.environ.get("SKIP_STARTUP_MODELS", "").lower() == "true"
     if skip_models:
-        print("[모드] 슬라이드 번역 전용 - ASR/NMT/TTS/OCR 스킵 (VLM은 다운로드 진행)", flush=True)
-        for key in ["asr", "nmt_asr", "tts", "ocr"]:
+        print("[모드] 슬라이드 번역 전용 - ASR/NMT/OCR 스킵 (VLM은 다운로드 진행)", flush=True)
+        for key in ["asr", "nmt_asr", "ocr"]:
             _model_status["models"][key]["status"] = "skipped"
         _emit_status()
 
@@ -236,7 +235,6 @@ def _load_models_sync():
     model_repos = [] if skip_models else [
         ("asr",     ModelConfig.ASR_MODEL),
         ("nmt_asr", ModelConfig.NMT_ASR_MODEL),
-        ("tts",     ModelConfig.TTS_MODEL),
     ]
     model_repos.append(("vlm", VLM_BASE_MODEL))
 
@@ -288,6 +286,7 @@ def _load_models_sync():
         _model_status["message"] = "슬라이드 번역 전용 모드 — 준비 완료"
         _model_status["progress"] = 100
         _emit_status()
+        mode._current_mode = mode.Mode.SLIDE
         print("=" * 50, flush=True)
         print("[모드] 슬라이드 번역 전용 모드 — VLM 다운로드 완료, 메모리 로드는 사용 시점에", flush=True)
         print("=" * 50, flush=True)
@@ -300,7 +299,7 @@ def _load_models_sync():
     # ASR
     _model_status["models"]["asr"]["status"] = "loading"
     _emit_status()
-    _set_status(f"ASR 초기화 중... (1/4) - {ModelConfig.ASR_MODEL}", progress=15)
+    _set_status(f"ASR 초기화 중... (1/3) - {ModelConfig.ASR_MODEL}", progress=15)
     try:
         from app.services.asr_service import ASRService
         asr_service = ASRService(
@@ -311,7 +310,7 @@ def _load_models_sync():
         ws.set_asr_service(asr_service)
         _model_status["models"]["asr"]["status"] = "done"
         _model_status["models"]["asr"]["progress"] = 100
-        _set_status("ASR 완료 ✓ (1/4)", progress=35)
+        _set_status("ASR 완료 ✓ (1/3)", progress=40)
         print(f"[ASR] {ModelConfig.ASR_MODEL} 초기화 완료", flush=True)
     except Exception as e:
         tb = traceback.format_exc()
@@ -323,7 +322,7 @@ def _load_models_sync():
     # NMT-ASR (실시간 번역)
     _model_status["models"]["nmt_asr"]["status"] = "loading"
     _emit_status()
-    _set_status(f"NMT-ASR 초기화 중... (2/4) - {ModelConfig.NMT_ASR_MODEL}", progress=40)
+    _set_status(f"NMT-ASR 초기화 중... (2/3) - {ModelConfig.NMT_ASR_MODEL}", progress=45)
     try:
         from app.services.nmt_service import NMTService
         nmt_asr_service = NMTService(
@@ -334,42 +333,20 @@ def _load_models_sync():
         ws.set_nmt_service(nmt_asr_service)
         _model_status["models"]["nmt_asr"]["status"] = "done"
         _model_status["models"]["nmt_asr"]["progress"] = 100
-        _set_status("NMT-ASR 완료 ✓ (2/4)", progress=60)
+        _set_status("NMT-ASR 완료 ✓ (2/3)", progress=70)
         print(f"[NMT-ASR] {ModelConfig.NMT_ASR_MODEL} 초기화 완료", flush=True)
     except Exception as e:
         tb = traceback.format_exc()
         print(f"[NMT-ASR ERROR] {e}\n{tb}", flush=True)
         _model_status["models"]["nmt_asr"]["status"] = "error"
-        _set_status(f"NMT-ASR 실패: {e}", progress=60)
+        _set_status(f"NMT-ASR 실패: {e}", progress=70)
         failed_models.append(f"NMT-ASR: {e}")
-
-    # TTS
-    _model_status["models"]["tts"]["status"] = "loading"
-    _emit_status()
-    _set_status(f"TTS 초기화 중... (3/4) - {ModelConfig.TTS_MODEL}", progress=72)
-    try:
-        from app.services.tts_service import TTSService
-        tts_service = TTSService(
-            model_name=ModelConfig.TTS_MODEL,
-            device=ModelConfig.TTS_DEVICE,
-        )
-        ws.set_tts_service(tts_service)
-        _model_status["models"]["tts"]["status"] = "done"
-        _model_status["models"]["tts"]["progress"] = 100
-        _set_status("TTS 완료 ✓ (3/4)", progress=85)
-        print(f"[TTS] {ModelConfig.TTS_MODEL} 초기화 완료", flush=True)
-    except Exception as e:
-        tb = traceback.format_exc()
-        print(f"[TTS ERROR] {e}\n{tb}", flush=True)
-        _model_status["models"]["tts"]["status"] = "error"
-        _set_status(f"TTS 실패: {e}", progress=85)
-        failed_models.append(f"TTS: {e}")
 
     # OCR
     _model_status["models"]["ocr"]["status"] = "loading"
     _emit_status()
     _ocr_model_name = ModelConfig.OCR_MODEL
-    _set_status(f"OCR 초기화 중... (4/4) - {_ocr_model_name}", progress=90)
+    _set_status(f"OCR 초기화 중... (3/3) - {_ocr_model_name}", progress=75)
     try:
         from app.services.ocr_service import OCRService
         ocr_service = OCRService()
@@ -377,7 +354,7 @@ def _load_models_sync():
         slides.set_ocr_service(ocr_service)
         _model_status["models"]["ocr"]["status"] = "done"
         _model_status["models"]["ocr"]["progress"] = 100
-        _set_status("OCR 완료 ✓ (4/4)", progress=100)
+        _set_status("OCR 완료 ✓ (3/3)", progress=100)
         print(f"[OCR] {_ocr_model_name} 초기화 완료", flush=True)
     except Exception as e:
         tb = traceback.format_exc()
@@ -401,6 +378,7 @@ def _load_models_sync():
         _model_status["status"] = "ok"
         _model_status["message"] = "모든 모델 로드 완료 ✓"
         _model_status["progress"] = 100
+        mode._current_mode = mode.Mode.REALTIME
     _emit_status()  # Electron에 완료/실패 신호 전달
 
 

@@ -237,34 +237,3 @@ JSON만 반환하세요. 설명은 불필요합니다."""
                 return en
 
         return None
-
-
-# 전역 인스턴스 (싱글톤)
-_builder: Optional[GlossaryBuilder] = None
-
-
-def get_glossary_builder() -> GlossaryBuilder:
-    """GlossaryBuilder 싱글톤 인스턴스 반환"""
-    global _builder
-    if _builder is None:
-        _builder = GlossaryBuilder()
-    return _builder
-
-
-def build_glossary_for_slide(
-    ocr_texts: list[str],
-    lecture_title: str = "Lecture",
-) -> dict:
-    """
-    슬라이드 번역용 용어집 빌드 (편의 함수)
-
-    사용 예:
-        from backend.app.services.glossary_builder import build_glossary_for_slide
-
-        glossary = build_glossary_for_slide(
-            ocr_texts=["자료구조", "스택", ...],
-            lecture_title="컴퓨터 구조 1장"
-        )
-    """
-    builder = get_glossary_builder()
-    return builder.build_glossary(ocr_texts, lecture_title)

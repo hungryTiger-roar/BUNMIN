@@ -22,12 +22,14 @@ node_modules/
 *.pt
 *.pth
 
+# VAD 런타임 모델 — 작은 크기(~2MB), 프론트엔드 필수 파일이므로 예외
+!frontend/public/silero_vad_*.onnx
+
 # 다운로드 모델 디렉토리 (qwen3 LoRA 제외)
 models/rapidocr_korean/
 models/rapidocr-korean/
 models/opus-mt-ct2/
 models/qwen3-vl-8b-instruct/
-models/asr-faster-whisper-large-v3-turbo-ko/
 models/whisper-large-v3-turbo-ct2-int8/
 
 # LoRA 모델은 예외 (번역용 파인튜닝 모델)
@@ -38,9 +40,6 @@ models/qwen3/qwen3-vl-8b-lora-r64-e3-final/tokenizer.json
 models/qwen3/**/.cache/
 # HuggingFace 자동 생성 LFS 설정 파일 제외
 models/**/.gitattributes
-
-# TTS 자동 다운로드 모델 파일
-backend/app/services/models/
 
 # 업로드 파일 (슬라이드, 이미지) — 항상 프로젝트 루트에 생성됨
 uploads/
@@ -73,8 +72,45 @@ Thumbs.db
 evaluation/pdfs/
 evaluation/datasets/ocr_pdfs/
 
+# 용어집 캐시 (glossary_builder.py가 런타임에 자동 생성)
+glossary/
+
 # Claude
 .claude/
 
 # 자동 생성 API 문서
 docs/api/
+
+# 테스트 파일 및 출력물 (프로젝트 루트)
+test_*.py
+test_*.png
+test_*.pdf
+test_*.json
+test_*.txt
+compare_*.py
+create_*.py
+inference_vlm.py
+run_test.bat
+check_p*.png
+*_regions.json
+*_translated*.json
+*_translated*.png
+
+# 레거시 스크립트 (v3 사용)
+translate_slide.py
+translate_slide_v2.py
+
+# 프론트엔드 빌드 캐시
+frontend/.vite/
+
+# 로컬 모델 캐시
+backend/app/services/models/
+models/asr-*/
+models/*_new/
+models/nul
+
+# 테스트용 PDF
+models/*.pdf
+
+# 로컬 데이터셋
+datasets/

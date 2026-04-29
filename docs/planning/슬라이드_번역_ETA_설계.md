@@ -77,11 +77,11 @@ SlideUpload                           process_slide() 백그라운드 태스크
 | `stage` | str | `pending` / `ocr` / `translate` / `bundling` / `completed` / `failed` |
 | `stage_current` | int | 현재 단계에서 끝난 페이지 수 |
 | `stage_total` | int | 현재 단계에서 처리할 전체 페이지 수 |
-| `stage_started_at` | float | 단계 시작 시각 (epoch) |
-| `last_page_at` | float | 마지막 페이지 완료 시각 — duration 측정 기준점 |
+| `stage_started_at` | float | 단계 시작 시각 (epoch) — bundling ETA 계산 기준점 |
+| `last_page_at` | float | 마지막 페이지 완료 시각 — ocr/translate elapsed 계산 기준점 |
 | `avg_page_duration` | float | 현재 단계의 페이지당 평균 시간 (EMA) |
-| `eta_anchor_seconds` | float \| None | 마지막 갱신 시점의 ETA 값 |
-| `eta_anchor_at` | float | 그 anchor를 찍은 시각 (epoch) |
+
+> ETA 값은 anchor로 저장하지 않습니다. `/status` 응답 시점마다 `_compute_eta_seconds()`가 즉시 계산합니다.
 
 ### 3.2 통합 잔여 시간 계산 — `_unified_remaining()`
 
@@ -89,32 +89,44 @@ SlideUpload                           process_slide() 백그라운드 태스크
 
 ```python
 _BASELINE_SECONDS_PER_PAGE = {
-    "ocr": 10.0,        # Surya OCR 한 장 추정치
-    "translate": 30.0,  # Qwen3-VL 4bit GPU 한 장 추정치
+    "ocr": 15.0,       # Surya OCR 한 장 처리 추정치 — 실측보다 약간 여유롭게
+    "translate": 50.0, # Qwen3-VL 4bit GPU 한 장 번역 추정치 — 실측보다 여유롭게 잡아 ETA 조기 0 방지
 }
 _BUNDLING_BASELINE = 3.0  # PDF 묶기 짧은 고정값
 
-def _unified_remaining(stage, total, current, avg) -> Optional[float]:
-    remaining_in_stage = max(0, total - current)
+def _unified_remaining(stage: str, total: int, current: int, avg: float, elapsed_on_current: float) -> Optional[float]:
+    """현재 단계 + 후속 단계의 남은 작업 시간 합산.
+    elapsed_on_current: 현재 처리 중인 페이지에서 이미 흐른 시간 — 남은 시간에서 차감해 매 폴링마다 자연스럽게 줄어듦."""
+    pages_remaining = max(0, total - current)
+
+    def _in_progress(per_page: float) -> float:
+        return max(0.0, per_page - elapsed_on_current)
 
     if stage == "ocr":
-        ocr_per_page = avg if avg > 0 else _BASELINE_SECONDS_PER_PAGE["ocr"]
-        ocr_remaining = ocr_per_page * remaining_in_stage
-        translate_remaining = _BASELINE_SECONDS_PER_PAGE["translate"] * total
+        per_page = avg if avg > 0 else _BASELINE_SECONDS_PER_PAGE["ocr"]
+        ocr_remaining = (_in_progress(per_page) + per_page * (pages_remaining - 1)) if pages_remaining > 0 else 0.0
+        translate_remaining = _BASELINE_SECONDS_PER_PAGE["translate"] * total  # 아직 시작 안 한 단계
         return ocr_remaining + translate_remaining + _BUNDLING_BASELINE
 
     if stage == "translate":
-        translate_per_page = avg if avg > 0 else _BASELINE_SECONDS_PER_PAGE["translate"]
-        return translate_per_page * remaining_in_stage + _BUNDLING_BASELINE
+        per_page = avg if avg > 0 else _BASELINE_SECONDS_PER_PAGE["translate"]
+        if pages_remaining > 0:
+            translate_remaining = _in_progress(per_page) + per_page * (pages_remaining - 1)
+        else:
+            translate_remaining = 0.0
+        # bundling baseline은 더하지 않음 — 번역 완료 직전 ETA가 3초로 점프하는 혼란 방지
+        return translate_remaining
 
     if stage == "bundling":
-        return _BUNDLING_BASELINE
+        return max(0.0, _BUNDLING_BASELINE - elapsed_on_current)
 
     return None
 ```
 
 OCR 단계에서는 OCR 잔여 + 번역 전체 baseline 모두 포함하므로,
 **OCR이 끝나도 ETA가 0으로 떨어지지 않고 매끄럽게 번역 단계로 이어집니다.**
+
+`elapsed_on_current` 덕분에 anchor 캐싱 없이도 매 폴링 응답 시점에 즉시 계산하면서 부드럽게 감소합니다.
 
 ### 3.3 단계 전환 — `_set_stage()`
 
@@ -125,15 +137,12 @@ def _set_stage(slide_id, stage, total):
     s["stage_total"] = total
     s["stage_started_at"] = now
     s["last_page_at"] = now
-    s["avg_page_duration"] = 0.0   # 이전 단계 평균 폐기
-    s["eta_anchor_at"] = now
-    s["eta_anchor_seconds"] = _unified_remaining(stage, total, 0, 0.0)
+    s["avg_page_duration"] = 0.0   # 이전 단계 평균 폐기 (OCR과 번역은 다른 작업)
 ```
 
 `avg_page_duration`을 리셋하는 이유: OCR과 번역은 다른 작업이라 평균값을 공유하면 안 됨.
 
-`eta_anchor_seconds`는 baseline 기반으로 시드되므로,
-**첫 페이지가 끝나기 전에도 ETA가 보입니다.**
+ETA는 anchor로 저장하지 않고 `/status` 응답 시점마다 즉시 계산합니다 (`_compute_eta_seconds()` 참조).
 
 ### 3.4 페이지 완료 시 — `_page_completed()`
 
@@ -151,33 +160,43 @@ def _page_completed(slide_id, current):
     else:
         # 두 번째부터: 느린 EMA (alpha=0.25)
         s["avg_page_duration"] = 0.75 * prev + 0.25 * duration
-
-    s["eta_anchor_seconds"] = _unified_remaining(stage, total, current, avg)
-    s["eta_anchor_at"] = now
 ```
 
 두 가지 점프 완화 장치:
 
-1. **첫 페이지 블렌딩**: baseline이 30초인데 실측이 60초여도 평균은 45초로 시작 → 후속 추정 점프 절반
+1. **첫 페이지 블렌딩**: baseline이 50초인데 실측이 100초여도 평균은 75초로 시작 → 후속 추정 점프 절반
 2. **느린 EMA(α=0.25)**: 페이지마다 변동이 커도 평균은 천천히 따라감 → 페이지 간 점프 작음
 
-### 3.5 `/slides/status` 응답에서 ETA 계산
+### 3.5 `/slides/status` 응답에서 ETA 계산 — `_compute_eta_seconds()`
 
-폴링 응답 시점에 anchor에서 흐른 시간만큼 감산:
+폴링 응답 시점에 현재 페이지의 경과 시간을 반영해 즉시 계산:
 
 ```python
+def _compute_eta_seconds(s: dict, now: float) -> Optional[float]:
+    """anchor 캐싱 없이 매 /status 응답 시 즉시 계산.
+    현재 페이지의 elapsed 시간도 반영하므로 페이지 완료 전에도 ETA가 자연스럽게 줄어듦."""
+    stage = s.get("stage", "pending")
+    if stage in ("pending", "completed", "failed"):
+        return None
+    total    = s.get("stage_total", 0)
+    current  = s.get("stage_current", 0)
+    avg      = s.get("avg_page_duration", 0.0)
+    # bundling은 stage_started_at 기준, 나머지는 마지막 페이지 완료 시점 기준
+    if stage == "bundling":
+        elapsed = max(0.0, now - s.get("stage_started_at", now))
+    else:
+        elapsed = max(0.0, now - s.get("last_page_at", now))
+    return _unified_remaining(stage, total, current, avg, elapsed)
+
 @router.get("/status/{slide_id}")
 async def get_status(slide_id):
+    now = time.time()
     status = slide_status[slide_id]
-    anchor = status.get("eta_anchor_seconds")
-    eta_seconds = None
-    if anchor is not None:
-        elapsed = max(0.0, time.time() - status.get("eta_anchor_at"))
-        eta_seconds = max(0.0, anchor - elapsed)
+    eta_seconds = _compute_eta_seconds(status, now)
     return SlideStatus(..., eta_seconds=eta_seconds)
 ```
 
-이 한 줄 덕분에 **폴링 간격(2초) 사이에 ETA가 절대 늘어나지 않음** — 백엔드에서 시간이 흐른 만큼 알아서 빼고 응답.
+anchor를 캐싱하지 않으므로 **현재 페이지가 baseline을 초과해도 ETA가 자연스럽게 0까지 내려갑니다.**
 
 ---
 
@@ -227,40 +246,41 @@ useEffect(() => {
 
 ```typescript
 function formatEta(seconds: number): string {
-  if (seconds < 1) return '거의 다 됨'
-  if (seconds < 60) return `약 ${Math.ceil(seconds)}초 남음`
-  const min = Math.floor(seconds / 60)
-  const sec = Math.ceil(seconds % 60)
-  if (sec === 0 || sec === 60) return `약 ${sec === 60 ? min + 1 : min}분 남음`
-  return `약 ${min}분 ${sec}초 남음`
+  if (seconds < 1) return ''                                      // ETA=0 → 텍스트 숨김 (UI 상 '잠시만 기다려주세요' 대체 표시)
+  if (seconds < 60) return `약 ${Math.ceil(seconds)}초 남음`     // 1분 미만: 초 카운트다운
+  return `약 ${Math.ceil(seconds / 60)}분 남음`                  // 1분 이상: 분 단위만 (깜빡임 최소화)
 }
 ```
+
+`seconds < 1`일 때 빈 문자열을 반환하면, UI에서는 별도 로직으로 "AI 번역중..." 스피너를 대신 표시합니다 (`etaReachedZero` 플래그로 전환).
 
 ---
 
 ## 5. 12장짜리 시뮬레이션
 
 baseline 기준값과 실측치 차이가 클 때를 가정:
-- 실측 OCR: 5초/장 (baseline 10초의 절반)
-- 실측 번역: 25초/장 (baseline 30초보다 약간 빠름)
+- 실측 OCR: 8초/장 (baseline 15초보다 빠름)
+- 실측 번역: 35초/장 (baseline 50초보다 빠름)
 
 | 시점 | stage_current/total | avg | ETA 계산 | ETA |
 |------|---------------------|-----|----------|-----|
-| OCR 시작 | `ocr` 0/12 | 0 | 10×12 + 30×12 + 3 | **8분 3초** |
-| OCR 1장 끝 | `ocr` 1/12 | 0.5×10 + 0.5×5 = **7.5** | 7.5×11 + 360 + 3 | 7분 26초 (-37) |
-| OCR 2장 끝 | `ocr` 2/12 | 0.75×7.5 + 0.25×5 = **6.9** | 6.9×10 + 360 + 3 | 7분 12초 (-14) |
-| OCR 3장 끝 | `ocr` 3/12 | **6.4** | 6.4×9 + 360 + 3 | 7분 1초 (-11) |
-| OCR 6장 끝 | `ocr` 6/12 | ≈5.5 | 5.5×6 + 360 + 3 | 6분 36초 |
-| OCR 12장 끝 | `ocr` 12/12 | ≈5.1 | 5.1×0 + 360 + 3 | **6분 3초** |
-| 번역 시작 | `translate` 0/12 | 0 | 30×12 + 3 | **6분 3초** ← 점프 없음 |
-| 번역 1장 끝 | `translate` 1/12 | 0.5×30 + 0.5×25 = **27.5** | 27.5×11 + 3 | 5분 5초 (-58) |
-| 번역 2장 끝 | `translate` 2/12 | 0.75×27.5 + 0.25×25 = **26.9** | 26.9×10 + 3 | 4분 32초 |
-| ... | 점차 25로 수렴 | ... | ... | ... |
-| 번역 12장 끝 | `translate` 12/12 | ≈25.4 | 25.4×0 + 3 | 약 3초 |
+| OCR 시작 | `ocr` 0/12 | 0 | 15×12 + 50×12 + 3 | **15분 3초** |
+| OCR 1장 끝 | `ocr` 1/12 | 0.5×15 + 0.5×8 = **11.5** | 11.5×11 + 600 + 3 | **12분 9초** (-2분54초) |
+| OCR 2장 끝 | `ocr` 2/12 | 0.75×11.5 + 0.25×8 = **10.6** | 10.6×10 + 600 + 3 | 11분 49초 (-20) |
+| OCR 3장 끝 | `ocr` 3/12 | ≈10.0 | 10.0×9 + 600 + 3 | 11분 33초 (-16) |
+| OCR 6장 끝 | `ocr` 6/12 | ≈9.0 | 9.0×6 + 600 + 3 | 11분 3초 |
+| OCR 12장 끝 | `ocr` 12/12 | ≈8.5 | 8.5×0 + 600 + 3 | **10분 3초** |
+| 번역 시작 | `translate` 0/12 | 0 | 50×12 | **10분** ← 점프 없음 (bundling 미합산) |
+| 번역 1장 끝 | `translate` 1/12 | 0.5×50 + 0.5×35 = **42.5** | 42.5×11 | 7분 47초 (-2분13초) |
+| 번역 2장 끝 | `translate` 2/12 | 0.75×42.5 + 0.25×35 = **40.6** | 40.6×10 | 6분 46초 |
+| ... | 점차 35로 수렴 | ... | ... | ... |
+| 번역 12장 끝 | `translate` 12/12 | ≈36.0 | 36.0×0 | **0초** → 잠시만 표시 |
 | PDF 생성 | `bundling` | - | _BUNDLING_BASELINE | 약 3초 |
 | 완료 | - | - | - | - |
 
-전체 약 8분짜리 작업이고, 점프는 **첫 페이지 두 번** (OCR 첫장, 번역 첫장) 이 가장 크고, 이후엔 페이지마다 ±5~15초 정도로 안정화됨.
+전체 약 15분짜리 작업이고, 점프는 **OCR 첫 장** (-2분54초)과 **번역 첫 장** (-2분13초)이 가장 크고, 이후엔 페이지마다 ±20~40초 정도로 안정화됨.
+
+> 번역 단계에서 bundling baseline(3초)을 합산하지 않는 이유: 마지막 번역 페이지 완료 직후 ETA=0이 되어 "잠시만 기다려주세요"로 전환되는 게 자연스럽기 때문.
 
 ---
 
@@ -288,8 +308,8 @@ baseline 기준값과 실측치 차이가 클 때를 가정:
 
 ```python
 _BASELINE_SECONDS_PER_PAGE = {
-    "ocr": 10.0,
-    "translate": 30.0,
+    "ocr": 15.0,       # Surya OCR 한 장 처리 추정치
+    "translate": 50.0, # Qwen3-VL 4bit GPU 한 장 번역 추정치
 }
 _BUNDLING_BASELINE = 3.0
 ```

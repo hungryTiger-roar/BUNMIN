@@ -1,5 +1,5 @@
-import { useEffect, useState, useRef, type CSSProperties } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useState, useRef, useCallback, type CSSProperties } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import {
   usePreferencesStore,
@@ -8,6 +8,8 @@ import {
   type AspectRatio,
 } from '@/stores/preferencesStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
+import { useTTS } from '@/hooks/useTTS'
+import ConnectionStatus from '@/components/common/ConnectionStatus'
 import ParticipantsPanel from '@/components/common/ParticipantsPanel'
 import MaterialViewToggle from '@/components/common/MaterialViewToggle'
 import { StudentCursorOverlay, useCursorOverlay } from '@/components/student/StudentCursorOverlay'
@@ -75,12 +77,13 @@ function subtitleStyleToCss(style: SubtitleStyle): CSSProperties {
         ].join(', '),
       }
     default:
-      return { color: 'black' }
+      return {}
   }
 }
 
 function Student() {
   const navigate = useNavigate()
+  const location = useLocation()
   const slideRef = useRef<HTMLDivElement>(null)
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const chatInputRef = useRef<HTMLInputElement>(null)
@@ -125,12 +128,39 @@ function Student() {
     toggleTheme,
   } = usePreferencesStore()
 
+  // TTS — Student 전용, audioLang 변경 시 엔진 재생성
+  const { synthesize, unlockAudio: unlockTTS, status: ttsStatus, setVolume: setTTSVolume } = useTTS(true, audioLang)
+
+  const synthesizeRef = useRef(synthesize)
+  synthesizeRef.current = synthesize
+
+  const audioLangRef = useRef(audioLang)
+  useEffect(() => { audioLangRef.current = audioLang }, [audioLang])
+
+  const [isAudioUnlocked, setIsAudioUnlocked] = useState(false)
+  const isAudioUnlockedRef = useRef(false)
+
+  const unlockAudio = useCallback(() => {
+    unlockTTS()
+    isAudioUnlockedRef.current = true
+    setIsAudioUnlocked(true)
+    console.log('[Audio] 재생 잠금 해제됨 (WASM TTS)')
+  }, [unlockTTS])
+
+  const onTranslation = useCallback((text: string) => {
+    if (isAudioUnlockedRef.current) {
+      synthesizeRef.current(text, audioLangRef.current)
+    }
+  }, [])
+
+  // ref 기반 커서 오버레이 (React 상태 없이 DOM 직접 조작)
+  // slideRef를 전달해서 컨테이너 크기 기준으로 px 변환
   const { spotlightRef, onCursor } = useCursorOverlay(slideRef)
 
-  const { isConnected, connect, sendChat, unlockAudio, isAudioUnlocked } = useWebSocket(
+  const { isConnected, connect, sendChat } = useWebSocket(
     WS_PIPELINE_URL,
     'student',
-    { onCursor }
+    { onCursor, onTranslation }
   )
 
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -169,15 +199,43 @@ function Student() {
     }
   }, [])
 
+  // WebSocket 연결은 항상 자동
   useEffect(() => {
     connect()
   }, [connect])
+
+  // Start 페이지 "강의 참여" 클릭 경유 시 transient activation 살아있을 때 즉시 언락
+  useEffect(() => {
+    if ((location.state as { autoEnter?: boolean } | null)?.autoEnter) {
+      unlockAudio()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // 직접 접속/새로고침 시: 첫 인터랙션(클릭·키·터치)에서 자동 언락
+  useEffect(() => {
+    if (isAudioUnlocked) return
+    const unlock = () => unlockAudio()
+    document.addEventListener('click',      unlock, { once: true })
+    document.addEventListener('keydown',    unlock, { once: true })
+    document.addEventListener('touchstart', unlock, { once: true, passive: true })
+    return () => {
+      document.removeEventListener('click',      unlock)
+      document.removeEventListener('keydown',    unlock)
+      document.removeEventListener('touchstart', unlock)
+    }
+  }, [isAudioUnlocked, unlockAudio])
 
   useEffect(() => {
     const handle = () => setIsFullscreen(!!document.fullscreenElement)
     document.addEventListener('fullscreenchange', handle)
     return () => document.removeEventListener('fullscreenchange', handle)
   }, [])
+
+  // volume/muted → TTS GainNode 실시간 동기화
+  useEffect(() => {
+    setTTSVolume(volume, isMuted)
+  }, [volume, isMuted, setTTSVolume])
 
   useEffect(() => {
     chatScrollRef.current?.scrollTo({
@@ -231,8 +289,8 @@ function Student() {
   return (
     <div
       className="h-screen overflow-hidden flex flex-col bg-background text-onBackground"
-      onClick={!isAudioUnlocked ? unlockAudio : undefined}
     >
+      {/* 입장 오버레이 — connect + unlockAudio 동시 처리 (브라우저 오디오 정책 대응) */}
       {/* 자막 다운로드 모달 */}
       {showTranscriptModal && sessionId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -291,6 +349,17 @@ function Student() {
               <span className="opacity-60">/</span>
               <span className="opacity-60">{totalPages}</span>
             </div>
+          )}
+          {ttsStatus === 'loading' && (
+            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-yellow-500/20 text-yellow-600 dark:text-yellow-400 text-xs font-medium rounded-full border border-yellow-500/30">
+              <span className="w-1.5 h-1.5 bg-yellow-500 rounded-full animate-pulse" />
+              TTS 로딩 중
+            </span>
+          )}
+          {ttsStatus === 'error' && (
+            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-error/20 text-error text-xs font-medium rounded-full border border-error/30">
+              TTS 오류
+            </span>
           )}
         </div>
 

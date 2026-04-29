@@ -4,12 +4,10 @@ if hasattr(sys.stdout, "reconfigure"):
 
 """
 파이프라인 평가
-- eval_realtime_pipeline: ASR → NMT → TTS (실시간 강의 통역)
+- eval_realtime_pipeline: ASR → NMT (실시간 강의 통역, TTS는 클라이언트 WASM 처리)
 - eval_ocr_nmt: OCR → NMT (슬라이드 번역)
 """
-import io
 import json
-import wave
 from datetime import datetime
 from pathlib import Path
 
@@ -22,12 +20,11 @@ DATASETS_DIR = Path(__file__).parent.parent / "datasets"
 
 
 def eval_realtime_pipeline() -> dict:
-    print("\n[PIPELINE] 실시간 강의 파이프라인 평가 (ASR → NMT → TTS)...")
+    print("\n[PIPELINE] 실시간 강의 파이프라인 평가 (ASR → NMT)...")
 
     from app.config import ModelConfig
     from app.services.asr_service import ASRService
     from app.services.nmt_service import NMTService
-    from app.services.tts_service import TTSService
 
     samples_dir = DATASETS_DIR / "asr_samples"
     ground_truth_path = samples_dir / "ground_truth.json"
@@ -42,22 +39,17 @@ def eval_realtime_pipeline() -> dict:
 
     asr_service = ASRService(model_name=ModelConfig.ASR_MODEL, device=ModelConfig.ASR_DEVICE, dtype=ModelConfig.ASR_DTYPE)
     nmt_service = NMTService(model_name=ModelConfig.NMT_ASR_MODEL, device=ModelConfig.NMT_ASR_DEVICE, dtype=ModelConfig.NMT_ASR_DTYPE)
-    tts_service = TTSService(model_name=ModelConfig.TTS_MODEL, device=ModelConfig.TTS_DEVICE)
 
     # 출력 디렉토리 생성
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = Path(__file__).parent.parent / "results" / "pipeline_outputs" / timestamp
     output_dir.mkdir(parents=True, exist_ok=True)
-    tts_dir = output_dir / "tts_audio"
-    tts_dir.mkdir(exist_ok=True)
     print(f"  [출력] 결과 저장 경로: {output_dir}")
 
     wer_pairs = []
     asr_latencies_ms = []
     nmt_latencies_ms = []
-    tts_latencies_ms = []
     pipeline_latencies_ms = []
-    tts_rtf_list = []
     ref_translations = []
     hyp_translations = []
 
@@ -87,30 +79,12 @@ def eval_realtime_pipeline() -> dict:
     ref_translations = nmt_service.translate_batch(gt_texts)
     hyp_translations = english_texts
 
-    # 3단계: TTS 전체 순차 실행
+    pipeline_latencies_ms = [a + n for a, n in zip(asr_latencies_ms, nmt_latencies_ms)]
+
+    # 텍스트 결과 누적 및 출력
     text_results = []
     for i, (sample, english_text) in enumerate(zip(wav_samples, english_texts)):
-        with timer() as t_tts:
-            audio_output = tts_service.synthesize(english_text) if english_text.strip() else tts_service._create_silence(0.1)
-        tts_ms = t_tts["elapsed"] * 1000
-        tts_latencies_ms.append(tts_ms)
-
-        try:
-            with wave.open(io.BytesIO(audio_output)) as wf:
-                actual_duration = wf.getnframes() / wf.getframerate()
-        except Exception:
-            actual_duration = len(english_text.split()) / 2.5
-        tts_rtf_list.append(compute_rtf(t_tts["elapsed"], actual_duration))
-
-        pipeline_ms = asr_latencies_ms[i] + nmt_latencies_ms[i] + tts_ms
-        pipeline_latencies_ms.append(pipeline_ms)
-
-        # TTS 음성 파일 저장
-        stem = Path(sample["file"]).stem
-        tts_wav_path = tts_dir / f"{stem}_tts.wav"
-        tts_wav_path.write_bytes(audio_output)
-
-        # 텍스트 결과 누적
+        pipeline_ms = pipeline_latencies_ms[i]
         text_results.append({
             "file": sample["file"],
             "gt_ko": sample["text"],
@@ -118,11 +92,9 @@ def eval_realtime_pipeline() -> dict:
             "nmt_en": english_text,
             "asr_ms": round(asr_latencies_ms[i], 1),
             "nmt_ms": round(nmt_latencies_ms[i], 1),
-            "tts_ms": round(tts_ms, 1),
             "pipeline_ms": round(pipeline_ms, 1),
         })
-
-        print(f"  [{sample['file']}] ASR={asr_latencies_ms[i]:.0f}ms | NMT={nmt_latencies_ms[i]:.0f}ms | TTS={tts_ms:.0f}ms | 합계={pipeline_ms:.0f}ms")
+        print(f"  [{sample['file']}] ASR={asr_latencies_ms[i]:.0f}ms | NMT={nmt_latencies_ms[i]:.0f}ms | 합계={pipeline_ms:.0f}ms")
         print(f"    NMT: {english_text[:60]}")
 
     # 텍스트 결과 JSON 저장
@@ -130,7 +102,6 @@ def eval_realtime_pipeline() -> dict:
     with open(text_output_path, "w", encoding="utf-8") as f:
         json.dump(text_results, f, ensure_ascii=False, indent=2)
     print(f"\n  [출력] 텍스트 결과 저장: {text_output_path}")
-    print(f"  [출력] TTS 음성 저장: {tts_dir} ({len(text_results)}개)")
 
     wer_result = compute_avg_wer(wer_pairs)
     bleu_result = compute_avg_bleu(list(zip(ref_translations, hyp_translations)))
@@ -140,9 +111,7 @@ def eval_realtime_pipeline() -> dict:
 
     asr_speed  = summarize_latencies(asr_latencies_ms)
     nmt_speed  = summarize_latencies(nmt_latencies_ms)
-    tts_speed  = summarize_latencies(tts_latencies_ms)
     pipe_speed = summarize_latencies(pipeline_latencies_ms)
-    avg_tts_rtf = sum(tts_rtf_list) / len(tts_rtf_list)
     avg_asr_rtf = sum(
         compute_rtf(ms / 1000, s["duration_sec"])
         for ms, s in zip(asr_latencies_ms, wav_samples)
@@ -152,20 +121,17 @@ def eval_realtime_pipeline() -> dict:
         "models": {
             "asr": ModelConfig.ASR_MODEL,
             "nmt_asr": ModelConfig.NMT_ASR_MODEL,
-            "tts": "piper-tts",
         },
         "quality": {
             "asr_wer": round(wer_result["avg_wer"], 4),
             "nmt_bleu": round(bleu_result["avg_bleu"] * 100, 2),
             "nmt_bertscore_f1": round(bert_result.get("avg_f1", 0) * 100, 2) if not bert_result.get("skipped") else None,
-            "tts_avg_rtf": round(avg_tts_rtf, 4),
             "note": "NMT 품질: ASR 인식 텍스트 번역 vs 정답 텍스트 번역 비교",
         },
         "speed": {
             "asr_avg_ms": round(asr_speed.get("avg_ms", 0), 1),
             "asr_avg_rtf": round(avg_asr_rtf, 4),
             "nmt_avg_ms": round(nmt_speed.get("avg_ms", 0), 1),
-            "tts_avg_ms": round(tts_speed.get("avg_ms", 0), 1),
             "pipeline_avg_ms": round(pipe_speed.get("avg_ms", 0), 1),
             "pipeline_p95_ms": round(pipe_speed.get("p95_ms", 0), 1),
         },
@@ -176,7 +142,6 @@ def eval_realtime_pipeline() -> dict:
     print(f"\n[PIPELINE] 결과:")
     print(f"  ASR  WER={wer_result['avg_wer']:.1%} | RTF={avg_asr_rtf:.3f} | {asr_speed.get('avg_ms',0):.0f}ms")
     print(f"  NMT  BLEU={bleu_result['avg_bleu']*100:.1f}% | BERTScore={bert_str} | {nmt_speed.get('avg_ms',0):.0f}ms")
-    print(f"  TTS  RTF={avg_tts_rtf:.3f} | {tts_speed.get('avg_ms',0):.0f}ms")
     print(f"  전체 파이프라인 평균={pipe_speed.get('avg_ms',0):.0f}ms | P95={pipe_speed.get('p95_ms',0):.0f}ms")
     return result
 
