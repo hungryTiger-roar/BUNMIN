@@ -60,7 +60,7 @@ class SlideStatus(BaseModel):
 
 _BASELINE_SECONDS_PER_PAGE = {
     "ocr": 15.0,       # Surya OCR 한 장 처리 추정치 (초) — 실측보다 약간 여유롭게
-    "translate": 40.0,  # Qwen3-VL 한 장 번역 추정치 (4bit GPU) — 실측보다 여유롭게 잡아 "잠시만" 시간 단축
+    "translate":50.0,  # Qwen3-VL 한 장 번역 추정치 (4bit GPU) — 실측보다 여유롭게 잡아 "잠시만" 시간 단축
 }
 _BUNDLING_BASELINE = 3.0  # PDF 묶기 짧은 고정값
 
@@ -84,14 +84,12 @@ def _unified_remaining(stage: str, total: int, current: int, avg: float, elapsed
         per_page = avg if avg > 0 else _BASELINE_SECONDS_PER_PAGE["translate"]
         if pages_remaining > 0:
             ip = _in_progress(per_page)
-            # 마지막 페이지 overrun: 더 이상 추정 못 하니 0 반환 → 프론트는 "잠시만 기다려주세요"
-            # (bundling baseline 추가하면 3초 카운트다운이 폴링마다 reset 돼서 깜빡임)
-            if ip == 0.0 and pages_remaining == 1:
-                return 0.0
             translate_remaining = ip + per_page * (pages_remaining - 1)
         else:
             translate_remaining = 0.0
-        return translate_remaining + _BUNDLING_BASELINE
+        # bundling baseline은 더하지 않음 — 더하면 카운트다운이 3초에서 잠시만으로 점프(거의 다 됨/2초/1초 스킵)
+        # bundling은 어차피 짧고(~3초) bundling 단계로 전환되면 그 안에서 따로 카운트다운됨
+        return translate_remaining
 
     if stage == "bundling":
         return max(0.0, _BUNDLING_BASELINE - elapsed_on_current)
