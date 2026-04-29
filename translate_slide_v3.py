@@ -152,7 +152,7 @@ VLM_MAX_GPU_MEMORY = os.environ.get("VLM_MAX_GPU_MEMORY", "6GB")
 # ============================================================
 # OCR 엔진 선택 (환경변수)
 # ============================================================
-OCR_ENGINE = os.environ.get("AUNION_OCR_ENGINE", "surya")  # surya, easyocr, rapid
+OCR_ENGINE = os.environ.get("OCR_MODEL", "surya")  # surya, easyocr, rapid
 
 # ============================================================
 # Prefix 기호 픽셀 보존 정책 (config.yaml 기반)
