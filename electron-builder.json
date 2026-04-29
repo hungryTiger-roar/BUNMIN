@@ -56,7 +56,7 @@
   "compression": "store",
   "win": {
     "target": [
-      { "target": "zip", "arch": ["x64"] }
+      { "target": "dir", "arch": ["x64"] }
     ],
     "requestedExecutionLevel": "requireAdministrator"
   }
