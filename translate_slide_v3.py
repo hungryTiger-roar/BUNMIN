@@ -77,7 +77,16 @@ def cfg(key: str, default=None):
     return value
 
 # VLM 설정 (환경변수 또는 기본값)
-VLM_BASE_MODEL = os.environ.get("VLM_BASE_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
+# .env 값이 상대 경로면 프로젝트 루트 기준 절대 경로로 변환, repo_id면 그대로
+_PROJECT_ROOT = Path(__file__).parent
+def _resolve_vlm(value: str) -> str:
+    p = Path(value)
+    if p.is_absolute():
+        return value
+    candidate = _PROJECT_ROOT / value
+    return str(candidate) if candidate.is_dir() else value
+
+VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL", "Qwen/Qwen3-VL-8B-Instruct"))
 VLM_LORA_PATH = Path(__file__).parent / os.environ.get("VLM_LORA_PATH", "models/qwen3/qwen3-vl-8b-lora-r64-e3-final")
 VLM_DEVICE = os.environ.get("VLM_DEVICE", "cuda")
 VLM_USE_4BIT = os.environ.get("VLM_USE_4BIT", "true").lower() == "true"

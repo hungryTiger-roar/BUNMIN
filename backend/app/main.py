@@ -18,7 +18,17 @@ from app.utils.firewall import ensure_firewall_rule
 from app.utils.network import SERVER_PORT, get_lan_ip
 
 # VLM Base 모델 (translate_slide_v3.py와 동일한 env 사용)
-VLM_BASE_MODEL = os.environ.get("VLM_BASE_MODEL", "Qwen/Qwen3-VL-8B-Instruct")
+# .env 값이 상대 경로면 프로젝트 루트 기준 절대 경로로 변환, repo_id면 그대로
+from pathlib import Path as _Path
+_PROJECT_ROOT = _Path(__file__).parent.parent.parent
+def _resolve_vlm(value: str) -> str:
+    p = _Path(value)
+    if p.is_absolute():
+        return value
+    candidate = _PROJECT_ROOT / value
+    return str(candidate) if candidate.is_dir() else value
+
+VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL", "Qwen/Qwen3-VL-8B-Instruct"))
 
 # PyInstaller 번들 여부에 따라 frontend dist 경로 결정
 if getattr(sys, 'frozen', False):
@@ -67,7 +77,16 @@ def _start_health_thread(port: int = 18765):
 def _is_cached(model_name: str) -> bool:
     """HuggingFace 캐시에 모델이 완전히 있는지 확인.
     incomplete 파일이 있거나 모델 가중치(10MB 이상 파일)가 없으면 False.
-    'piper' 등 HF 외 모델은 True로 처리 (서비스 자체에서 다운로드)."""
+    'piper' 등 HF 외 모델은 True로 처리 (서비스 자체에서 다운로드).
+    로컬 디렉토리 경로면 가중치 파일 존재로 판단."""
+    from pathlib import Path
+    # 로컬 절대경로 (Windows: C:\..., Linux: /...) → 디렉토리에 가중치 파일 존재 시 캐시됨
+    p = Path(model_name)
+    if p.is_absolute():
+        if not p.is_dir():
+            return False
+        weights = list(p.glob("*.safetensors")) + list(p.glob("*.bin"))
+        return len(weights) > 0
     if "/" not in model_name:
         return True
     try:

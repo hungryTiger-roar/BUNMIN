@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState, useRef, useMemo, type CSSProperties } from 'react'
+﻿import { useEffect, useCallback, useState, useRef, useMemo, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import {
@@ -16,6 +16,7 @@ import ParticipantsPanel from '@/components/common/ParticipantsPanel'
 import AudioLevelMeter from '@/components/lecturer/AudioLevelMeter'
 import MicButton from '@/components/lecturer/MicButton'
 import CursorSpotlight from '@/components/lecturer/CursorSpotlight'
+import ScreenPickerModal from '@/components/lecturer/ScreenPickerModal'
 import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
 
 const ASPECT_OPTIONS: { value: AspectRatio; label: string; className: string }[] = [
@@ -90,8 +91,8 @@ function Lecturer() {
   const [copied, setCopied] = useState(false)
   const [chatInput, setChatInput] = useState('')
   const [showParticipants, setShowParticipants] = useState(false)
-  const [showSubtitleSettings, setShowSubtitleSettings] = useState(false)
-  const [showLangPanel, setShowLangPanel] = useState(false)
+  const [ccEnabled, setCcEnabled] = useState(true)
+  const [settingsPanel, setSettingsPanel] = useState<null | 'main' | 'aspect' | 'language' | 'fontSize' | 'style'>(null)
   const [primaryLang, setPrimaryLang] = useState<LecturerLang>('en')
   const [secondaryLang, setSecondaryLang] = useState<LecturerLang>('ko')
   const [showTranscriptModal, setShowTranscriptModal] = useState(false)
@@ -177,6 +178,9 @@ function Lecturer() {
     isCapturing: isScreenSharing,
     startCapture: startScreenCapture,
     stopCapture: stopScreenCapture,
+    pickerSources: screenPickerSources,
+    selectPickerSource: selectScreenSource,
+    cancelPicker: cancelScreenPicker,
   } = useScreenCapture({ onFrame: handleScreenData, frameRate: 2 })
 
   useEffect(() => {
@@ -438,7 +442,7 @@ function Lecturer() {
     : secondaryLang === 'ko' ? latestSubtitle.original
     : latestSubtitle.translated
 
-  const subtitleOverlay = (primaryText || secondaryText) ? (
+  const subtitleOverlay = ccEnabled && (primaryText || secondaryText) ? (
     <div
       className={`absolute left-1/2 -translate-x-1/2 max-w-[85%] px-4 text-center text-white pointer-events-none z-10 ${
         subtitleSettings.position === 'top' ? 'top-6' : 'bottom-20'
@@ -461,66 +465,42 @@ function Lecturer() {
     </div>
   ) : null
 
-  // 슬라이드 박스 내부 하단 컨트롤 바 (student 화면과 동일 구성)
+  // 슬라이드 박스 내부 하단 컨트롤 바 (CC / 설정 / 전체화면)
   const bottomControlBar = (
-    <div className="absolute left-3 right-3 bottom-3 z-30 flex items-center gap-2 flex-wrap opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity duration-200">
-    
-
-      <div className="flex-1" />
-
-      {/* 화면 비율 */}
-      <div className="flex bg-black/60 backdrop-blur-sm rounded-full p-1">
-        {ASPECT_OPTIONS.map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => setAspectRatio(opt.value)}
-            className={`px-2.5 py-0.5 rounded-full text-xs font-medium transition-colors ${
-              aspectRatio === opt.value
-                ? 'bg-white text-gray-900'
-                : 'text-white/80 hover:text-white'
-            }`}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
-
-      {/* 자막 언어 선택 */}
+    <div className={`absolute left-3 right-3 bottom-3 z-30 flex items-center justify-end gap-2 transition-opacity duration-200 ${
+      settingsPanel !== null
+        ? 'opacity-100 pointer-events-auto'
+        : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
+    }`}>
+      {/* CC 버튼 */}
       <button
         type="button"
-        onClick={() => {
-          setShowLangPanel((v) => !v)
-          setShowSubtitleSettings(false)
-        }}
+        onClick={() => setCcEnabled((v) => !v)}
         className={`p-2 rounded-lg transition-colors ${
-          showLangPanel ? 'bg-white text-gray-900' : 'bg-black/60 text-white hover:bg-black/80'
-        }`}
-        aria-label="언어 선택"
-        title="언어 선택"
+                  ccEnabled ? 'bg-white text-gray-900' : 'bg-black/60 text-white hover:bg-black/80'
+                }`}
+        aria-label={ccEnabled ? '자막 끄기' : '자막 켜기'}
+        title={ccEnabled ? '자막 끄기' : '자막 켜기'}
       >
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+        <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <rect x="2" y="5" width="20" height="14" rx="2" />
+          <path strokeLinecap="round" d="M10 9H8a2 2 0 000 4h2M17 9h-2a2 2 0 000 4h2" />
         </svg>
       </button>
 
-      {/* 자막 설정 */}
+      {/* 설정 버튼 */}
       <button
         type="button"
-        onClick={() => {
-          setShowSubtitleSettings((v) => !v)
-          setShowLangPanel(false)
-        }}
+        onClick={() => setSettingsPanel((v) => (v ? null : 'main'))}
         className={`p-2 rounded-lg transition-colors ${
-          showSubtitleSettings
-            ? 'bg-white text-gray-900'
-            : 'bg-black/60 text-white hover:bg-black/80'
-        }`}
-        aria-label="자막 설정"
-        title="자막 설정"
+                  settingsPanel ? 'bg-white text-gray-900' : 'bg-black/60 text-white hover:bg-black/80'
+                }`}
+        aria-label="설정"
+        title="설정"
       >
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
         </svg>
       </button>
 
@@ -545,60 +525,170 @@ function Lecturer() {
     </div>
   )
 
-  // 자막 설정 팝업 (슬라이드 박스 내부)
-  const subtitleSettingsPopover = showSubtitleSettings ? (
+  // 설정 패널 팝업 (슬라이드 박스 내부)
+  const settingsPanelPopover = settingsPanel ? (
     <>
       <div
-        className="absolute inset-0 bg-black/40 z-40"
-        onClick={() => setShowSubtitleSettings(false)}
+        className="absolute inset-0 z-40"
+        onClick={() => setSettingsPanel(null)}
       />
-      <div className="absolute right-3 bottom-16 z-50 w-72 bg-surface text-onSurface rounded-xl shadow-2xl p-4 border border-primaryContainer">
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="font-semibold text-sm">자막 설정</h3>
-          <button
-            onClick={() => setShowSubtitleSettings(false)}
-            className="text-onSurface/60 hover:text-onSurface"
-          >
-            ✕
-          </button>
-        </div>
-        <div className="mb-3">
-          <div className="flex items-center justify-between mb-1">
-            <label className="text-xs">글자 크기</label>
-            <span className="text-xs text-onSurface/70">
-              {subtitleSettings.fontSize}px
-            </span>
+      <div className="absolute right-3 bottom-14 z-50">
+        {settingsPanel === 'main' && (
+          <div className="w-72 bg-black/90 backdrop-blur-md text-white rounded-xl shadow-2xl overflow-hidden">
+            {/* 화면 비율 */}
+            <button
+              type="button"
+              onClick={() => setSettingsPanel('aspect')}
+              className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/10 transition-colors"
+            >
+              <span>화면 비율</span>
+              <div className="flex items-center gap-2 text-white/60">
+                <span className="text-sm">{aspectRatio.replace('/', ':')}</span>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </div>
+            </button>
+            <div className="h-px bg-white/10" />
+            {/* 언어 설정 */}
+            <button
+              type="button"
+              onClick={() => setSettingsPanel('language')}
+              className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/10 transition-colors"
+            >
+              <span>언어 설정</span>
+              <svg className="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+            <div className="h-px bg-white/10" />
+            {/* 글자 크기 */}
+            <button
+              type="button"
+              onClick={() => setSettingsPanel('fontSize')}
+              className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/10 transition-colors"
+            >
+              <span>글자 크기</span>
+              <div className="flex items-center gap-2 text-white/60">
+                <span className="text-sm">{subtitleSettings.fontSize}px</span>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </div>
+            </button>
+            <div className="h-px bg-white/10" />
+            {/* 글자 스타일 */}
+            <button
+              type="button"
+              onClick={() => setSettingsPanel('style')}
+              className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/10 transition-colors"
+            >
+              <span>글자 스타일</span>
+              <div className="flex items-center gap-2 text-white/60">
+                <span className="text-sm">{STYLE_LABEL[subtitleSettings.style]}</span>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </div>
+            </button>
           </div>
-          <input
-            type="range"
-            min={12}
-            max={36}
-            step={1}
-            value={subtitleSettings.fontSize}
-            onChange={(e) =>
-              setSubtitleSettings({ fontSize: Number(e.target.value) })
-            }
-            className="w-full accent-overlaySurface"
-          />
-        </div>
-        <div>
-          <label className="text-xs block mb-1.5">스타일</label>
-          <div className="grid grid-cols-3 gap-1.5">
-            {(Object.keys(STYLE_LABEL) as SubtitleStyle[]).map((s) => (
+        )}
+
+        {/* 화면 비율 서브패널 */}
+        {settingsPanel === 'aspect' && (
+          <div className="w-72 bg-black/90 backdrop-blur-md text-white rounded-xl shadow-2xl overflow-hidden">
+            <div className="flex items-center gap-2 px-3 py-3 border-b border-white/10">
+              <button type="button" onClick={() => setSettingsPanel('main')} className="p-1 rounded hover:bg-white/10" aria-label="뒤로">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+              <span className="font-medium">화면 비율</span>
+            </div>
+            {ASPECT_OPTIONS.map((opt) => (
               <button
-                key={s}
-                onClick={() => setSubtitleSettings({ style: s })}
-                className={`py-1.5 text-xs rounded-md border transition-colors ${
-                  subtitleSettings.style === s
-                    ? 'bg-overlaySurface text-onOverlaySurface border-overlaySurface'
-                    : 'bg-primaryContainer/40 text-onSurface border-transparent hover:bg-primaryContainer/60'
-                }`}
+                key={opt.value}
+                type="button"
+                onClick={() => { setAspectRatio(opt.value); setSettingsPanel('main') }}
+                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/10 transition-colors"
               >
-                {STYLE_LABEL[s]}
+                <span className={`w-4 text-sm ${aspectRatio === opt.value ? 'opacity-100' : 'opacity-0'}`}>✓</span>
+                <span className={aspectRatio === opt.value ? 'font-medium' : ''}>{opt.label}</span>
               </button>
             ))}
           </div>
-        </div>
+        )}
+
+        {/* 언어 설정 서브패널 */}
+        {settingsPanel === 'language' && (
+          <div className="w-[min(90%,560px)] bg-black/90 backdrop-blur-md text-white rounded-xl shadow-2xl overflow-hidden">
+            <div className="flex items-center gap-2 px-3 py-3 border-b border-white/10">
+              <button type="button" onClick={() => setSettingsPanel('main')} className="p-1 rounded hover:bg-white/10" aria-label="뒤로">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+              <span className="font-medium">언어 설정</span>
+            </div>
+            <div className="grid grid-cols-2 gap-8 p-6">
+              <LangColumn title="자막" value={primaryLang} onChange={setPrimaryLang} />
+              <LangColumn title="두번째 자막" value={secondaryLang} onChange={setSecondaryLang} />
+            </div>
+          </div>
+        )}
+
+        {/* 글자 크기 서브패널 */}
+        {settingsPanel === 'fontSize' && (
+          <div className="w-72 bg-black/90 backdrop-blur-md text-white rounded-xl shadow-2xl overflow-hidden">
+            <div className="flex items-center gap-2 px-3 py-3 border-b border-white/10">
+              <button type="button" onClick={() => setSettingsPanel('main')} className="p-1 rounded hover:bg-white/10" aria-label="뒤로">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+              <span className="font-medium">글자 크기</span>
+            </div>
+            <div className="px-4 py-4">
+              <div className="flex justify-end items-center mb-3">
+                <span className="text-base font-medium">{subtitleSettings.fontSize}px</span>
+              </div>
+              <input
+                type="range"
+                min={12}
+                max={36}
+                step={1}
+                value={subtitleSettings.fontSize}
+                onChange={(e) => setSubtitleSettings({ fontSize: Number(e.target.value) })}
+                className="w-full accent-white"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* 글자 스타일 서브패널 */}
+        {settingsPanel === 'style' && (
+          <div className="w-72 bg-black/90 backdrop-blur-md text-white rounded-xl shadow-2xl overflow-hidden">
+            <div className="flex items-center gap-2 px-3 py-3 border-b border-white/10">
+              <button type="button" onClick={() => setSettingsPanel('main')} className="p-1 rounded hover:bg-white/10" aria-label="뒤로">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+              <span className="font-medium">글자 스타일</span>
+            </div>
+            {(Object.keys(STYLE_LABEL) as SubtitleStyle[]).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => { setSubtitleSettings({ style: s }); setSettingsPanel('main') }}
+                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/10 transition-colors"
+              >
+                <span className={`w-4 text-sm ${subtitleSettings.style === s ? 'opacity-100' : 'opacity-0'}`}>✓</span>
+                <span className={subtitleSettings.style === s ? 'font-medium' : ''}>{STYLE_LABEL[s]}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </>
   ) : null
@@ -616,38 +706,7 @@ function Lecturer() {
       )}
       {subtitleOverlay}
       {bottomControlBar}
-      {subtitleSettingsPopover}
-      {/* 자막 언어 선택 팝업 */}
-      {showLangPanel && (
-        <>
-          <div
-            className="absolute inset-0 bg-black/40 z-40"
-            onClick={() => setShowLangPanel(false)}
-          />
-          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-50 w-[min(90%,560px)] bg-black/80 backdrop-blur-md text-white rounded-xl shadow-2xl p-8">
-            <div className="grid grid-cols-2 gap-12">
-              <LangColumn
-                title="자막"
-                value={primaryLang}
-                onChange={setPrimaryLang}
-              />
-              <LangColumn
-                title="두번째 자막"
-                value={secondaryLang}
-                onChange={setSecondaryLang}
-              />
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowLangPanel(false)}
-              className="absolute top-3 right-3 w-7 h-7 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10"
-              aria-label="닫기"
-            >
-              ✕
-            </button>
-          </div>
-        </>
-      )}
+      {settingsPanelPopover}
     </>
   )
 
@@ -1277,6 +1336,13 @@ function Lecturer() {
           )}
         </aside>
       </div>
+      {screenPickerSources && (
+        <ScreenPickerModal
+          sources={screenPickerSources}
+          onSelect={selectScreenSource}
+          onCancel={cancelScreenPicker}
+        />
+      )}
     </div>
   )
 }
