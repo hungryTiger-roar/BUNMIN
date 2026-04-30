@@ -1,7 +1,8 @@
 import { useLectureStore } from '@/stores/lectureStore'
 
 function ViewToggle() {
-  const { viewMode, setViewMode } = useLectureStore()
+  const viewMode = useLectureStore((s) => s.viewMode)
+  const setViewMode = useLectureStore((s) => s.setViewMode)
 
   return (
     <div className="flex bg-white/15 rounded-lg p-1">

@@ -88,45 +88,42 @@ function Student() {
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const chatInputRef = useRef<HTMLInputElement>(null)
 
-  const {
-    slideStatus,
-    currentPage,
-    totalPages,
-    slidePages,
-    isLectureStarted,
-    isPaused,
-    presentationMode,
-    currentScreen,
-    subtitles,
-    studentName,
-    studentCount,
-    chatMessages,
-    participants,
-    lectureTitle,
-    slideFilename,
-    sessionId,
-    materialMode,
-  } = useLectureStore()
+  // selector 별 구독 — 전체 destructure 시 store 어떤 변화에도 재렌더되어 useWebSocket 콜백 ref 흔들림
+  const slideStatus = useLectureStore((s) => s.slideStatus)
+  const currentPage = useLectureStore((s) => s.currentPage)
+  const totalPages = useLectureStore((s) => s.totalPages)
+  const slidePages = useLectureStore((s) => s.slidePages)
+  const isLectureStarted = useLectureStore((s) => s.isLectureStarted)
+  const isPaused = useLectureStore((s) => s.isPaused)
+  const presentationMode = useLectureStore((s) => s.presentationMode)
+  const currentScreen = useLectureStore((s) => s.currentScreen)
+  const subtitles = useLectureStore((s) => s.subtitles)
+  const studentName = useLectureStore((s) => s.studentName)
+  const studentCount = useLectureStore((s) => s.studentCount)
+  const chatMessages = useLectureStore((s) => s.chatMessages)
+  const participants = useLectureStore((s) => s.participants)
+  const lectureTitle = useLectureStore((s) => s.lectureTitle)
+  const slideFilename = useLectureStore((s) => s.slideFilename)
+  const sessionId = useLectureStore((s) => s.sessionId)
+  const materialMode = useLectureStore((s) => s.materialMode)
 
   const displayTitle =
     lectureTitle.trim() ||
     slideFilename.replace(/\.pdf$/i, '').trim() ||
     ''
 
-  const {
-    subtitleSettings,
-    setSubtitleSettings,
-    audioLang,
-    subtitleLang,
-    secondarySubtitleLang,
-    setAudioLang,
-    setSubtitleLang,
-    setSecondarySubtitleLang,
-    aspectRatio,
-    setAspectRatio,
-    theme,
-    toggleTheme,
-  } = usePreferencesStore()
+  const subtitleSettings = usePreferencesStore((s) => s.subtitleSettings)
+  const setSubtitleSettings = usePreferencesStore((s) => s.setSubtitleSettings)
+  const audioLang = usePreferencesStore((s) => s.audioLang)
+  const subtitleLang = usePreferencesStore((s) => s.subtitleLang)
+  const secondarySubtitleLang = usePreferencesStore((s) => s.secondarySubtitleLang)
+  const setAudioLang = usePreferencesStore((s) => s.setAudioLang)
+  const setSubtitleLang = usePreferencesStore((s) => s.setSubtitleLang)
+  const setSecondarySubtitleLang = usePreferencesStore((s) => s.setSecondarySubtitleLang)
+  const aspectRatio = usePreferencesStore((s) => s.aspectRatio)
+  const setAspectRatio = usePreferencesStore((s) => s.setAspectRatio)
+  const theme = usePreferencesStore((s) => s.theme)
+  const toggleTheme = usePreferencesStore((s) => s.toggleTheme)
 
   // TTS — Student 전용, audioLang 변경 시 엔진 재생성
   const { synthesize, unlockAudio: unlockTTS, status: ttsStatus, setVolume: setTTSVolume } = useTTS(true, audioLang)

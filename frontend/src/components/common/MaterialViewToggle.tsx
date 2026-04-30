@@ -5,7 +5,8 @@ interface MaterialViewToggleProps {
 }
 
 function MaterialViewToggle({ className = '' }: MaterialViewToggleProps) {
-  const { materialMode, setMaterialMode } = useLectureStore()
+  const materialMode = useLectureStore((s) => s.materialMode)
+  const setMaterialMode = useLectureStore((s) => s.setMaterialMode)
   const toggle = () =>
     setMaterialMode(materialMode === 'original' ? 'translated' : 'original')
 

@@ -31,7 +31,12 @@ function SlideUpload() {
   const [displayEta, setDisplayEta] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const { slideStatus, setSlideId, setSlideStatus, modelMode, setModelMode } = useLectureStore()
+  // selector 별 구독 — 전체 destructure 시 store 어떤 변화에도 재렌더 (자막/채팅 등)
+  const slideStatus = useLectureStore((s) => s.slideStatus)
+  const setSlideId = useLectureStore((s) => s.setSlideId)
+  const setSlideStatus = useLectureStore((s) => s.setSlideStatus)
+  const modelMode = useLectureStore((s) => s.modelMode)
+  const setModelMode = useLectureStore((s) => s.setModelMode)
 
   // ETA가 0에 도달한 적이 있는지 — 도달 후엔 카운트다운 대신 'AI 번역중...' 표시
   // (백엔드 baseline과 실제 속도가 다를 때 ETA가 0에 갔다가 다음 단계 시작 시 다시 점프하는 혼란 방지)
