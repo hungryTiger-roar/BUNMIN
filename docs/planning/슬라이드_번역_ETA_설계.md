@@ -15,7 +15,7 @@
 
 1. **페이지당 처리 시간이 가변적**
    - OCR(Surya): 페이지의 텍스트 양 / 레이아웃 복잡도에 따라 3 ~ 15초 편차
-   - VLM 번역(Qwen3-VL-8B-Instruct + LoRA, 4bit): 텍스트 길이 / 토큰 수에 따라 15 ~ 60초 편차
+   - VLM 번역(Qwen2.5-VL-7B-Instruct, 4bit): 텍스트 길이 / 토큰 수에 따라 15 ~ 60초 편차
    - 같은 슬라이드 내에서도 페이지마다 다름
 2. **첫 페이지가 끝나기 전엔 측정값 자체가 0개**
    - "이 슬라이드의 평균 시간"을 알기 전에 ETA를 추정해야 함
@@ -90,7 +90,7 @@ SlideUpload                           process_slide() 백그라운드 태스크
 ```python
 _BASELINE_SECONDS_PER_PAGE = {
     "ocr": 15.0,       # Surya OCR 한 장 처리 추정치 — 실측보다 약간 여유롭게
-    "translate": 50.0, # Qwen3-VL 4bit GPU 한 장 번역 추정치 — 실측보다 여유롭게 잡아 ETA 조기 0 방지
+    "translate": 50.0, # Qwen2.5-VL 4bit GPU 한 장 번역 추정치 — 실측보다 여유롭게 잡아 ETA 조기 0 방지
 }
 _BUNDLING_BASELINE = 3.0  # PDF 묶기 짧은 고정값
 
@@ -309,7 +309,7 @@ baseline 기준값과 실측치 차이가 클 때를 가정:
 ```python
 _BASELINE_SECONDS_PER_PAGE = {
     "ocr": 15.0,       # Surya OCR 한 장 처리 추정치
-    "translate": 50.0, # Qwen3-VL 4bit GPU 한 장 번역 추정치
+    "translate": 50.0, # Qwen2.5-VL 4bit GPU 한 장 번역 추정치
 }
 _BUNDLING_BASELINE = 3.0
 ```
