@@ -1,5 +1,22 @@
 /// <reference types="vite/client" />
 
+// piper-tts-web 타입 선언 (패키지에 .d.ts 미동봉)
+// class로 선언하면 type/value 양쪽으로 사용 가능
+declare module 'piper-tts-web' {
+  export class PiperWebEngine {
+    constructor(...args: any[])
+    [key: string]: any
+  }
+  export class OnnxWebRuntime {
+    constructor(...args: any[])
+    [key: string]: any
+  }
+  export class PhonemizeWebRuntime {
+    constructor(...args: any[])
+    [key: string]: any
+  }
+}
+
 interface ModelEntry {
   status: 'pending' | 'loading' | 'done' | 'error' | 'skipped'
   progress: number

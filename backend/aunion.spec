@@ -63,6 +63,8 @@ hiddenimports = [
     'easyocr',
     'peft',
     'bitsandbytes',
+    # 프로젝트 루트의 슬라이드 번역 모듈 (run.py가 sys.path에 root 추가하면 import됨)
+    'translate_slide_v3',
 ]
 
 hiddenimports += collect_submodules('starlette')
@@ -74,6 +76,8 @@ hiddenimports += collect_submodules('torch')
 datas = []
 datas += collect_data_files('transformers')
 datas += collect_data_files('rapidocr_onnxruntime')
+# faster_whisper의 assets/silero_vad_v6.onnx — vad_filter=True 사용 시 필수
+datas += collect_data_files('faster_whisper')
 
 # 앱 디렉토리 포함
 datas += [
@@ -84,7 +88,7 @@ datas += [
 
 a = Analysis(
     ['run.py'],
-    pathex=['.'],
+    pathex=['.', '..'],  # '..' = project root → translate_slide_v3.py 등 root 모듈 검색 가능
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
