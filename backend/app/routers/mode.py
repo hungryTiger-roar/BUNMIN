@@ -2,8 +2,8 @@
 동적 모델 모드 전환 API
 
 슬라이드 번역 모드 ↔ 실시간 번역 모드 전환
-- /api/mode/slide: VLM 온디맨드 로드, 실시간 모델 언로드
-- /api/mode/realtime: VLM 언로드, ASR/NMT 로드
+- /api/mode/slide: VLM 온디맨드 로드, 실시간 모델 언로드 (ASR/NMT/OCR)
+- /api/mode/realtime: VLM 언로드, ASR/NMT-ASR 로드 (OCR은 슬라이드 전용이라 재로드 안 함)
 - /api/mode/current: 현재 모드 확인
 """
 

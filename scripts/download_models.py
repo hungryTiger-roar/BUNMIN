@@ -29,20 +29,12 @@ MODELS_DIR = _PROJECT_ROOT / "models"
 
 # VLM Base 모델 (HuggingFace 캐시에 저장)
 VLM_BASE = {
-    "repo_id": "Qwen/Qwen3-VL-8B-Instruct",
+    "repo_id": "Qwen/Qwen2.5-VL-7B-Instruct",
     # 로컬 평탄 디렉토리 사용 — Windows 심볼릭 미지원 환경에서 HF 캐시
     # snapshots/blobs 분리 구조가 부분 실패하는 문제 회피
-    "local_dir": MODELS_DIR / "qwen3-vl-8b-instruct",
+    "local_dir": MODELS_DIR / "qwen2.5-vl-7b-instruct",
     "description": "VLM Base 모델",
-    "size": "~16GB",  # bf16 가중치 4 shards (8B params × 2 bytes)
-}
-
-# VLM LoRA 어댑터 (로컬 디렉토리에 저장)
-VLM_LORA = {
-    "repo_id": "sanghoon1234/qwen3-vl-8b-lora-ko2en",
-    "local_dir": MODELS_DIR / "qwen3" / "qwen3-vl-8b-lora-r64-e3-final",
-    "description": "VLM 번역 LoRA",
-    "size": "~665MB",
+    "size": "~14GB",  # bf16 가중치 5 shards (7B params × 2 bytes)
 }
 
 # ASR 모델 (음성 인식) — openai 원본 turbo를 CTranslate2 int8로 변환
@@ -62,14 +54,6 @@ NMT_MODEL = {
     "local_dir": MODELS_DIR / "opus-mt-ko-en-ct2",
     "description": "NMT 실시간 번역 모델 (CTranslate2 int8)",
     "size": "~150MB",
-}
-
-# RapidOCR 한국어 모델 — 로컬 평탄 디렉토리 (Windows 심볼릭 회피)
-RAPIDOCR_KOREAN = {
-    "repo_id": "cycloneboy/korean_PP-OCRv4_rec_infer",
-    "local_dir": MODELS_DIR / "rapidocr-korean",
-    "description": "RapidOCR 한국어 모델 (PP-OCRv4)",
-    "size": "~20MB",
 }
 
 # Surya OCR 모델 (Transformer 기반, 고정확도)
@@ -124,7 +108,6 @@ def download_to_local(model: dict, step: str, retries: int = 3) -> bool:
             print(f"  시도 {attempt} 실패: {e}")
     print(f"✗ {model['description']} 다운로드 실패 (재시도 {retries}회 모두 실패): {last_err}")
     return False
-
 
 
 def download_surya_ocr(model: dict, step: str) -> bool:
@@ -286,32 +269,24 @@ def main():
     print("=" * 60)
     print("\n다운로드할 모델:")
     print(f"  1. {VLM_BASE['description']} ({VLM_BASE['size']})")
-    print(f"  2. {VLM_LORA['description']} ({VLM_LORA['size']})")
-    print(f"  3. {ASR_MODEL['description']} ({ASR_MODEL['size']})")
-    print(f"  4. {NMT_MODEL['description']} ({NMT_MODEL['size']})")
-    print(f"  5. {RAPIDOCR_KOREAN['description']} ({RAPIDOCR_KOREAN['size']})")
-    print(f"  6. {SURYA_OCR['description']} ({SURYA_OCR['size']})")
-    print(f"\n총 예상 용량: ~20GB (최초 1회만 다운로드)")
+    print(f"  2. {ASR_MODEL['description']} ({ASR_MODEL['size']})")
+    print(f"  3. {NMT_MODEL['description']} ({NMT_MODEL['size']})")
+    print(f"  4. {SURYA_OCR['description']} ({SURYA_OCR['size']})")
+    print(f"\n총 예상 용량: ~17.5GB (최초 1회만 다운로드)")
 
     results = []
 
     # 1. VLM Base 모델 (로컬 디렉토리 — HF 캐시 심볼릭 이슈 회피)
-    results.append(("VLM Base", download_to_local(VLM_BASE, "1/6")))
+    results.append(("VLM Base", download_to_local(VLM_BASE, "1/4")))
 
-    # 2. VLM LoRA 어댑터
-    results.append(("VLM LoRA", download_to_local(VLM_LORA, "2/6")))
+    # 2. ASR 모델 (CTranslate2 int8 변환)
+    results.append(("ASR", convert_asr_ct2(ASR_MODEL, "2/4")))
 
-    # 3. ASR 모델 (CTranslate2 int8 변환)
-    results.append(("ASR", convert_asr_ct2(ASR_MODEL, "3/6")))
+    # 3. NMT 모델 (CTranslate2 변환)
+    results.append(("NMT", convert_nmt_ct2(NMT_MODEL, "3/4")))
 
-    # 4. NMT 모델 (CTranslate2 변환)
-    results.append(("NMT", convert_nmt_ct2(NMT_MODEL, "4/6")))
-
-    # 5. RapidOCR 한국어 모델 (로컬 디렉토리)
-    results.append(("RapidOCR Korean", download_to_local(RAPIDOCR_KOREAN, "5/6")))
-
-    # 6. Surya OCR 모델 (Transformer 기반)
-    results.append(("Surya OCR", download_surya_ocr(SURYA_OCR, "6/6")))
+    # 4. Surya OCR 모델 (Transformer 기반)
+    results.append(("Surya OCR", download_surya_ocr(SURYA_OCR, "4/4")))
 
     # 결과 출력
     print("\n" + "=" * 60)
@@ -333,9 +308,9 @@ def main():
         print("일부 모델 다운로드 실패. 위 오류를 확인하세요.")
     print("=" * 60)
 
-    # 핵심 모델(VLM Base/LoRA, ASR, NMT) 실패 시 setup이 멈추도록 종료 코드 1
+    # 핵심 모델(VLM Base, ASR, NMT) 실패 시 setup이 멈추도록 종료 코드 1
     # → silent fail로 첫 추론에서 16GB를 다시 받는 사고 방지
-    critical = {"VLM Base", "VLM LoRA", "ASR", "NMT"}
+    critical = {"VLM Base", "ASR", "NMT"}
     failed_critical = [name for name, ok in results if not ok and name in critical]
     if failed_critical:
         print(f"\n[중단] 핵심 모델 실패: {', '.join(failed_critical)}")
