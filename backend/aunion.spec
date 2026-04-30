@@ -52,16 +52,12 @@ hiddenimports = [
     'torch',
     'numpy',
     'soundfile',
-    # ASR - ghost613/faster-whisper-large-v3-turbo-korean (CTranslate2)
+    # ASR - openai/whisper-large-v3-turbo (CTranslate2 int8 변환본)
     'accelerate',
     # NMT-ASR - Helsinki-NLP/opus-mt-ko-en (CTranslate2 CT2 우선, HF 폴백)
     'sentencepiece',
-    # OCR - RapidOCR + Korean PP-OCRv4
-    'rapidocr_onnxruntime',
     'PIL',
-    # Slide VLM (EasyOCR + Qwen3-VL + LoRA)
-    'easyocr',
-    'peft',
+    # Slide OCR + VLM (Surya OCR + Qwen2.5-VL 번역)
     'bitsandbytes',
 ]
 
@@ -73,7 +69,6 @@ hiddenimports += collect_submodules('torch')
 # 데이터 파일
 datas = []
 datas += collect_data_files('transformers')
-datas += collect_data_files('rapidocr_onnxruntime')
 
 # 앱 디렉토리 포함
 datas += [
