@@ -1,4 +1,4 @@
-
+﻿
 import { useEffect, useState, useRef, useCallback, type CSSProperties } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
@@ -240,7 +240,7 @@ function Student() {
     const onResize = () => {
       const narrow = window.innerWidth < 1000
       setIsNarrow(narrow)
-      if (!narrow) setSidebarOpen(false)
+      setSidebarOpen(!narrow)
     }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
@@ -448,7 +448,7 @@ function Student() {
 
             {/* 강의자료 원본/번역 토글 (슬라이드 표시 중일 때만) */}
             {presentationMode === 'slide' && slideStatus === 'ready' && slideImageUrl && (
-              <MaterialViewToggle className="absolute top-3 right-3 z-30" />
+              <MaterialViewToggle className={`absolute top-3 z-30 ${isNarrow ? 'left-3' : 'right-3'}`} />
             )}
 
             {/* 상단 강의 제목 바 — 마우스 올렸을 때만 표시 */}
@@ -866,7 +866,7 @@ function Student() {
 
         {/* 우측 사이드: 강의자료 + 채팅 */}
         <aside className={isNarrow
-          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 min-h-0 py-4 bg-background z-20 transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
+          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 min-h-0 px-3 py-4 bg-background z-20 transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
           : 'w-80 flex-shrink-0 flex flex-col gap-3 min-h-0'
         }>
           {/* 오늘의 강의 자료 — 강의 시작 후에만 노출 */}

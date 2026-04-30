@@ -222,7 +222,7 @@ function Lecturer() {
     const onResize = () => {
       const narrow = window.innerWidth < 1000
       setIsNarrow(narrow)
-      if (!narrow) setSidebarOpen(false)
+      setSidebarOpen(!narrow)
     }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
@@ -1123,7 +1123,7 @@ function Lecturer() {
 
         {/* 사이드바 */}
         <aside className={isNarrow
-          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 overflow-hidden min-h-0 py-4 bg-background z-20 transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
+          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 overflow-hidden min-h-0 px-3 py-4 bg-background z-20 transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
           : 'w-80 flex-shrink-0 flex flex-col gap-3 overflow-hidden min-h-0'
         }>
           <div className="flex-1 overflow-y-auto scrollbar-hide space-y-3 min-h-0">
