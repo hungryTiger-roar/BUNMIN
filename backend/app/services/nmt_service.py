@@ -10,12 +10,21 @@ import re
 import subprocess
 from pathlib import Path
 
-_MODELS_ROOT = Path(__file__).parent.parent.parent.parent / "models"
+from app.config import resolve_model_dir, PROJECT_ROOT, USER_DATA_DIR
 
 
 def _ct2_model_dir(model_name: str) -> Path:
-    # "Helsinki-NLP/opus-mt-tc-big-ko-en" → "models/opus-mt-tc-big-ko-en-ct2"
-    return _MODELS_ROOT / (model_name.split("/")[-1] + "-ct2")
+    """CT2 변환된 모델 디렉토리.
+    "Helsinki-NLP/opus-mt-ko-en" → "{name}-ct2"
+    USER_DATA_DIR/INSTALL_DIR/PROJECT_ROOT 다단계 폴백(Electron 배포 호환),
+    어디에도 없으면 frozen 시 USER_DATA_DIR, dev 시 PROJECT_ROOT 아래 새로 만듦.
+    """
+    name = model_name.split("/")[-1] + "-ct2"
+    found = resolve_model_dir(name)
+    if found is not None:
+        return found
+    base = USER_DATA_DIR if USER_DATA_DIR.exists() and not (PROJECT_ROOT / "models").exists() else PROJECT_ROOT
+    return base / "models" / name
 
 
 # 대학교 강의 맥락: 관사·접속사·조동사는 정상적으로 반복되므로 반복 감지 제외
@@ -98,7 +107,7 @@ class NMTService:
             self._sp_tgt = spm.SentencePieceProcessor()
             self._sp_tgt.Load(str(ct2_dir / "target.spm"))
 
-            print(f"[NMT] CTranslate2 {self.model_name} 로드 완료 ({self.device}, int8)")
+            print(f"[NMT] CTranslate2 {self.model_name} 로드 완료 ({self.device}, int8) [{ct2_dir}]")
             return True
         except Exception as e:
             print(f"[NMT] CTranslate2 로드 실패 → HuggingFace 폴백: {e}")

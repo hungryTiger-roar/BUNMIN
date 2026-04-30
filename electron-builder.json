@@ -4,26 +4,60 @@
   "directories": {
     "output": "setup"
   },
+  "files": [
+    "frontend/dist/**/*",
+    "frontend/electron/**/*",
+    "frontend/package.json",
+    "package.json",
+    "node_modules/**/*",
+    "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+    "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
+    "!**/node_modules/*.d.ts",
+    "!**/node_modules/.bin",
+    "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
+    "!**/{__pycache__,*.pyc}"
+  ],
   "extraResources": [
     {
       "from": "backend/dist/aunion_backend",
       "to": "backend",
+      "filter": ["**/*"]
+    },
+    {
+      "from": ".env.example",
+      "to": "backend/.env"
+    },
+    {
+      "from": "models/whisper-large-v3-turbo-ct2-int8",
+      "to": "backend/models/whisper-large-v3-turbo-ct2-int8",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "models/opus-mt-ct2",
+      "to": "backend/models/opus-mt-ct2",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "models/rapidocr-korean",
+      "to": "backend/models/rapidocr-korean",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "models/qwen3/qwen3-vl-8b-lora-r64-e3-final",
+      "to": "backend/models/qwen3/qwen3-vl-8b-lora-r64-e3-final",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "models/rapidocr_korean",
+      "to": "backend/models/rapidocr_korean",
       "filter": ["**/*"]
     }
   ],
   "compression": "store",
   "win": {
     "target": [
-      { "target": "nsis", "arch": ["x64"] }
+      { "target": "dir", "arch": ["x64"] }
     ],
     "requestedExecutionLevel": "requireAdministrator"
-  },
-  "nsis": {
-    "oneClick": false,
-    "allowToChangeInstallationDirectory": true,
-    "createDesktopShortcut": true,
-    "createStartMenuShortcut": true,
-    "deleteAppDataOnUninstall": true,
-    "language": "1042"
   }
 }

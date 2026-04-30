@@ -9,7 +9,6 @@ import {
 } from '@/stores/preferencesStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { useTTS } from '@/hooks/useTTS'
-import ConnectionStatus from '@/components/common/ConnectionStatus'
 import ParticipantsPanel from '@/components/common/ParticipantsPanel'
 import MaterialViewToggle from '@/components/common/MaterialViewToggle'
 import { StudentCursorOverlay, useCursorOverlay } from '@/components/student/StudentCursorOverlay'

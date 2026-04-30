@@ -27,8 +27,13 @@ import yaml
 from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 
-# .env 로드
-load_dotenv(Path(__file__).parent / ".env")
+# frozen(PyInstaller) 시 Path(__file__)는 _MEIPASS temp dir 안이라 동봉본을 못 찾음.
+# install dir(=exe 옆)을 root로 사용. dev 모드는 그대로 프로젝트 루트.
+import sys as _sys_init
+_BASE_DIR = Path(_sys_init.executable).parent if getattr(_sys_init, 'frozen', False) else Path(__file__).parent
+
+# .env 로드 (config.py가 먼저 로드해도 무해 — load_dotenv는 이미 set된 변수 안 덮음)
+load_dotenv(_BASE_DIR / ".env")
 
 # ============================================================
 # 용어집 빌더 (GPT API, 캐시 기반)
@@ -98,10 +103,10 @@ def get_config():
     if _config is not None:
         return _config
 
-    config_path = Path(__file__).parent / "backend" / "config.yaml"
+    config_path = _BASE_DIR / "backend" / "config.yaml"
     if not config_path.exists():
-        # 직접 실행 시 경로
-        config_path = Path(__file__).parent / "config.yaml"
+        # frozen에선 backend/ 없이 install dir 직속에 yaml이 동봉될 수 있음
+        config_path = _BASE_DIR / "config.yaml"
 
     if config_path.exists():
         with open(config_path, 'r', encoding='utf-8') as f:
@@ -133,17 +138,42 @@ def cfg(key: str, default=None):
             return default
     return value
 
-# VLM 설정 (환경변수 또는 기본값)
-# .env 값이 상대 경로면 프로젝트 루트 기준 절대 경로로 변환, repo_id면 그대로
-_PROJECT_ROOT = Path(__file__).parent
+# VLM 설정 (환경변수 또는 기본값) — _BASE_DIR(파일 상단 정의)이 dev/frozen 자동 분기
+_PROJECT_ROOT = _BASE_DIR
+
+# 가중치 검사 — 빈 폴더(설치 시 Inno Setup Excludes 부산물)를 valid로 오인 방지
+_VLM_WEIGHT_EXTS = (".safetensors", ".bin")
+
+
+def _has_vlm_weights(directory: Path) -> bool:
+    if not directory.is_dir():
+        return False
+    for ext in _VLM_WEIGHT_EXTS:
+        try:
+            if next(directory.rglob(f"*{ext}"), None) is not None:
+                return True
+        except (OSError, PermissionError):
+            continue
+    return False
+
+
 def _resolve_vlm(value: str) -> str:
     p = Path(value)
     if p.is_absolute():
         return value
     candidate = _PROJECT_ROOT / value
-    return str(candidate) if candidate.is_dir() else value
+    return str(candidate) if _has_vlm_weights(candidate) else value
 
-VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL", "Qwen/Qwen2.5-VL-7B-Instruct"))
+def _vlm_default() -> str:
+    """env 미지정 시 기본값. 로컬 동봉본 있으면 거기, 없으면 HF repo_id로 fallback해
+    다운로드 트리거. Electron 배포 환경에서 동봉 모델 우선 사용."""
+    local = _PROJECT_ROOT / "models" / "qwen2.5-vl-7b-instruct"
+    if _has_vlm_weights(local):
+        return str(local)
+    return "Qwen/Qwen2.5-VL-7B-Instruct"
+
+
+VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL") or _vlm_default())
 VLM_DEVICE = os.environ.get("VLM_DEVICE", "cuda")
 VLM_USE_4BIT = os.environ.get("VLM_USE_4BIT", "true").lower() == "true"
 
