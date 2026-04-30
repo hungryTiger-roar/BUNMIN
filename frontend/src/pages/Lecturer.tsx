@@ -1,4 +1,4 @@
-﻿import { useEffect, useCallback, useState, useRef, type CSSProperties } from 'react'
+import { useEffect, useCallback, useState, useRef, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import {
@@ -98,6 +98,8 @@ function Lecturer() {
   const [spotlightEnabled, setSpotlightEnabled] = useState(false)
   const [spotlightColor, setSpotlightColor] = useState(SPOTLIGHT_PRESETS[0])
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 1000)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [slideBoxWidth, setSlideBoxWidth] = useState<number | undefined>(undefined)
 
   // 커서 위치 상태 (브라우저 전체 기준 vw/vh 비율, 0~1)
@@ -211,6 +213,17 @@ function Lecturer() {
     const handle = () => setIsFullscreen(!!document.fullscreenElement)
     document.addEventListener('fullscreenchange', handle)
     return () => document.removeEventListener('fullscreenchange', handle)
+  }, [])
+
+  // 창 너비에 따라 사이드바 자동 접기/펼치기
+  useEffect(() => {
+    const onResize = () => {
+      const narrow = window.innerWidth < 1000
+      setIsNarrow(narrow)
+      setSidebarOpen(!narrow)
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
   }, [])
 
   // 슬라이드 박스 폭을 추적해 하단 바 폭을 맞춤 (aspect ratio 변경 시에도 정확히 정렬)
@@ -856,7 +869,7 @@ function Lecturer() {
           </button>
 
           <button
-            onClick={() => setShowParticipants((v) => !v)}
+            onClick={() => { setShowParticipants((v) => !v); if (isNarrow) setSidebarOpen(true) }}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${
               showParticipants
                 ? 'bg-primary text-onPrimary'
@@ -879,7 +892,7 @@ function Lecturer() {
       </header>
 
       {/* 메인 */}
-      <div className="flex-1 flex gap-4 p-4 overflow-hidden min-h-0">
+      <div className="flex-1 flex gap-4 p-4 overflow-hidden min-h-0 relative">
         {/* 메인 영역 — 세로: 슬라이드(fill) + 하단 바(auto) */}
         <div className="flex-1 flex flex-col gap-3 min-w-0 min-h-0 overflow-hidden">
           {/* 슬라이드/화면 박스 — Student와 동일: h-full + aspect로 세로 고정, 가로만 비율에 따라 변경 */}
@@ -894,7 +907,7 @@ function Lecturer() {
               ) : presentationMode === 'slide' ? (
                 <div
                   ref={slideBoxRef}
-                  className={`relative h-full ${aspectClass} max-w-full bg-surface text-onSurface border-2 border-dashed border-primaryContainer rounded-xl overflow-hidden group shadow-2xl`}
+                  className={`relative h-full ${aspectClass} max-w-full bg-surface text-onSurface border-2 border-dashed border-primaryContainer rounded-xl overflow-hidden group ${theme === 'light' ? 'shadow-[0_4px_20px_rgba(0,0,0,0.08)]' : 'shadow-2xl'}`}
                 >
                   {/* 강의 제목 + 자료 업로드 — 화면 중앙 */}
                   <div className="absolute inset-0 flex flex-col items-center justify-center p-8 gap-5 overflow-auto">
@@ -930,7 +943,7 @@ function Lecturer() {
               ) : (
                 <div
                   ref={slideBoxRef}
-                  className={`relative h-full ${aspectClass} max-w-full bg-black rounded-xl overflow-hidden group shadow-2xl flex items-center justify-center`}
+                  className={`relative h-full ${aspectClass} max-w-full bg-black rounded-xl overflow-hidden group ${theme === 'light' ? 'shadow-[0_4px_20px_rgba(0,0,0,0.08)]' : 'shadow-2xl'} flex items-center justify-center`}
                 >
                   {isScreenSharing ? (
                     <div className="text-center text-white">
@@ -1090,12 +1103,31 @@ function Lecturer() {
             </div>
           </div>
 
+        {/* 사이드바 토글 탭 — 좁은 화면에서만 표시 */}
+        {isNarrow && (
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(v => !v)}
+            className={`absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-4 h-20 border border-r-0 rounded-l-lg ${theme === 'light' ? 'bg-surface border-primaryContainer shadow-[0_0_14px_rgba(0,0,0,0.18)]' : theme === 'dark' ? 'bg-overlayBorder border-white/20 shadow-md' : 'bg-[#E0DEF7] border-purple-200/50 shadow-md'} transition-all duration-300 ease-in-out ${
+              sidebarOpen ? 'right-80' : 'right-0'
+            }`}
+            aria-label={sidebarOpen ? '패널 숨기기' : '패널 보기'}
+          >
+            <svg className="w-3 h-3 text-onSurface" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d={sidebarOpen ? 'M9 5l7 7-7 7' : 'M15 19l-7-7 7-7'} />
+            </svg>
+          </button>
+        )}
+
         {/* 사이드바 */}
-        <aside className="w-80 flex-shrink-0 flex flex-col gap-3 overflow-hidden min-h-0">
+        <aside className={isNarrow
+          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 overflow-hidden min-h-0 px-3 py-4 sidebar-panel z-40 transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
+          : 'w-80 flex-shrink-0 flex flex-col gap-3 overflow-hidden min-h-0'
+        }>
           <div className="flex-1 overflow-y-auto scrollbar-hide space-y-3 min-h-0">
             
             {/* 기존 마이크/오디오 카드 */}
-            <div className="bg-surface text-onSurface rounded-xl p-4 shadow-sm">
+            <div className="bg-surface dark:bg-overlaySurface text-onSurface rounded-xl p-4 shadow-sm sidebar-card">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-semibold">오디오 테스트</h3>
                 <span
@@ -1154,7 +1186,7 @@ function Lecturer() {
             </div>
 
             {/* 마우스 포인터 카드 */}
-            <div className="bg-surface text-onSurface rounded-xl p-4 shadow-sm">
+            <div className="bg-surface dark:bg-overlaySurface text-onSurface rounded-xl p-4 shadow-sm sidebar-card">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-semibold">마우스 포인터</h3>
                 <button
@@ -1207,7 +1239,7 @@ function Lecturer() {
 
             {/* 자료 다운로드 */}
             {slideStatus === 'ready' && slideId && (
-              <div className="bg-surface text-onSurface rounded-xl p-3 shadow-sm">
+              <div className="bg-surface dark:bg-overlaySurface text-onSurface rounded-xl p-3 shadow-sm sidebar-card">
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="text-xs font-semibold">자료</h3>
                   <span className="text-[10px] text-onSurface/50 truncate max-w-[150px]">
@@ -1241,7 +1273,7 @@ function Lecturer() {
           {/* Chat 패널 */}
           {isLectureStarted && (
             <div
-              className="relative bg-surface text-onSurface rounded-xl shadow-sm flex flex-col overflow-hidden flex-shrink-0"
+              className="relative bg-surface dark:bg-overlaySurface text-onSurface rounded-xl shadow-sm flex flex-col overflow-hidden flex-shrink-0 sidebar-card"
               style={{ height: '260px' }}
             >
               <div className="px-4 py-2.5 border-b border-primaryContainer flex items-center gap-2">
@@ -1317,7 +1349,7 @@ function Lecturer() {
 
           {!isLectureStarted && showParticipants && (
             <div
-              className="relative bg-surface text-onSurface rounded-xl shadow-sm overflow-hidden flex-shrink-0"
+              className="relative bg-surface dark:bg-overlaySurface text-onSurface rounded-xl shadow-sm overflow-hidden flex-shrink-0 sidebar-card"
               style={{ height: '320px' }}
             >
               <ParticipantsPanel
