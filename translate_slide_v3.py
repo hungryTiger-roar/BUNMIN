@@ -1330,7 +1330,14 @@ Translate:"""
             },
         ]
 
-        text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        # Qwen3-VL은 thinking 모드 활성화 시 <think>...</think> 블록을 출력해
+        # 번호 매핑 파싱이 오염됨. 지원하지 않는 processor(Qwen2.5-VL 등)는 TypeError 발생.
+        try:
+            text = processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+            )
+        except TypeError:
+            text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         inputs = processor(text=[text], return_tensors="pt").to(model.device)
 
         # 재시도 시 temperature 약간 높임

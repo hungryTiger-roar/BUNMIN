@@ -42,7 +42,7 @@ Name: "desktopicon"; Description: "바탕화면에 바로가기 만들기"; Grou
 ; win-unpacked 전체 복사 — 단 VLM Base 17GB는 제외 (첫 실행 시 HF에서 다운로드)
 Source: "setup\win-unpacked\*"; DestDir: "{app}"; \
   Flags: ignoreversion recursesubdirs createallsubdirs; \
-  Excludes: "resources\backend\models\qwen3-vl-8b-instruct\*"
+  Excludes: "resources\backend\models\qwen2.5-vl-7b-instruct\*"
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

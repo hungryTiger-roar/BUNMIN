@@ -17,7 +17,7 @@ from app.routers import ws, slides, transcripts, network, mode
 from app.utils.firewall import ensure_firewall_rule
 from app.utils.network import SERVER_PORT, get_lan_ip
 
-# VLM Base 모델: env 미설정이면 로컬 동봉본(qwen3-vl-8b-instruct) 우선,
+# VLM Base 모델: env 미설정이면 로컬 동봉본(qwen2.5-vl-7b-instruct) 우선,
 # 없으면 HF repo_id로 fallback. 사용자가 env로 명시하면 그 값 그대로.
 from pathlib import Path as _Path
 
@@ -200,7 +200,7 @@ def _download_one(model_key: str, repo_id: str):
         raise RuntimeError(
             f"{model_key.upper()} 모델이 지정된 로컬 경로에 없습니다: {repo_id}\n"
             f"  해결: 'npm run setup' 재실행 또는 .env의 {model_key.upper()}_MODEL을\n"
-            f"        HuggingFace repo_id로 변경 (예: Qwen/Qwen3-VL-8B-Instruct)."
+            f"        HuggingFace repo_id로 변경 (예: Qwen/Qwen2.5-VL-7B-Instruct)."
         )
     from huggingface_hub import snapshot_download
     _thread_model_key.key = model_key  # 이 스레드의 모델 키 등록
