@@ -1,4 +1,4 @@
-﻿import { useEffect, useCallback, useState, useRef, type CSSProperties } from 'react'
+import { useEffect, useCallback, useState, useRef, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import {
@@ -871,7 +871,7 @@ function Lecturer() {
           </button>
 
           <button
-            onClick={() => setShowParticipants((v) => !v)}
+            onClick={() => { setShowParticipants((v) => !v); if (isNarrow) setSidebarOpen(true) }}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${
               showParticipants
                 ? 'bg-primary text-onPrimary'
@@ -909,7 +909,7 @@ function Lecturer() {
               ) : presentationMode === 'slide' ? (
                 <div
                   ref={slideBoxRef}
-                  className={`relative h-full ${aspectClass} max-w-full bg-surface text-onSurface border-2 border-dashed border-primaryContainer rounded-xl overflow-hidden group shadow-2xl`}
+                  className={`relative h-full ${aspectClass} max-w-full bg-surface text-onSurface border-2 border-dashed border-primaryContainer rounded-xl overflow-hidden group ${theme === 'light' ? 'shadow-[0_4px_20px_rgba(0,0,0,0.08)]' : 'shadow-2xl'}`}
                 >
                   {/* 강의 제목 + 자료 업로드 — 화면 중앙 */}
                   <div className="absolute inset-0 flex flex-col items-center justify-center p-8 gap-5 overflow-auto">
@@ -945,7 +945,7 @@ function Lecturer() {
               ) : (
                 <div
                   ref={slideBoxRef}
-                  className={`relative h-full ${aspectClass} max-w-full bg-black rounded-xl overflow-hidden group shadow-2xl flex items-center justify-center`}
+                  className={`relative h-full ${aspectClass} max-w-full bg-black rounded-xl overflow-hidden group ${theme === 'light' ? 'shadow-[0_4px_20px_rgba(0,0,0,0.08)]' : 'shadow-2xl'} flex items-center justify-center`}
                 >
                   {isScreenSharing ? (
                     <div className="text-center text-white">
@@ -1110,7 +1110,7 @@ function Lecturer() {
           <button
             type="button"
             onClick={() => setSidebarOpen(v => !v)}
-            className={`absolute top-1/2 -translate-y-1/2 z-30 flex items-center justify-center w-4 h-20 bg-surface border border-r-0 border-primaryContainer rounded-l-lg shadow-md transition-all duration-300 ease-in-out ${
+            className={`absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-4 h-20 border border-r-0 rounded-l-lg ${theme === 'light' ? 'bg-surface border-primaryContainer shadow-[0_0_14px_rgba(0,0,0,0.18)]' : theme === 'dark' ? 'bg-overlayBorder border-white/20 shadow-md' : 'bg-[#E0DEF7] border-purple-200/50 shadow-md'} transition-all duration-300 ease-in-out ${
               sidebarOpen ? 'right-80' : 'right-0'
             }`}
             aria-label={sidebarOpen ? '패널 숨기기' : '패널 보기'}
@@ -1123,13 +1123,13 @@ function Lecturer() {
 
         {/* 사이드바 */}
         <aside className={isNarrow
-          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 overflow-hidden min-h-0 px-3 py-4 bg-background z-20 transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
+          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 overflow-hidden min-h-0 px-3 py-4 sidebar-panel z-40 transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
           : 'w-80 flex-shrink-0 flex flex-col gap-3 overflow-hidden min-h-0'
         }>
           <div className="flex-1 overflow-y-auto scrollbar-hide space-y-3 min-h-0">
             
             {/* 기존 마이크/오디오 카드 */}
-            <div className="bg-surface text-onSurface rounded-xl p-4 shadow-sm">
+            <div className="bg-surface dark:bg-overlaySurface text-onSurface rounded-xl p-4 shadow-sm sidebar-card">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-semibold">오디오 테스트</h3>
                 <span
@@ -1188,7 +1188,7 @@ function Lecturer() {
             </div>
 
             {/* 마우스 포인터 카드 */}
-            <div className="bg-surface text-onSurface rounded-xl p-4 shadow-sm">
+            <div className="bg-surface dark:bg-overlaySurface text-onSurface rounded-xl p-4 shadow-sm sidebar-card">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-semibold">마우스 포인터</h3>
                 <button
@@ -1241,7 +1241,7 @@ function Lecturer() {
 
             {/* 자료 다운로드 */}
             {slideStatus === 'ready' && slideId && (
-              <div className="bg-surface text-onSurface rounded-xl p-3 shadow-sm">
+              <div className="bg-surface dark:bg-overlaySurface text-onSurface rounded-xl p-3 shadow-sm sidebar-card">
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="text-xs font-semibold">자료</h3>
                   <span className="text-[10px] text-onSurface/50 truncate max-w-[150px]">
@@ -1275,7 +1275,7 @@ function Lecturer() {
           {/* Chat 패널 */}
           {isLectureStarted && (
             <div
-              className="relative bg-surface text-onSurface rounded-xl shadow-sm flex flex-col overflow-hidden flex-shrink-0"
+              className="relative bg-surface dark:bg-overlaySurface text-onSurface rounded-xl shadow-sm flex flex-col overflow-hidden flex-shrink-0 sidebar-card"
               style={{ height: '260px' }}
             >
               <div className="px-4 py-2.5 border-b border-primaryContainer flex items-center gap-2">
@@ -1351,7 +1351,7 @@ function Lecturer() {
 
           {!isLectureStarted && showParticipants && (
             <div
-              className="relative bg-surface text-onSurface rounded-xl shadow-sm overflow-hidden flex-shrink-0"
+              className="relative bg-surface dark:bg-overlaySurface text-onSurface rounded-xl shadow-sm overflow-hidden flex-shrink-0 sidebar-card"
               style={{ height: '320px' }}
             >
               <ParticipantsPanel

@@ -106,6 +106,21 @@
   }
 }
 
+.sidebar-panel {
+  background-color: var(--color-background);
+}
+html.theme-gradient .sidebar-panel {
+  background: rgba(224, 222, 247, 0.65);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+html.theme-gradient .sidebar-card {
+  background: #E0DEF7;
+  --color-on-surface: #374151;
+  --color-on-background: #374151;
+}
+
 * {
   margin: 0;
   padding: 0;

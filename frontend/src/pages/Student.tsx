@@ -1,4 +1,4 @@
-﻿
+
 import { useEffect, useState, useRef, useCallback, type CSSProperties } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
@@ -404,7 +404,7 @@ function Student() {
           </button>
 
           <button
-            onClick={() => setShowParticipants((v) => !v)}
+            onClick={() => { setShowParticipants((v) => !v); if (isNarrow) setSidebarOpen(true) }}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${
               showParticipants
                 ? 'bg-primary text-onPrimary'
@@ -441,14 +441,14 @@ function Student() {
         <div className="flex-1 flex items-center justify-center min-w-0 min-h-0">
           <div
             ref={slideRef}
-            className={`group relative bg-black rounded-xl overflow-hidden shadow-2xl h-full ${aspectClass} max-w-full`}
+            className={`group relative bg-black rounded-xl overflow-hidden ${theme === 'light' ? 'shadow-[0_4px_20px_rgba(0,0,0,0.08)]' : 'shadow-2xl'} h-full ${aspectClass} max-w-full`}
           >
             {/* 강의자 커서 오버레이 (ref 기반, 리렌더링 없음) */}
             <StudentCursorOverlay spotlightRef={spotlightRef} />
 
             {/* 강의자료 원본/번역 토글 (슬라이드 표시 중일 때만) */}
             {presentationMode === 'slide' && slideStatus === 'ready' && slideImageUrl && (
-              <MaterialViewToggle className={`absolute top-3 z-30 ${isNarrow ? 'left-3' : 'right-3'}`} />
+              <MaterialViewToggle className={`absolute top-3 z-30 right-3`} />
             )}
 
             {/* 상단 강의 제목 바 — 마우스 올렸을 때만 표시 */}
@@ -853,7 +853,7 @@ function Student() {
           <button
             type="button"
             onClick={() => setSidebarOpen(v => !v)}
-            className={`absolute top-1/2 -translate-y-1/2 z-30 flex items-center justify-center w-4 h-20 bg-surface border border-r-0 border-primaryContainer rounded-l-lg shadow-md transition-all duration-300 ease-in-out ${
+            className={`absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-4 h-20 border border-r-0 rounded-l-lg ${theme === 'light' ? 'bg-surface border-primaryContainer shadow-[0_0_14px_rgba(0,0,0,0.18)]' : theme === 'dark' ? 'bg-overlayBorder border-white/20 shadow-md' : 'bg-[#E0DEF7] border-purple-200/50 shadow-md'} transition-all duration-300 ease-in-out ${
               sidebarOpen ? 'right-80' : 'right-0'
             }`}
             aria-label={sidebarOpen ? '패널 숨기기' : '패널 보기'}
@@ -866,13 +866,13 @@ function Student() {
 
         {/* 우측 사이드: 강의자료 + 채팅 */}
         <aside className={isNarrow
-          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 min-h-0 px-3 py-4 bg-background z-20 transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
+          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 min-h-0 px-3 py-4 sidebar-panel z-40 transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
           : 'w-80 flex-shrink-0 flex flex-col gap-3 min-h-0'
         }>
           {/* 오늘의 강의 자료 — 강의 시작 후에만 노출 */}
           {isLectureStarted && (
           <div
-            className="flex-shrink-0 flex flex-col bg-surface text-onSurface backdrop-blur-md rounded-xl border border-primaryContainer shadow-sm overflow-hidden"
+            className="flex-shrink-0 flex flex-col bg-surface text-onSurface backdrop-blur-md rounded-xl border border-primaryContainer shadow-sm overflow-hidden sidebar-card"
             style={{ maxHeight: '50%' }}
           >
             <div className="px-4 py-3 border-b border-primaryContainer flex items-center gap-2 flex-shrink-0">
@@ -956,7 +956,7 @@ function Student() {
           )}
 
           {/* 채팅 패널 (참여자 패널이 오버레이로 덮음) */}
-          <div className="relative flex-1 flex flex-col bg-surface text-onSurface backdrop-blur-md rounded-xl border border-primaryContainer shadow-sm overflow-hidden min-h-0">
+          <div className="relative flex-1 flex flex-col bg-surface text-onSurface backdrop-blur-md rounded-xl border border-primaryContainer shadow-sm overflow-hidden min-h-0 sidebar-card">
             <div className="px-4 py-3 border-b border-primaryContainer flex items-center gap-2 flex-shrink-0">
               <svg className="w-5 h-5 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
