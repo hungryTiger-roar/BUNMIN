@@ -334,6 +334,12 @@ async def websocket_pipeline(websocket: WebSocket):
                     await websocket.send_json({
                         "type": "lecture_pause",
                     })
+            elif manager.current_slide_id:
+                # 강의 시작 전이라도 슬라이드가 선택된 상태면 수강자에게 전달
+                await websocket.send_json({
+                    "type": "slide_select",
+                    "slide_id": manager.current_slide_id,
+                })
             pong_event = asyncio.Event()
             await run_with_heartbeat(handle_student(websocket, pong_event), websocket, pong_event)
 

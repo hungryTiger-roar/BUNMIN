@@ -3,7 +3,7 @@ NMT (Neural Machine Translation) 서비스
 한국어 → 영어 번역
 
 우선순위:
-1. CTranslate2 (models/opus-mt-ct2/ 존재 시) — CPU 3~5배 가속, int8 양자화
+1. CTranslate2 (models/opus-mt-ko-en-ct2/ 존재 시) — CPU 3~5배 가속, int8 양자화
 2. HuggingFace transformers 폴백 — ctranslate2 미설치 또는 변환 전 상태
 """
 import re

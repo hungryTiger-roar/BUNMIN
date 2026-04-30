@@ -96,6 +96,6 @@ class ModelConfig:
     NMT_ASR_DEVICE = _resolve_device("NMT_ASR_DEVICE", "nmt_asr")
     NMT_ASR_DTYPE  = os.environ.get("NMT_ASR_DTYPE", _dtype(NMT_ASR_DEVICE))
 
-    OCR_MODEL  = os.environ.get("OCR_MODEL",  "rapidocr")
+    OCR_MODEL  = os.environ.get("OCR_MODEL",  "surya")
     OCR_DEVICE = _resolve_device("OCR_DEVICE", "ocr")
 

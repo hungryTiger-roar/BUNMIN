@@ -28,7 +28,7 @@ def _resolve_vlm(value: str) -> str:
     candidate = _PROJECT_ROOT / value
     return str(candidate) if candidate.is_dir() else value
 
-VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL", "Qwen/Qwen3-VL-8B-Instruct"))
+VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL", "Qwen/Qwen2.5-VL-7B-Instruct"))
 
 # PyInstaller 번들 여부에 따라 frontend dist 경로 결정
 if getattr(sys, 'frozen', False):
