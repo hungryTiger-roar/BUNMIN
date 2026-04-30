@@ -5,6 +5,7 @@ interface ParticipantsPanelProps {
   participants: Participants
   fallbackStudentCount?: number
   onClose: () => void
+  locale?: 'en' | 'ko'
 }
 
 const THEME_COLORS = {
@@ -47,20 +48,39 @@ function ParticipantsPanel({
   participants,
   fallbackStudentCount = 0,
   onClose,
+  locale = 'en',
 }: ParticipantsPanelProps) {
   const theme = usePreferencesStore((s) => s.theme)
   const c = THEME_COLORS[theme]
   const studentList = participants.students
   const showFallback = studentList.length === 0 && fallbackStudentCount > 0
 
+  const t = locale === 'ko'
+    ? {
+        title: '참가자 목록',
+        close: '닫기',
+        professorFallback: '교수',
+        guestFallback: '게스트',
+        loadingNames: (n: number) => `${n}명 접속 중 (이름 로딩 중...)`,
+        noParticipants: '참가자가 없습니다',
+      }
+    : {
+        title: 'Participants',
+        close: 'Close',
+        professorFallback: 'professor',
+        guestFallback: 'Guest',
+        loadingNames: (n: number) => `${n} connected (loading names...)`,
+        noParticipants: 'No participants',
+      }
+
   return (
     <div className={`absolute inset-0 z-20 flex flex-col ${c.panelBg}`}>
       <div className={`px-4 py-3 flex items-center justify-between border-b ${c.headerBorder} flex-shrink-0`}>
-        <h3 className={`font-medium ${c.textPrimary}`}>Participants</h3>
+        <h3 className={`font-medium ${c.textPrimary}`}>{t.title}</h3>
         <button
           onClick={onClose}
           className={`w-7 h-7 flex items-center justify-center rounded-full ${c.textMuted} ${c.closeHover} transition-colors`}
-          aria-label="Close"
+          aria-label={t.close}
         >
           ✕
         </button>
@@ -75,7 +95,7 @@ function ParticipantsPanel({
             </div>
             <div className="flex-1 min-w-0">
               <div className={`font-medium truncate ${c.textPrimary}`}>
-                {participants.lecturer.name || 'professor'}
+                {participants.lecturer.name || t.professorFallback}
               </div>
             </div>
             {participants.lecturer.connected && (
@@ -93,7 +113,7 @@ function ParticipantsPanel({
             </div>
             <div className="flex-1 min-w-0">
               <div className={`font-medium truncate ${c.textPrimary}`}>
-                {s.name || 'Guest'}
+                {s.name || t.guestFallback}
               </div>
             </div>
             <span className="w-2 h-2 rounded-full bg-green-500" />
@@ -101,12 +121,12 @@ function ParticipantsPanel({
         ))}
         {showFallback && (
           <div className={`text-sm text-center py-4 ${c.textMuted}`}>
-            {fallbackStudentCount} connected (loading names...)
+            {t.loadingNames(fallbackStudentCount)}
           </div>
         )}
         {!participants.lecturer && studentList.length === 0 && !showFallback && (
           <div className={`text-sm text-center py-8 ${c.textMuted}`}>
-            No participants
+            {t.noParticipants}
           </div>
         )}
       </div>

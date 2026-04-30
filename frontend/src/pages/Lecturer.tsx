@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useState, useRef, type CSSProperties } from 'react'
+﻿import { useEffect, useCallback, useState, useRef, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import {
@@ -849,8 +849,8 @@ function Lecturer() {
             className="flex items-center justify-center w-9 h-9 bg-primaryContainer/50 hover:bg-primaryContainer text-onSurface rounded-lg transition-colors"
             aria-label={`Current: ${theme} mode (click to cycle)`}
             title={`${
-              theme === 'light' ? 'Light' : theme === 'dark' ? 'Dark' : 'Gradient'
-            } mode — click to cycle`}
+              theme === 'light' ? '라이트' : theme === 'dark' ? '다크' : '기본'
+            } 모드 — 변경하려면 클릭하세요.`}
           >
             {theme === 'light' ? (
               // 현재: 라이트 (해 아이콘)
@@ -1327,7 +1327,7 @@ function Lecturer() {
                   onChange={(e) => setChatInput(e.target.value)}
                   placeholder={isConnected ? '메시지 입력...' : '연결 중...'}
                   disabled={!isConnected}
-                  className="flex-1 bg-primaryContainer/40 text-onSurface placeholder-onSurface/70 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-60"
+                  className="flex-1 bg-white text-gray-900 placeholder-gray-400 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-60"
                   maxLength={200}
                 />
                 <button
@@ -1344,6 +1344,7 @@ function Lecturer() {
                   participants={participants}
                   fallbackStudentCount={studentCount}
                   onClose={() => setShowParticipants(false)}
+                  locale="ko"
                 />
               )}
             </div>
@@ -1358,6 +1359,7 @@ function Lecturer() {
                 participants={participants}
                 fallbackStudentCount={studentCount}
                 onClose={() => setShowParticipants(false)}
+                locale="ko"
               />
             </div>
           )}

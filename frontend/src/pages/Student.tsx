@@ -1,4 +1,4 @@
-
+﻿
 import { useEffect, useState, useRef, useCallback, type CSSProperties } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
@@ -307,31 +307,31 @@ function Student() {
       {/* 입장 오버레이 — connect + unlockAudio 동시 처리 (브라우저 오디오 정책 대응) */}
       {/* 자막 다운로드 모달 */}
       {showTranscriptModal && sessionId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="bg-surface rounded-2xl shadow-2xl p-6 w-[min(90%,400px)] flex flex-col gap-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-onSurface">강의 자막 저장</h2>
+              <h2 className="text-lg font-semibold text-onSurface">Save lecture subtitles</h2>
               <button
                 type="button"
                 onClick={() => setShowTranscriptModal(false)}
                 className="w-7 h-7 rounded-full flex items-center justify-center text-onSurface/60 hover:bg-black/10 transition-colors"
               >✕</button>
             </div>
-            <p className="text-sm text-onSurface/70">강의 중 인식된 자막을 파일로 다운로드합니다.</p>
+            <p className="text-sm text-onSurface/70">Download the recognized subtitles<br />from the lecture as a file.</p>
             <div className="flex flex-col gap-2">
               <a
                 href={`${API_BASE}/transcripts/${sessionId}/download?format=txt`}
                 download
                 className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-primary text-onPrimary font-medium hover:opacity-90 transition-opacity"
               >
-                <span>📄</span> TXT 다운로드
+                <span>📄</span> Download TXT
               </a>
               <a
                 href={`${API_BASE}/transcripts/${sessionId}/download?format=srt`}
                 download
                 className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-primaryContainer text-onPrimaryContainer font-medium hover:opacity-90 transition-opacity"
               >
-                <span>🎬</span> SRT 다운로드
+                <span>🎬</span> Download SRT
               </a>
             </div>
           </div>
@@ -410,7 +410,7 @@ function Student() {
                 ? 'bg-primary text-onPrimary'
                 : 'bg-primaryContainer/60 hover:bg-primaryContainer text-onSurface'
             }`}
-            title="참여자 목록"
+            title="Participant list"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -856,7 +856,7 @@ function Student() {
             className={`absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-4 h-20 border border-r-0 rounded-l-lg ${theme === 'light' ? 'bg-surface border-primaryContainer shadow-[0_0_14px_rgba(0,0,0,0.18)]' : theme === 'dark' ? 'bg-overlayBorder border-white/20 shadow-md' : 'bg-[#E0DEF7] border-purple-200/50 shadow-md'} transition-all duration-300 ease-in-out ${
               sidebarOpen ? 'right-80' : 'right-0'
             }`}
-            aria-label={sidebarOpen ? '패널 숨기기' : '패널 보기'}
+            aria-label={sidebarOpen ? 'Hide panel' : 'Show panel'}
           >
             <svg className="w-3 h-3 text-onSurface" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d={sidebarOpen ? 'M9 5l7 7-7 7' : 'M15 19l-7-7 7-7'} />
@@ -879,12 +879,12 @@ function Student() {
               <svg className="w-5 h-5 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
-              <h3 className="font-medium">오늘의 강의 자료</h3>
+              <h3 className="font-medium">Today's lecture material</h3>
             </div>
             <div className="flex-1 overflow-y-auto scrollbar-hide p-2 space-y-1 min-h-0">
               {materials.length === 0 ? (
                 <div className="text-center text-sm text-onSurface/60 py-6">
-                  아직 업로드된 자료가 없습니다
+                  There is no lecture material uploaded yet.
                 </div>
               ) : (
                 materials.flatMap((m) => {
@@ -895,15 +895,15 @@ function Student() {
                     { kind: 'translated', enabled: completed && m.has_translated },
                   ]
                   return variants.map(({ kind, enabled }) => {
-                    const label = kind === 'original' ? '원본' : '번역본'
+                    const label = kind === 'original' ? 'Original' : 'Translated'
                     const displayStatus = completed
-                      ? `${m.total_pages}페이지 · ${label}`
+                      ? `${m.total_pages} pages · ${label}`
                       : m.status === 'processing'
-                        ? '처리 중...'
+                        ? 'Processing...'
                         : m.status === 'pending'
-                          ? '대기 중...'
+                          ? 'Pending...'
                           : m.status === 'failed'
-                            ? '실패'
+                            ? 'Failed'
                             : ''
                     const fileTitleParam = encodeURIComponent(baseTitle)
                     return (
@@ -922,7 +922,7 @@ function Student() {
                             ? 'hover:bg-primaryContainer/40 cursor-pointer'
                             : 'opacity-60 cursor-not-allowed'
                         }`}
-                        title={enabled ? `${baseTitle} ${label} 다운로드` : '아직 준비되지 않음'}
+                        title={enabled ? `Download ${baseTitle} (${label})` : 'Not ready yet'}
                       >
                         <svg
                           className="w-4 h-4 flex-shrink-0 text-onSurface/70"
