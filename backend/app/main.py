@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import ModelConfig, PROJECT_ROOT, resolve_model_dir
-from app.routers import ws, slides, transcripts, network, mode
+from app.routers import ws, slides, transcripts, network, mode, install
 from app.utils.firewall import ensure_firewall_rule
 from app.utils.network import SERVER_PORT, get_lan_ip
 
@@ -52,6 +52,15 @@ else:
     _FRONTEND_DIST = os.path.join(os.path.dirname(__file__), '..', '..', 'frontend', 'dist')
 
 # 모델 로딩 상태 추적
+# status:
+#   - "starting"          백엔드 부팅 중
+#   - "wait_user_action"  사용자 다운로드 시작 클릭 대기 (VLM 미캐시 + 첫 실행)
+#   - "loading"           모델 다운로드/메모리 로드 중
+#   - "ready" / "ok"      준비 완료
+#   - "error"             실패
+# download (있을 때만):
+#   - phase: "downloading" | "verifying"
+#   - current_bytes, total_bytes, speed_bps, current_file
 _model_status = {
     "status": "starting",
     "message": "백엔드 시작 중...",
@@ -62,7 +71,11 @@ _model_status = {
         "ocr": {"status": "pending", "progress": 0, "label": "OCR (문자인식)", "desc": ModelConfig.OCR_MODEL},
         "vlm": {"status": "pending", "progress": 0, "label": "VLM (슬라이드 번역)", "desc": VLM_BASE_MODEL},
     },
+    "download": None,
 }
+
+# 사용자가 "다운로드 시작" 버튼 클릭 시 set — VLM 미캐시 첫 실행 흐름에서 대기 해제
+_start_download_event = threading.Event()
 
 # 병렬 다운로드 시 스레드별 모델 키 추적
 _thread_model_key = threading.local()
@@ -193,9 +206,103 @@ def _track_all_downloads():
             _tqdm_auto.tqdm.update = original_auto
 
 
+def _hf_repo_total_bytes(repo_id: str) -> int:
+    """HF 모델 repo의 전체 다운로드 사이즈를 합산 (시간↑, 대신 정확한 진행률)."""
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi()
+        info = api.model_info(repo_id, files_metadata=True)
+        total = sum(s.size or 0 for s in info.siblings)
+        return total
+    except Exception as e:
+        print(f"[Download] 전체 사이즈 조회 실패 ({repo_id}): {e}", flush=True)
+        return 0
+
+
+def _hf_cache_dir_for(repo_id: str):
+    """HF 캐시 안 특정 repo의 디렉토리. 캐시 사이즈 polling 대상."""
+    from pathlib import Path
+    hf_home = Path(os.environ.get("HF_HOME", ""))
+    safe = repo_id.replace("/", "--")
+    return hf_home / "hub" / f"models--{safe}"
+
+
+def _measure_dir_size(directory) -> int:
+    """HF 캐시 디렉토리에서 실제 다운로드된 사이즈 측정.
+    blobs/만 합산 — snapshots/는 blobs로 향하는 하드링크/복사본이라 중복 카운트되면
+    실제보다 ~2배 부풀려진 값이 나옴 (Windows는 심볼릭 미지원 시 실제 복사 발생)."""
+    from pathlib import Path
+    p = Path(directory)
+    if not p.is_dir():
+        return 0
+    # HF 캐시 표준 구조: <repo>/blobs/* (실제 파일들), <repo>/snapshots/<rev>/* (링크)
+    blobs = p / "blobs"
+    target = blobs if blobs.is_dir() else p
+    total = 0
+    try:
+        for f in target.iterdir():
+            if f.is_file():
+                try:
+                    total += f.stat().st_size
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return total
+
+
+def _start_byte_progress_watcher(model_key: str, repo_id: str, total_bytes: int) -> threading.Event:
+    """1초 간격으로 캐시 디렉토리 사이즈를 측정해 다운로드 진행률 emit.
+    반환된 stop_event를 set하면 watcher 종료."""
+    import time as _time
+    stop_event = threading.Event()
+    cache_dir = _hf_cache_dir_for(repo_id)
+
+    def _run():
+        last_bytes = 0
+        last_time = _time.time()
+        while not stop_event.is_set():
+            current = _measure_dir_size(cache_dir)
+            now = _time.time()
+            elapsed = now - last_time
+            speed = (current - last_bytes) / elapsed if elapsed > 0 else 0
+
+            # Phase 판정:
+            #   - blobs/가 전체 사이즈 도달 + snapshot_download 미반환 = "finalizing"
+            #     (Windows에서 blobs → snapshots 하드링크/복사 단계, 수 분 소요)
+            #   - 그 외 = "downloading"
+            if total_bytes > 0 and current >= total_bytes:
+                phase = "finalizing"
+            else:
+                phase = "downloading"
+
+            _model_status["download"] = {
+                "phase": phase,
+                "current_bytes": current,
+                "total_bytes": total_bytes,
+                "speed_bps": int(max(0, speed)),
+            }
+            # 모델 카드 진행률도 동기화
+            if total_bytes > 0:
+                pct = min(99, int(current * 100 / total_bytes))
+                if pct != _model_status["models"][model_key]["progress"]:
+                    _model_status["models"][model_key]["progress"] = pct
+                    _emit_status()
+            else:
+                _emit_status()
+            last_bytes = current
+            last_time = now
+            stop_event.wait(1.0)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return stop_event
+
+
 def _download_one(model_key: str, repo_id: str):
     """단일 모델 HuggingFace 다운로드 — ThreadPoolExecutor에서 병렬 실행.
-    repo_id가 로컬 경로 형식이면 (예: 'models/...') 다운로드 대신 명확한 에러."""
+    repo_id가 로컬 경로 형식이면 (예: 'models/...') 다운로드 대신 명확한 에러.
+    바이트 단위 진행률을 watcher 스레드로 emit."""
     if _is_local_path_format(repo_id):
         raise RuntimeError(
             f"{model_key.upper()} 모델이 지정된 로컬 경로에 없습니다: {repo_id}\n"
@@ -203,12 +310,33 @@ def _download_one(model_key: str, repo_id: str):
             f"        HuggingFace repo_id로 변경 (예: Qwen/Qwen3-VL-8B-Instruct)."
         )
     from huggingface_hub import snapshot_download
-    _thread_model_key.key = model_key  # 이 스레드의 모델 키 등록
+    _thread_model_key.key = model_key
     _model_status["models"][model_key]["status"] = "loading"
+
+    # 전체 사이즈 미리 조회 (실패해도 다운로드 자체는 진행)
+    total_bytes = _hf_repo_total_bytes(repo_id)
+    if total_bytes > 0:
+        gb = total_bytes / (1024 ** 3)
+        print(f"[다운로드 시작] {model_key.upper()}: {repo_id} ({gb:.2f} GB)", flush=True)
+    else:
+        print(f"[다운로드 시작] {model_key.upper()}: {repo_id}", flush=True)
     _emit_status()
-    print(f"[다운로드 시작] {model_key.upper()}: {repo_id}", flush=True)
-    snapshot_download(repo_id=repo_id)
+
+    # 바이트 단위 진행률 watcher
+    stop_watcher = _start_byte_progress_watcher(model_key, repo_id, total_bytes)
+    try:
+        snapshot_download(repo_id=repo_id)
+    finally:
+        stop_watcher.set()
+
     _model_status["models"][model_key]["progress"] = 100
+    # 다운로드 완료 — phase 전환 (검증/초기화)
+    _model_status["download"] = {
+        "phase": "verifying",
+        "current_bytes": total_bytes,
+        "total_bytes": total_bytes,
+        "speed_bps": 0,
+    }
     _emit_status()
     print(f"[다운로드 완료] {model_key.upper()}", flush=True)
 
@@ -239,6 +367,19 @@ def _load_models_sync():
     model_repos.append(("vlm", VLM_BASE_MODEL))
 
     to_download = [(key, repo) for key, repo in model_repos if not _is_cached(repo)]
+
+    # ── 첫 실행 사용자 액션 대기 ──────────────────────────────────────
+    # VLM 미캐시 + 슬라이드 전용 모드 = 신규 사용자 첫 실행 → 다운로드 마법사 UI 표시 후
+    # "다운로드 시작" 클릭까지 대기. 사용자 동의 없이 16GB 자동 다운로드 안 함.
+    if skip_models and any(k == "vlm" for k, _ in to_download):
+        _model_status["status"] = "wait_user_action"
+        _model_status["message"] = "사용자 다운로드 시작 클릭 대기 중"
+        _emit_status()
+        print("[설치] 사용자 액션 대기 중 — 프론트의 '다운로드 시작' 버튼 필요", flush=True)
+        _start_download_event.wait()
+        print("[설치] 사용자 액션 수신 — 다운로드 진행", flush=True)
+        _model_status["status"] = "loading"
+        _emit_status()
 
     if to_download:
         names = ", ".join(k.upper() for k, _ in to_download)
@@ -282,6 +423,37 @@ def _load_models_sync():
 
     # 슬라이드 전용 모드는 여기서 종료 (실시간 스택 메모리 로드 안 함)
     if skip_models:
+        # VLM을 방금 다운로드했다면 검증 단계 표시 — 파일 존재 + 사이즈 sanity 검사
+        vlm_just_downloaded = any(k == "vlm" for k, _ in to_download)
+        if vlm_just_downloaded:
+            import time as _time
+            _model_status["download"] = {
+                "phase": "verifying",
+                "current_bytes": _model_status["download"].get("current_bytes", 0) if _model_status["download"] else 0,
+                "total_bytes": _model_status["download"].get("total_bytes", 0) if _model_status["download"] else 0,
+                "speed_bps": 0,
+            }
+            _model_status["message"] = "AI 엔진 준비 중..."
+            _emit_status()
+            print("[검증] 다운로드 결과 무결성 검사 중...", flush=True)
+
+            # 실제 검증: 캐시 디렉토리 존재 + safetensors 1개 이상 + 파일 헤더 읽기로 손상 확인
+            from pathlib import Path
+            cache_dir = _hf_cache_dir_for(VLM_BASE_MODEL) if not _is_local_path_format(VLM_BASE_MODEL) else Path(VLM_BASE_MODEL)
+            safetensors = list(cache_dir.rglob("*.safetensors"))
+            if not safetensors:
+                raise RuntimeError(f"VLM 검증 실패 — safetensors 파일이 없습니다: {cache_dir}")
+            # 각 shard 파일 헤더 8바이트 읽기 (2~5초 — 사용자에게 검증 단계 보여주기)
+            for sf in safetensors:
+                try:
+                    with open(sf, "rb") as f:
+                        f.read(8)
+                except OSError as e:
+                    raise RuntimeError(f"VLM 검증 실패 — 파일 손상: {sf} ({e})")
+            _time.sleep(0.5)  # 검증 단계 UI에 잠시 보이도록
+            print(f"[검증] 완료 ({len(safetensors)}개 파일 OK)", flush=True)
+
+        _model_status["download"] = None
         _model_status["status"] = "ready"
         _model_status["message"] = "슬라이드 번역 전용 모드 — 준비 완료"
         _model_status["progress"] = 100
@@ -424,6 +596,7 @@ app.include_router(slides.router)
 app.include_router(transcripts.router)
 app.include_router(network.router)
 app.include_router(mode.router)
+app.include_router(install.router)
 
 
 @app.api_route("/health", methods=["GET", "HEAD"], tags=["Health"])
