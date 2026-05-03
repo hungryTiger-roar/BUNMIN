@@ -62,10 +62,12 @@ export default function LecturerSettings() {
       <main className="max-w-2xl mx-auto px-6 py-8">
         <section className="mb-6">
           <h2 className="text-xl font-semibold mb-2">성능 향상을 위한 토큰 입력</h2>
-          <p className="text-sm text-onSurface/70">
-            아래 토큰을 등록하면 모델 다운로드 속도와 슬라이드 번역 품질이 향상됩니다.
-            토큰은 로컬 <code className="bg-primaryContainer/40 px-1 rounded">.env</code> 파일에만 저장되며 외부로 전송되지 않습니다.
-          </p>
+          <ul className="list-disc pl-5 space-y-1 text-sm text-onSurface/70">
+            <li>아래 토큰을 등록하면 모델 다운로드 속도와 슬라이드 번역 품질이 향상됩니다.</li>
+            <li>토큰은 로컬 <code className="bg-primaryContainer/40 px-1 rounded">.env</code> 파일에만 저장되며 외부로 전송되지 않습니다.</li>
+            <li>이미 로드된 모델은 변경 사항을 적용하려면 앱 재시작이 필요할 수 있습니다.</li>
+            <li>HuggingFace 토큰은 다음 모델 다운로드부터, OpenAI 키는 다음 슬라이드 업로드부터 적용됩니다.</li>
+          </ul>
         </section>
 
         <form onSubmit={handleSave} className="space-y-6">
@@ -161,16 +163,6 @@ export default function LecturerSettings() {
               {message}
             </p>
           )}
-
-          {/* 안내 — 두 줄, 왼쪽 정렬 */}
-          <div className="text-xs text-onSurface/50">
-            <p className="whitespace-nowrap">
-              ⚠️ 이미 로드된 모델은 변경 사항을 적용하려면 앱 재시작이 필요할 수 있습니다.
-            </p>
-            <p className="whitespace-nowrap">
-              <span className="invisible" aria-hidden="true">⚠️</span> HuggingFace 토큰은 다음 모델 다운로드부터, OpenAI 키는 다음 슬라이드 업로드부터 적용됩니다.
-            </p>
-          </div>
 
           <div className="flex justify-end gap-3">
             <button

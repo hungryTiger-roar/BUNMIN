@@ -158,6 +158,24 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
     }
   }, [enabled, audioLang, updateStatus])
 
+  // 컴포넌트 언마운트 시 AudioContext 완전 정리 — 페이지 재진입 시 누수 방지
+  useEffect(() => {
+    return () => {
+      activeSourcesRef.current.forEach((s) => {
+        try { s.stop() } catch { /* ignore */ }
+      })
+      activeSourcesRef.current = []
+      if (gainRef.current) {
+        try { gainRef.current.disconnect() } catch { /* ignore */ }
+        gainRef.current = null
+      }
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {})
+        audioCtxRef.current = null
+      }
+    }
+  }, [])
+
   const unlockAudio = useCallback(() => {
     if (!audioCtxRef.current) {
       audioCtxRef.current = new AudioContext()

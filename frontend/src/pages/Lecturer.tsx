@@ -101,6 +101,7 @@ function Lecturer() {
   const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 1000)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [slideBoxWidth, setSlideBoxWidth] = useState<number | undefined>(undefined)
+  const [pendingStart, setPendingStart] = useState(false)
 
   // 커서 위치 상태 (브라우저 전체 기준 vw/vh 비율, 0~1)
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null)
@@ -153,12 +154,14 @@ function Lecturer() {
   const aspectClass = ASPECT_OPTIONS.find((a) => a.value === aspectRatio)?.className ?? 'aspect-[4/3]'
 
   const handleAudioData = useCallback(async (audioBlob: Blob) => {
+    // 일시정지 중에는 audio 전송 안 함 — 자막 생성/공유 차단 (page_change/screen과 동일한 정책)
+    if (isPaused) return
     const arrayBuffer = await audioBlob.arrayBuffer()
     const base64 = btoa(
       new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
     )
     send({ type: 'audio', audio: base64, sample_rate: 16000, sentAt: Date.now() })
-  }, [send])
+  }, [send, isPaused])
 
   const handleScreenData = useCallback((imageData: string) => {
     if (!isPaused && isConnected) {
@@ -366,8 +369,10 @@ function Lecturer() {
       stopAudioCapture()
       setMicOn(false)
     } else {
-      await startAudioCapture()
-      setMicOn(true)
+      // startAudioCapture는 내부에서 에러를 catch하므로 success 반환값으로 성공 여부 판단
+      // (실패 시 isMicOn=true가 되어 UI는 ON인데 실제로는 OFF인 불일치 방지)
+      const success = await startAudioCapture()
+      if (success) setMicOn(true)
     }
   }
 
@@ -376,10 +381,25 @@ function Lecturer() {
       alert('강의자료를 먼저 업로드하세요.')
       return
     }
+    // 모델 전환 중이면 보류 — 전환 완료 시 useEffect가 자동으로 강의 시작 트리거
+    if (modelMode === 'switching') {
+      setPendingStart(true)
+      return
+    }
     setLectureStarted(true)
     setPaused(false)
     send({ type: 'lecture_start', slide_id: slideId, mode: presentationMode })
   }
+
+  // 보류된 강의 시작이 있고 모델 전환이 끝났으면 자동으로 강의 시작
+  useEffect(() => {
+    if (pendingStart && modelMode !== 'switching') {
+      setPendingStart(false)
+      setLectureStarted(true)
+      setPaused(false)
+      send({ type: 'lecture_start', slide_id: slideId, mode: presentationMode })
+    }
+  }, [pendingStart, modelMode, slideId, presentationMode, send, setLectureStarted, setPaused])
 
   const togglePause = () => {
     const newPaused = !isPaused
@@ -435,7 +455,7 @@ function Lecturer() {
     }
   }
 
-  const canStartLecture = isConnected && modelMode !== 'switching' && (
+  const canStartLecture = isConnected && (
     presentationMode === 'screen' || slideStatus === 'ready'
   )
 
@@ -1080,10 +1100,10 @@ function Lecturer() {
                 {!isLectureStarted ? (
                   <button
                     onClick={startLecture}
-                    disabled={!canStartLecture}
+                    disabled={!canStartLecture || pendingStart}
                     className="px-6 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold shadow-sm"
                   >
-                    강의 시작
+                    {pendingStart ? '준비 중...' : '강의 시작'}
                   </button>
                 ) : (
                   <>

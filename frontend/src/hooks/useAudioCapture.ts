@@ -49,14 +49,28 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
 
   useEffect(() => {
     return () => {
+      // 언마운트 시 모든 오디오 리소스 완전 정리 — AudioContext 누수 방지
+      // (강의 종료 → 새 강의 시작 사이클에서 마이크 재초기화 실패하는 문제 해결)
       stopKeepAlive()
       vadRef.current?.destroy()
       vadRef.current = null
       stopStream()
+      if (analyserRef.current) {
+        analyserRef.current.disconnect()
+        analyserRef.current = null
+      }
+      if (gainNodeRef.current) {
+        gainNodeRef.current.disconnect()
+        gainNodeRef.current = null
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close().catch(() => {})
+        audioContextRef.current = null
+      }
     }
   }, [])
 
-  const startCapture = useCallback(async () => {
+  const startCapture = useCallback(async (): Promise<boolean> => {
     try {
       setError(null)
       vadRef.current?.destroy()
@@ -133,9 +147,11 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
       startKeepAlive(vad)
       setIsCapturing(true)
       console.log('[AudioCapture] Silero VAD 캡처 시작')
+      return true
     } catch (err) {
       console.error('[AudioCapture] 시작 실패:', err)
       setError('마이크 접근 권한이 필요합니다.')
+      return false
     }
   }, [])
 
@@ -161,7 +177,9 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
     }
 
     stopKeepAlive()
-    vadRef.current?.pause()
+    // pause가 아닌 destroy로 완전 정리 — 발화 중에도 즉시 마이크 OFF 보장
+    vadRef.current?.destroy()
+    vadRef.current = null
     setIsCapturing(false)
     console.log('[AudioCapture] 캡처 중지')
   }, [])
