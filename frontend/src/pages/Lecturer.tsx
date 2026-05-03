@@ -957,10 +957,7 @@ function Lecturer() {
                         maxLength={80}
                       />
                     </div>
-                    <div className="w-full max-w-md">
-                      <label className="text-xs text-onSurface/60 mb-1.5 block font-medium">
-                        강의 자료
-                      </label>
+                    <div className="w-full max-w-3xl">
                       <SlideUpload />
                     </div>
                   </div>

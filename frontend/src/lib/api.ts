@@ -1,3 +1,12 @@
+import type {
+  SlideLibraryResponse,
+  SlideLoadResponse,
+  SlideDeleteResponse,
+  SlideBatchDeleteResponse,
+  SlideRenameResponse,
+  SortOrder,
+} from '@/types/slide'
+
 // Electron 프로덕션: file:// 로 로드되므로 window.location.host가 빈 문자열
 // → 백엔드 주소를 127.0.0.1:8000으로 고정해야 함
 // Windows에서 'localhost'는 IPv6(::1)로 풀려 uvicorn(IPv4 only)에 닿지 않을 수 있어 IPv4 명시.
@@ -77,6 +86,56 @@ export async function updateTokens(payload: UpdateTokensRequest): Promise<Update
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}))
     throw new Error(detail.detail || '토큰 저장 실패')
+  }
+  return res.json()
+}
+
+// 강의자료 라이브러리 API
+export async function getSlideLibrary(sort: SortOrder = 'recent'): Promise<SlideLibraryResponse> {
+  const res = await fetch(`${API_BASE}/slides/library?sort=${sort}`)
+  if (!res.ok) throw new Error('라이브러리 조회 실패')
+  return res.json()
+}
+
+export async function loadSlide(slideId: string): Promise<SlideLoadResponse> {
+  const res = await fetch(`${API_BASE}/slides/load/${slideId}`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}))
+    throw new Error(detail.detail || '강의자료 로드 실패')
+  }
+  return res.json()
+}
+
+// 단건 삭제 (호환성 유지용, UI에서는 일괄 삭제만 사용)
+export async function deleteSlide(slideId: string): Promise<SlideDeleteResponse> {
+  const res = await fetch(`${API_BASE}/slides/delete/${slideId}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) throw new Error('강의자료 삭제 실패')
+  return res.json()
+}
+
+export async function deleteSlidesBatch(slideIds: string[]): Promise<SlideBatchDeleteResponse> {
+  const res = await fetch(`${API_BASE}/slides/delete-batch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slide_ids: slideIds }),
+  })
+  if (!res.ok) throw new Error('강의자료 일괄 삭제 실패')
+  return res.json()
+}
+
+export async function renameSlide(slideId: string, filename: string): Promise<SlideRenameResponse> {
+  const res = await fetch(`${API_BASE}/slides/${slideId}/rename`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename }),
+  })
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}))
+    throw new Error(detail.detail || '이름 변경 실패')
   }
   return res.json()
 }
