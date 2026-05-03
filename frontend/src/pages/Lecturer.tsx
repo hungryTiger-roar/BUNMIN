@@ -734,7 +734,11 @@ function Lecturer() {
               <h2 className="text-lg font-semibold text-onSurface">강의 자막 저장</h2>
               <button
                 type="button"
-                onClick={() => setShowTranscriptModal(false)}
+                onClick={() => {
+                  setShowTranscriptModal(false)
+                  reset()
+                  navigate('/lecturer/home')
+                }}
                 className="w-7 h-7 rounded-full flex items-center justify-center text-onSurface/60 hover:bg-black/10 transition-colors"
               >✕</button>
             </div>

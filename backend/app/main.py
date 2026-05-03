@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import ModelConfig, PROJECT_ROOT, resolve_model_dir
-from app.routers import ws, slides, transcripts, network, mode
+from app.routers import ws, slides, transcripts, network, mode, settings
 from app.utils.firewall import ensure_firewall_rule
 from app.utils.network import SERVER_PORT, get_lan_ip
 
@@ -424,6 +424,7 @@ app.include_router(slides.router)
 app.include_router(transcripts.router)
 app.include_router(network.router)
 app.include_router(mode.router)
+app.include_router(settings.router)
 
 
 @app.api_route("/health", methods=["GET", "HEAD"], tags=["Health"])
