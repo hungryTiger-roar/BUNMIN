@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLectureStore } from '../stores/lectureStore'
-import { usePreferencesStore } from '../stores/preferencesStore'
+import { usePreferencesStore, type TranslationLang } from '../stores/preferencesStore'
 
 const STORAGE_KEY = 'student_name'
+
+// TTS(Piper)로 실제 음성을 낼 수 있는 언어
+const TTS_SUPPORTED: TranslationLang[] = ['en', 'de', 'es', 'ru']
 
 const TEXT = {
   ko: {
@@ -15,6 +18,9 @@ const TEXT = {
     saveInfo: '다음에도 사용하기',
     joinButton: '강의 참여',
     footer: 'Aunion AI X 번역의 민족',
+    subtitleLangLabel: '자막 언어',
+    audioLangLabel: '음성 언어',
+    ttsFallbackNotice: '선택한 언어는 음성 지원이 준비 중입니다. 음성은 영어로 출력됩니다.',
   },
   en: {
     subtitle: 'Real-time AI Lecture Translation',
@@ -25,8 +31,20 @@ const TEXT = {
     saveInfo: 'Remember me',
     joinButton: 'Join Lecture',
     footer: 'Aunion AI X Bunmin',
+    subtitleLangLabel: 'Subtitle language',
+    audioLangLabel: 'Audio language',
+    ttsFallbackNotice: 'Voice for this language is coming soon. Audio will be played in English.',
   },
 } as const
+
+// 음성/자막 공통 옵션 — 'off', 'both' 제외 (둘 다 강제 선택)
+const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
+  { value: 'ko', label: '한국어 (Korean)' },
+  { value: 'en', label: '영어 (English)' },
+  { value: 'de', label: '독일어 (Deutsch)' },
+  { value: 'es', label: '스페인어 (Español)' },
+  { value: 'ru', label: '러시아어 (Русский)' },
+]
 
 export default function Start() {
   const navigate = useNavigate()
@@ -35,11 +53,17 @@ export default function Start() {
   const lang = usePreferencesStore((s) => s.lang)
   const setLang = usePreferencesStore((s) => s.setLang)
 
+  const subtitleLang = usePreferencesStore((s) => s.subtitleLang)
+  const setSubtitleLang = usePreferencesStore((s) => s.setSubtitleLang)
+  const audioLang = usePreferencesStore((s) => s.audioLang)
+  const setAudioLang = usePreferencesStore((s) => s.setAudioLang)
+
   const [name, setName] = useState('')
   const [saveInfo, setSaveInfo] = useState(false)
   const [error, setError] = useState('')
 
   const t = TEXT[lang]
+  const audioNeedsFallback = !TTS_SUPPORTED.includes(audioLang)
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY)
@@ -47,6 +71,10 @@ export default function Start() {
       setName(saved)
       setSaveInfo(true)
     }
+    // 이전에 저장된 'off'/'both' 등 옵션에 없는 값이 있으면 'en'으로 정리
+    if (!LANG_OPTIONS.some((o) => o.value === audioLang)) setAudioLang('en')
+    if (!LANG_OPTIONS.some((o) => o.value === subtitleLang)) setSubtitleLang('en')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -136,6 +164,43 @@ export default function Start() {
             </div>
             {error && <p className="text-error text-xs mt-1.5">{error}</p>}
           </div>
+
+          {/* 음성 / 자막 언어 미리 설정 — 강의중 화면(Audio | Subtitles) 순서와 동일 */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-white/80 text-sm mb-1.5 block">
+                {t.audioLangLabel}
+              </label>
+              <select
+                value={audioLang}
+                onChange={(e) => setAudioLang(e.target.value as TranslationLang)}
+                className="w-full bg-white rounded-full px-4 py-2.5 text-gray-900 focus:outline-none focus:ring-2 focus:ring-onPrimary appearance-none"
+              >
+                {LANG_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-white/80 text-sm mb-1.5 block">
+                {t.subtitleLangLabel}
+              </label>
+              <select
+                value={subtitleLang}
+                onChange={(e) => setSubtitleLang(e.target.value as TranslationLang)}
+                className="w-full bg-white rounded-full px-4 py-2.5 text-gray-900 focus:outline-none focus:ring-2 focus:ring-onPrimary appearance-none"
+              >
+                {LANG_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {audioNeedsFallback && (
+            <p className="text-xs text-white/80 -mt-2">
+              ⚠️ {t.ttsFallbackNotice}
+            </p>
+          )}
 
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <input
