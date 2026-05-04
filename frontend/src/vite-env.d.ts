@@ -54,5 +54,6 @@ interface Window {
     getLanIp: () => Promise<string>
     getBackendState: () => Promise<BackendState>
     getScreenSources: () => Promise<ScreenSource[]>
+    quitApp: () => void
   }
 }

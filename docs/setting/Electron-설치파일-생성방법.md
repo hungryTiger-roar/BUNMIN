@@ -148,6 +148,58 @@ cd backend && conda run --no-capture-output -n aunion pyinstaller --noconfirm au
 
 VLM 동봉본 만들려면 electron:build 뒤에 `cp -r models/qwen3-vl-8b-instruct setup/win-unpacked/resources/backend/models/` 한 줄 끼우고 `installer.iss`를 (A) 형태로 수정.
 
+> **⚠ 빌드 순서 주의**: PyInstaller가 `frontend/dist/`를 그 시점에 캡처해 `_internal/frontend_dist/`에 임베드합니다. 만약 PyInstaller 후에 `npm run build --prefix frontend`로 frontend를 다시 빌드하면 PyInstaller bundle의 frontend는 stale해집니다. 프론트엔드만 수정한 경우 다음을 사용:
+>
+> ```bash
+> # 백엔드 코드 변경 없을 때 — frontend만 다시 빌드 + 동봉본만 갱신
+> cd frontend && npm run build && cd .. \
+>   && rm -rf setup/win-unpacked/resources/backend/_internal/frontend_dist/* \
+>   && cp -r frontend/dist/. setup/win-unpacked/resources/backend/_internal/frontend_dist/ \
+>   && "$LOCALAPPDATA/Programs/Inno Setup 6/ISCC.exe" installer.iss
+> ```
+>
+> Inno Setup만 다시 돌리므로 ~16분이면 끝.
+
+---
+
+## 첫 실행 마법사 (Install Wizard)
+
+설치본을 처음 실행하는 사용자에게 VLM Base 16GB 다운로드를 안내하는 흐름. (B) 옵션 빌드의 첫 실행 시 자동으로 표시됨.
+
+### 단계 (5단계)
+
+1. **Intro** — 다운로드 안내 카드 + "다운로드 시작" 버튼
+2. **Downloading** — 진행률(byte), 속도, ETA 실시간 표시
+3. **Finalizing** — 다운로드 100% 도달 후 snapshot 생성 단계 (Windows 하드링크/복사). "다운로드를 마무리하고 있습니다" 메시지 + 보조 바 indeterminate
+4. **Verifying** — safetensors 헤더 sanity 검사. "모델을 검증하고 있습니다" 메시지
+5. **Complete** — 설치 완료 안내 + "확인" 버튼 → `/lecturer`
+
+### 백엔드 상태 흐름
+
+`/health` 응답의 `status` 필드:
+- `wait_user_action` — VLM 미캐시 + 슬라이드 전용 모드 → 마법사 노출 후 사용자 클릭 대기
+- `loading` + `download.phase=downloading` — 다운로드 진행
+- `loading` + `download.phase=finalizing` — snapshot 생성 마무리
+- `loading` + `download.phase=verifying` — 파일 검증
+- `ready` / `ok` — 준비 완료 → Complete 화면
+
+### 관련 파일
+
+- [backend/app/main.py](../../backend/app/main.py) — `_load_models_sync`, `_start_byte_progress_watcher`, `_hf_repo_total_bytes`, `_start_download_event`
+- [backend/app/routers/install.py](../../backend/app/routers/install.py) — `POST /api/install/start-download`
+- [frontend/src/pages/Install.tsx](../../frontend/src/pages/Install.tsx) — 5단계 마법사 UI
+
+### 디자인 가이드
+
+- **배경**: stone-100 (`#f5f5f4`)
+- **카드**: 흰색 + 부드러운 그림자 + stone-200 보더
+- **헤드라인**: stone-900, 26px, semibold, 트래킹 -1%
+- **본문**: stone-500/600
+- **강조 컬러**: indigo-600 (다운로드 단계)
+- **완료 컬러**: emerald-600 (Complete 단계)
+- **에러 컬러**: red-600 (Error 단계)
+- **타이포그래피**: 본문 sans-serif, 사이즈/속도 mono(tabular-nums)
+
 ---
 
 ## 자주 막히는 지점 (트러블슈팅)
@@ -222,6 +274,24 @@ Filename: "{app}\{#MyAppExeName}"; Description: "..."; \
 ```
 
 플래그가 빠진 이전 빌드를 사용 중이면 시작 메뉴/바탕화면에서 직접 실행 (UAC 한 번 뜨고 정상 동작).
+
+### Install 마법사가 안 뜨고 옛 Loading 화면이 나옴
+
+`setup/win-unpacked/resources/backend/_internal/frontend_dist/` 안의 frontend가 stale한 경우. PyInstaller가 frontend dist를 임베드한 시점 이후에 `npm run build`가 다시 돌았을 때 발생.
+
+해결: 위의 "한 줄 빌드 명령" 박스 안의 frontend-only 흐름으로 frontend_dist만 갱신하거나, PyInstaller부터 다시 빌드.
+
+검증:
+```bash
+grep -o "wait_user_action" setup/win-unpacked/resources/backend/_internal/frontend_dist/assets/*.js
+```
+나와야 정상.
+
+### Install 마법사 Complete 화면을 못 보고 강의자 페이지로 직행
+
+[Loading.tsx](../../frontend/src/pages/Loading.tsx)의 IPC 리스너(`onBackendReady` 등)가 cleanup 없이 등록되어, 사용자가 `/install`로 이동한 뒤에도 `backend-ready` IPC가 도착하면 leaked 리스너가 `navigate('/lecturer')`를 호출함.
+
+fix: Loading.tsx의 모든 IPC 콜백 첫 줄에 `if (!window.location.hash.startsWith('#/loading')) return` 가드 추가됨. 새 리스너가 추가되면 동일 가드 필요.
 
 ### "VLM 모델이 지정된 로컬 경로에 없습니다" 에러 (설치본에서)
 
