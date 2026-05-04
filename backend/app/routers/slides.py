@@ -3,14 +3,16 @@
 PDF 업로드 및 전처리 (OCR + VLM 번역)
 """
 import asyncio
+import json
 import shutil
 import sys
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -167,6 +169,164 @@ class PageData(BaseModel):
     ocrText: Optional[str] = None
 
 
+# ─── 라이브러리 (영속성) 모델 ───────────────────────────────────────────────
+class BatchDeleteRequest(BaseModel):
+    slide_ids: list[str]
+
+
+class BatchDeleteFailure(BaseModel):
+    slide_id: str
+    reason: str
+
+
+class BatchDeleteResponse(BaseModel):
+    deleted: list[str]
+    failed: list[BatchDeleteFailure]
+
+
+class RenameSlideRequest(BaseModel):
+    filename: str
+
+
+class RenameSlideResponse(BaseModel):
+    slide_id: str
+    filename: str
+
+
+# ─── 메타데이터 저장 / 라이브러리 초기화 ─────────────────────────────────────
+def _meta_path(slide_id: str) -> Path:
+    return UPLOAD_DIR / f"{slide_id}.meta.json"
+
+
+def save_metadata(slide_id: str) -> None:
+    """슬라이드 처리 완료 시 메타데이터를 JSON 파일로 저장 — 서버 재시작 후에도 라이브러리 유지."""
+    s = slide_status.get(slide_id)
+    if s is None:
+        return
+    meta = {
+        "slide_id": slide_id,
+        "filename": s.get("filename", f"{slide_id}.pdf"),
+        # 기존에 저장된 uploaded_at이 있으면 유지, 없으면 현재 시각
+        "uploaded_at": s.get("uploaded_at") or datetime.now().isoformat(timespec="seconds"),
+        "total_pages": s.get("total_pages", 0),
+        "status": s.get("status", "completed"),
+        "page_data": slide_data.get(slide_id, []),
+    }
+    try:
+        with open(_meta_path(slide_id), "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        # uploaded_at을 메모리에도 동기화 (이후 라이브러리 응답에서 일관성 유지)
+        s["uploaded_at"] = meta["uploaded_at"]
+    except Exception as e:
+        print(f"[Slides] 메타데이터 저장 실패: {slide_id} - {e}")
+
+
+def init_slide_library() -> None:
+    """서버 시작 시 기존 메타파일 스캔 → 메모리 목록 복원 (page_data는 load 시 지연 로드)."""
+    print("[Slides] 강의자료 라이브러리 초기화...")
+    count = 0
+    for meta_file in UPLOAD_DIR.glob("*.meta.json"):
+        try:
+            with open(meta_file, encoding="utf-8") as f:
+                meta = json.load(f)
+            sid = meta["slide_id"]
+            slide_status[sid] = {
+                "status": meta.get("status", "completed"),
+                "total_pages": meta.get("total_pages", 0),
+                "processed_pages": meta.get("total_pages", 0),
+                "stage": "completed" if meta.get("status") == "completed" else meta.get("status", "pending"),
+                "stage_current": meta.get("total_pages", 0),
+                "stage_total": meta.get("total_pages", 0),
+                "stage_started_at": time.time(),
+                "last_page_at": time.time(),
+                "avg_page_duration": 0.0,
+                "error": None,
+                "filename": meta.get("filename", f"{sid}.pdf"),
+                "uploaded_at": meta.get("uploaded_at"),
+            }
+            count += 1
+        except Exception as e:
+            print(f"[Slides] 메타 로드 실패: {meta_file.name} - {e}")
+    print(f"[Slides] {count}개 강의자료 발견")
+
+
+def _reconstruct_page_data(slide_id: str, total_pages: int) -> list[dict]:
+    """디스크에 있는 이미지/번역본 파일 기준으로 최소 page_data를 재구성.
+    OCR overlay 정보는 손실되므로 빈 배열로 채움 (강의자료 보기/번역본 다운로드는 정상 동작)."""
+    return [
+        {
+            "page_number": i,
+            "ocr_text": None,
+            "overlay_items": [],
+            "has_translation": (TRANSLATED_DIR / f"{slide_id}_{i}.png").exists(),
+        }
+        for i in range(total_pages)
+    ]
+
+
+def migrate_existing_slides() -> None:
+    """meta.json이 없는 기존 PDF에 대해 1회성 메타 생성 (이미지 파일로 페이지수 추정 + page_data 재구성)."""
+    migrated = 0
+    for pdf in UPLOAD_DIR.glob("*.pdf"):
+        sid = pdf.stem
+        if _meta_path(sid).exists():
+            continue
+        page_files = list(IMAGES_DIR.glob(f"{sid}_*.png"))
+        if not page_files:
+            continue
+        total_pages = len(page_files)
+        meta = {
+            "slide_id": sid,
+            "filename": f"{sid}.pdf",
+            "uploaded_at": datetime.fromtimestamp(pdf.stat().st_mtime).isoformat(timespec="seconds"),
+            "total_pages": total_pages,
+            "status": "completed",
+            "page_data": _reconstruct_page_data(sid, total_pages),
+        }
+        try:
+            with open(_meta_path(sid), "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+            migrated += 1
+            print(f"[Migration] {sid} 메타 생성")
+        except Exception as e:
+            print(f"[Migration] {sid} 메타 생성 실패: {e}")
+    if migrated:
+        print(f"[Migration] {migrated}개 기존 슬라이드 마이그레이션 완료")
+
+
+def repair_legacy_metadata() -> None:
+    """이전에 마이그레이션된 meta.json 중 page_data가 비어있는 항목 보정.
+    (이전 버전의 마이그레이션은 page_data를 비어둬서 슬라이드 로드 시 0페이지로 표시됐음)"""
+    repaired = 0
+    for meta_file in UPLOAD_DIR.glob("*.meta.json"):
+        try:
+            with open(meta_file, encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            continue
+        page_data = meta.get("page_data") or []
+        total_pages = meta.get("total_pages", 0)
+        if page_data or total_pages <= 0:
+            continue
+        sid = meta.get("slide_id") or meta_file.stem.removesuffix(".meta")
+        meta["page_data"] = _reconstruct_page_data(sid, total_pages)
+        try:
+            with open(meta_file, "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+            repaired += 1
+            print(f"[Repair] {sid} page_data 재구성")
+        except Exception as e:
+            print(f"[Repair] {sid} 보정 실패: {e}")
+    if repaired:
+        print(f"[Repair] {repaired}개 메타 파일 page_data 보정 완료")
+
+
+# 모듈 로드 시 1회 실행 — 마이그레이션 → 레거시 보정 → 라이브러리 초기화
+migrate_existing_slides()
+repair_legacy_metadata()
+init_slide_library()
+
+
 def get_page_overlay(slide_id: str, page_number: int) -> list[dict]:
     """특정 페이지의 오버레이 데이터 반환"""
     if slide_id not in slide_data:
@@ -213,6 +373,7 @@ async def upload_slide(
         "avg_page_duration": 0.0,
         "error": None,
         "filename": file.filename or f"{slide_id}.pdf",
+        "uploaded_at": datetime.now().isoformat(timespec="seconds"),
     }
 
     # 백그라운드 처리 시작
@@ -358,6 +519,196 @@ async def download_slide(
         raise HTTPException(400, "type은 'original' 또는 'translated'여야 합니다")
 
 
+# ─── 라이브러리 / 로드 / 삭제 엔드포인트 ─────────────────────────────────────
+@router.get("/library")
+async def get_library(sort: str = Query("recent", pattern="^(recent|name)$")):
+    """저장된 강의자료 목록 (파일 기반, 서버 재시작 후에도 유지)."""
+    items = []
+    for meta_file in UPLOAD_DIR.glob("*.meta.json"):
+        try:
+            with open(meta_file, encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception as e:
+            print(f"[Slides] 메타 읽기 실패: {meta_file.name} - {e}")
+            continue
+        translated_pdf = TRANSLATED_DIR / f"{meta['slide_id']}_translated.pdf"
+        items.append({
+            "slide_id": meta["slide_id"],
+            "filename": meta.get("filename", f"{meta['slide_id']}.pdf"),
+            "uploaded_at": meta.get("uploaded_at", ""),
+            "total_pages": meta.get("total_pages", 0),
+            "status": meta.get("status", "completed"),
+            "has_translated": translated_pdf.exists(),
+        })
+
+    if sort == "name":
+        items.sort(key=lambda x: x["filename"].lower())
+    else:
+        items.sort(key=lambda x: x["uploaded_at"], reverse=True)
+
+    return {"items": items}
+
+
+@router.post("/load/{slide_id}")
+async def load_slide(slide_id: str):
+    """저장된 강의자료를 메모리에 로드 (강의 시작 전 카드 클릭 시 호출)."""
+    meta_path = _meta_path(slide_id)
+    if not meta_path.exists():
+        raise HTTPException(404, "강의자료를 찾을 수 없습니다")
+
+    try:
+        with open(meta_path, encoding="utf-8") as f:
+            meta = json.load(f)
+    except Exception as e:
+        raise HTTPException(500, f"메타데이터 읽기 실패: {e}")
+
+    if meta.get("status") != "completed":
+        raise HTTPException(400, "처리가 완료되지 않은 강의자료입니다")
+
+    total_pages = meta.get("total_pages", 0)
+    page_data = meta.get("page_data") or []
+    # 레거시 호환: page_data가 비어있으면 디스크에서 재구성 (overlay 정보는 손실)
+    if not page_data and total_pages > 0:
+        page_data = _reconstruct_page_data(slide_id, total_pages)
+
+    # 메모리에 로드
+    slide_status[slide_id] = {
+        "status": meta["status"],
+        "total_pages": total_pages,
+        "processed_pages": total_pages,
+        "stage": "completed",
+        "stage_current": total_pages,
+        "stage_total": total_pages,
+        "stage_started_at": time.time(),
+        "last_page_at": time.time(),
+        "avg_page_duration": 0.0,
+        "error": None,
+        "filename": meta.get("filename", f"{slide_id}.pdf"),
+        "uploaded_at": meta.get("uploaded_at"),
+    }
+    slide_data[slide_id] = page_data
+
+    return {
+        "slide_id": slide_id,
+        "message": "강의자료 로드 완료",
+        "total_pages": total_pages,
+    }
+
+
+def _delete_slide_files(slide_id: str) -> list[str]:
+    """단일 슬라이드의 모든 관련 파일/메모리 정리. 삭제된 항목 종류 리스트 반환 (없으면 빈 리스트)."""
+    deleted: list[str] = []
+
+    pdf_path = UPLOAD_DIR / f"{slide_id}.pdf"
+    if pdf_path.exists():
+        pdf_path.unlink()
+        deleted.append("pdf")
+
+    meta_p = _meta_path(slide_id)
+    if meta_p.exists():
+        meta_p.unlink()
+        deleted.append("meta")
+
+    image_files = list(IMAGES_DIR.glob(f"{slide_id}_*.png"))
+    for img in image_files:
+        img.unlink()
+    if image_files:
+        deleted.append("images")
+
+    translated_imgs = list(TRANSLATED_DIR.glob(f"{slide_id}_*.png"))
+    for img in translated_imgs:
+        img.unlink()
+
+    translated_pdf = TRANSLATED_DIR / f"{slide_id}_translated.pdf"
+    if translated_pdf.exists():
+        translated_pdf.unlink()
+        deleted.append("translated")
+
+    slide_status.pop(slide_id, None)
+    slide_data.pop(slide_id, None)
+
+    return deleted
+
+
+@router.delete("/delete/{slide_id}")
+async def delete_slide(slide_id: str):
+    """강의자료 완전 삭제 (단건). UI에서는 직접 호출하지 않고 호환성용으로 유지."""
+    deleted = _delete_slide_files(slide_id)
+    if not deleted:
+        raise HTTPException(404, "강의자료를 찾을 수 없습니다")
+
+    return {
+        "slide_id": slide_id,
+        "message": "강의자료 삭제 완료",
+        "deleted_files": deleted,
+    }
+
+
+_FORBIDDEN_RENAME_CHARS = set(r'\/:*?"<>|')
+
+
+@router.patch("/{slide_id}/rename", response_model=RenameSlideResponse)
+async def rename_slide(slide_id: str, payload: RenameSlideRequest):
+    """강의자료 파일명 수정 — 사용자가 라이브러리에서 직접 변경.
+    실제 디스크의 PDF 파일명은 그대로(slide_id) 유지하고 메타데이터의 filename만 갱신."""
+    new_name = (payload.filename or "").strip()
+    if not new_name:
+        raise HTTPException(400, "파일명은 비어있을 수 없습니다")
+    # 위험 문자 제거 + 제어문자 제거
+    cleaned = "".join(c for c in new_name if c not in _FORBIDDEN_RENAME_CHARS and c.isprintable()).strip()
+    if not cleaned:
+        raise HTTPException(400, "유효하지 않은 파일명입니다")
+    if len(cleaned) > 100:
+        cleaned = cleaned[:100]
+    # .pdf 확장자 보장
+    if not cleaned.lower().endswith(".pdf"):
+        cleaned = f"{cleaned}.pdf"
+
+    meta_path = _meta_path(slide_id)
+    if not meta_path.exists():
+        raise HTTPException(404, "강의자료를 찾을 수 없습니다")
+
+    try:
+        with open(meta_path, encoding="utf-8") as f:
+            meta = json.load(f)
+        meta["filename"] = cleaned
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        raise HTTPException(500, f"메타데이터 갱신 실패: {e}")
+
+    # 메모리 동기화
+    if slide_id in slide_status:
+        slide_status[slide_id]["filename"] = cleaned
+
+    return RenameSlideResponse(slide_id=slide_id, filename=cleaned)
+
+
+@router.post("/delete-batch", response_model=BatchDeleteResponse)
+async def delete_slides_batch(payload: BatchDeleteRequest):
+    """다중 강의자료 일괄 삭제. 항목별 실패해도 나머지 진행, 부분 실패는 200 + failed로 보고."""
+    if not payload.slide_ids:
+        raise HTTPException(400, "삭제할 slide_ids가 비어있습니다")
+
+    deleted: list[str] = []
+    failed: list[BatchDeleteFailure] = []
+
+    for slide_id in payload.slide_ids:
+        try:
+            removed = _delete_slide_files(slide_id)
+            if not removed:
+                failed.append(BatchDeleteFailure(
+                    slide_id=slide_id,
+                    reason="강의자료를 찾을 수 없습니다",
+                ))
+            else:
+                deleted.append(slide_id)
+        except Exception as e:
+            failed.append(BatchDeleteFailure(slide_id=slide_id, reason=str(e)))
+
+    return BatchDeleteResponse(deleted=deleted, failed=failed)
+
+
 async def process_slide(slide_id: str, pdf_path: Path):
     """
     슬라이드 전처리 (백그라운드)
@@ -497,6 +848,8 @@ async def process_slide(slide_id: str, pdf_path: Path):
 
         slide_status[slide_id]["status"] = "completed"
         slide_status[slide_id]["stage"] = "completed"
+        # 라이브러리 영속화 — 서버 재시작 후에도 자료 유지
+        save_metadata(slide_id)
         print(f"[Slides] {slide_id} 전처리 완료! (번역 포함)")
 
     except Exception as e:

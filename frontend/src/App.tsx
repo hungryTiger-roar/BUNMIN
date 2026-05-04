@@ -2,6 +2,8 @@ import { useEffect } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import Home from './pages/Home'
 import Lecturer from './pages/Lecturer'
+import LecturerHome from './pages/LecturerHome'
+import LecturerSettings from './pages/LecturerSettings'
 import Student from './pages/Student'
 import Start from './pages/Start'
 import Loading from './pages/Loading'
@@ -25,6 +27,8 @@ function App() {
         <Route path="/install" element={<Install />} />
         <Route path="/" element={<Start />} />
         <Route path="/lecturer" element={<Lecturer />} />
+        <Route path="/lecturer/home" element={<LecturerHome />} />
+        <Route path="/lecturer/settings" element={<LecturerSettings />} />
         <Route path="/home" element={<Home />} />
         <Route path="/student/start" element={<Start />} />
         <Route path="/student" element={<Student />} />

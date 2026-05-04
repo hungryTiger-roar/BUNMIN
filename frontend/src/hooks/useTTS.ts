@@ -17,12 +17,20 @@ export type TTSMode   = 'piper' | null
 export type TTSStatus = 'idle' | 'loading' | 'ready' | 'error'
 
 // TranslationLang → Piper voice ID (https://huggingface.co/rhasspy/piper-voices)
-// ko, both, off 는 Piper 미지원 → undefined (TTS 스킵)
+// ko, both 등 미지원 언어는 영어로 fallback. off만 명시적 끄기.
 const VOICE_MAP: Partial<Record<TranslationLang, string>> = {
   en: 'en_US-lessac-medium',
   de: 'de_DE-thorsten-medium',
   es: 'es_MX-ald-medium',
   ru: 'ru_RU-irina-medium',
+}
+
+const FALLBACK_VOICE = VOICE_MAP.en!
+
+// off는 명시적 끄기 → null 반환. 그 외 미지원 언어는 영어로 fallback.
+function resolveVoice(lang: TranslationLang): string | null {
+  if (lang === 'off') return null
+  return VOICE_MAP[lang] ?? FALLBACK_VOICE
 }
 
 export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
@@ -125,12 +133,13 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
         setLoadingProgress(100)
         setMode('piper')
 
-        // 현재 언어 모델만 warm-up (메모리에 모델 1개만 유지)
-        const voice = VOICE_MAP[audioLang]
+        // 현재 언어 모델만 warm-up (메모리에 모델 1개만 유지).
+        // 미지원 언어는 영어 음성으로 fallback (off만 스킵).
+        const voice = resolveVoice(audioLang)
         if (voice) {
           preloadQueueRef.current.push({ lang: audioLang, voice })
           processNext()
-          console.log(`[TTS] piper 초기화 완료, ${audioLang} 모델 warm-up 시작`)
+          console.log(`[TTS] piper 초기화 완료, ${audioLang} → ${voice} warm-up 시작`)
         }
       } catch (err) {
         setError(String(err))
@@ -148,6 +157,24 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
       // AudioContext 는 세션 내내 유지 (unlockAudio에서 생성, 언어 변경과 무관)
     }
   }, [enabled, audioLang, updateStatus])
+
+  // 컴포넌트 언마운트 시 AudioContext 완전 정리 — 페이지 재진입 시 누수 방지
+  useEffect(() => {
+    return () => {
+      activeSourcesRef.current.forEach((s) => {
+        try { s.stop() } catch { /* ignore */ }
+      })
+      activeSourcesRef.current = []
+      if (gainRef.current) {
+        try { gainRef.current.disconnect() } catch { /* ignore */ }
+        gainRef.current = null
+      }
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close().catch(() => {})
+        audioCtxRef.current = null
+      }
+    }
+  }, [])
 
   const unlockAudio = useCallback(() => {
     if (!audioCtxRef.current) {
@@ -174,9 +201,9 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
   }, [])
 
   const synthesize = useCallback((text: string, lang: TranslationLang = 'en') => {
-    const voice = VOICE_MAP[lang]
+    const voice = resolveVoice(lang)
     if (!voice) {
-      console.warn('[TTS] 미지원 언어 스킵 — lang:', lang)
+      console.warn('[TTS] 음성 끄기 상태 — lang:', lang)
       return
     }
     if (!engineRef.current || statusRef.current !== 'ready') {

@@ -1,0 +1,43 @@
+// 강의자료 라이브러리 관련 타입
+
+export type SortOrder = 'recent' | 'name'
+
+export interface SlideLibraryItem {
+  slide_id: string
+  filename: string
+  uploaded_at: string  // ISO 8601
+  total_pages: number
+  status: 'pending' | 'processing' | 'completed' | 'failed'
+  has_translated: boolean
+}
+
+export interface SlideLibraryResponse {
+  items: SlideLibraryItem[]
+}
+
+export interface SlideLoadResponse {
+  slide_id: string
+  message: string
+  total_pages: number
+}
+
+export interface SlideDeleteResponse {
+  slide_id: string
+  message: string
+  deleted_files: string[]
+}
+
+export interface SlideBatchDeleteFailure {
+  slide_id: string
+  reason: string
+}
+
+export interface SlideBatchDeleteResponse {
+  deleted: string[]
+  failed: SlideBatchDeleteFailure[]
+}
+
+export interface SlideRenameResponse {
+  slide_id: string
+  filename: string
+}

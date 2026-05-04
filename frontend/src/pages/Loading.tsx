@@ -187,7 +187,7 @@ function Loading() {
         if (!onLoadingRoute()) return
         console.log('[Loading] onBackendReady', ready)
         if (ready) {
-          navigate('/lecturer')
+          navigate('/lecturer/home')
         } else {
           setFailed(true)
         }
@@ -199,7 +199,7 @@ function Loading() {
         console.log('[Loading] getBackendState →', state)
         if (state.models) setModels((prev) => ({ ...prev, ...state.models! }))
         if (typeof state.progress === 'number') setOverallProgress(state.progress)
-        if (state.ready === true) navigate('/lecturer')
+        if (state.ready === true) navigate('/lecturer/home')
         else if (state.ready === false) setFailed(true)
       })
 
@@ -228,7 +228,7 @@ function Loading() {
             })
           }
           if (json.status === 'ok') {
-            navigate('/lecturer')
+            navigate('/lecturer/home')
             return
           }
           if (json.status === 'error') {

@@ -88,7 +88,7 @@ function Student() {
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const chatInputRef = useRef<HTMLInputElement>(null)
 
-  // selector 별 구독 — 전체 destructure 시 store 어떤 변화에도 재렌더되어 useWebSocket 콜백 ref 흔들림
+  // focused selectors — 각 필드 변경 시 정확하게 리렌더 트리거 (특히 subtitles 즉시 반영)
   const slideStatus = useLectureStore((s) => s.slideStatus)
   const currentPage = useLectureStore((s) => s.currentPage)
   const totalPages = useLectureStore((s) => s.totalPages)
@@ -112,18 +112,20 @@ function Student() {
     slideFilename.replace(/\.pdf$/i, '').trim() ||
     ''
 
-  const subtitleSettings = usePreferencesStore((s) => s.subtitleSettings)
-  const setSubtitleSettings = usePreferencesStore((s) => s.setSubtitleSettings)
-  const audioLang = usePreferencesStore((s) => s.audioLang)
-  const subtitleLang = usePreferencesStore((s) => s.subtitleLang)
-  const secondarySubtitleLang = usePreferencesStore((s) => s.secondarySubtitleLang)
-  const setAudioLang = usePreferencesStore((s) => s.setAudioLang)
-  const setSubtitleLang = usePreferencesStore((s) => s.setSubtitleLang)
-  const setSecondarySubtitleLang = usePreferencesStore((s) => s.setSecondarySubtitleLang)
-  const aspectRatio = usePreferencesStore((s) => s.aspectRatio)
-  const setAspectRatio = usePreferencesStore((s) => s.setAspectRatio)
-  const theme = usePreferencesStore((s) => s.theme)
-  const toggleTheme = usePreferencesStore((s) => s.toggleTheme)
+  const {
+    subtitleSettings,
+    setSubtitleSettings,
+    audioLang,
+    subtitleLang,
+    secondarySubtitleLang,
+    setAudioLang,
+    setSubtitleLang,
+    setSecondarySubtitleLang,
+    aspectRatio,
+    setAspectRatio,
+    theme,
+    toggleTheme,
+  } = usePreferencesStore()
 
   // TTS — Student 전용, audioLang 변경 시 엔진 재생성
   const { synthesize, unlockAudio: unlockTTS, status: ttsStatus, setVolume: setTTSVolume } = useTTS(true, audioLang)
@@ -307,28 +309,28 @@ function Student() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="bg-surface rounded-2xl shadow-2xl p-6 w-[min(90%,400px)] flex flex-col gap-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-onSurface">강의 자막 저장</h2>
+              <h2 className="text-lg font-semibold text-onSurface">Save Lecture Subtitles</h2>
               <button
                 type="button"
                 onClick={() => setShowTranscriptModal(false)}
                 className="w-7 h-7 rounded-full flex items-center justify-center text-onSurface/60 hover:bg-black/10 transition-colors"
               >✕</button>
             </div>
-            <p className="text-sm text-onSurface/70">강의 중 인식된 자막을 파일로 다운로드합니다.</p>
+            <p className="text-sm text-onSurface/70">Download the subtitles recognized during the lecture.</p>
             <div className="flex flex-col gap-2">
               <a
                 href={`${API_BASE}/transcripts/${sessionId}/download?format=txt`}
                 download
                 className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-primary text-onPrimary font-medium hover:opacity-90 transition-opacity"
               >
-                <span>📄</span> TXT 다운로드
+                <span>📄</span> Download TXT
               </a>
               <a
                 href={`${API_BASE}/transcripts/${sessionId}/download?format=srt`}
                 download
                 className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-primaryContainer text-onPrimaryContainer font-medium hover:opacity-90 transition-opacity"
               >
-                <span>🎬</span> SRT 다운로드
+                <span>🎬</span> Download SRT
               </a>
             </div>
           </div>
@@ -338,7 +340,7 @@ function Student() {
       {/* 헤더 */}
       <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-primaryContainer bg-surface backdrop-blur-md shadow-sm flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          <h1 className="text-lg font-special-gothic tracking-wide">Aunion AI</h1>
+          <h1 className="text-xl font-special-gothic tracking-wide">Aunion AI</h1>
           {isLectureStarted && !isPaused && (
             <span className="flex items-center gap-1.5 px-2.5 py-1 bg-error text-white text-xs font-semibold rounded-full shadow-lg shadow-error/30">
               <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
@@ -354,7 +356,7 @@ function Student() {
               Paused
             </span>
           )}
-          {slideStatus === 'ready' && totalPages > 0 && (
+          {isLectureStarted && slideStatus === 'ready' && totalPages > 0 && (
             <div className="flex items-center gap-1.5 px-3 py-1 bg-primaryContainer/60 rounded-full text-sm text-onSurface">
               <span className="font-medium">{currentPage}</span>
               <span className="opacity-60">/</span>
@@ -443,8 +445,8 @@ function Student() {
             {/* 강의자 커서 오버레이 (ref 기반, 리렌더링 없음) */}
             <StudentCursorOverlay spotlightRef={spotlightRef} />
 
-            {/* 강의자료 원본/번역 토글 (슬라이드 표시 중일 때만) */}
-            {presentationMode === 'slide' && slideStatus === 'ready' && slideImageUrl && (
+            {/* 강의자료 원본/번역 토글 (강의 시작 후 슬라이드 표시 중일 때만) */}
+            {isLectureStarted && presentationMode === 'slide' && slideStatus === 'ready' && slideImageUrl && (
               <MaterialViewToggle className={`absolute top-3 z-30 right-3`} />
             )}
 
@@ -470,14 +472,14 @@ function Student() {
               </div>
             )}
 
-            {/* 슬라이드/화면공유 */}
-            {presentationMode === 'screen' && currentScreen ? (
+            {/* 슬라이드/화면공유 — 강의 시작 후에만 노출 */}
+            {isLectureStarted && presentationMode === 'screen' && currentScreen ? (
               <img
                 src={`data:image/jpeg;base64,${currentScreen}`}
                 alt="화면 공유"
                 className="w-full h-full object-contain"
               />
-            ) : slideStatus === 'ready' && slideImageUrl ? (
+            ) : isLectureStarted && slideStatus === 'ready' && slideImageUrl ? (
               <img
                 key={`${currentPage}`}
                 src={slideImageUrl}

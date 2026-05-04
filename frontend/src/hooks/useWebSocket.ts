@@ -85,6 +85,10 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
   const handleMessage = useCallback((data: WebSocketMessage) => {
     switch (data.type) {
       case 'transcription': {
+        // 강의 시작 전엔 강의자 마이크 테스트 자막을 수강자에게 표시/재생 안 함
+        if (role === 'student' && !useLectureStore.getState().isLectureStarted) {
+          break
+        }
         // 번역 결과 수신
         const outputTime = Date.now()
         const inputTime = data.sentAt as number | undefined
