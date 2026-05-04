@@ -31,25 +31,25 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
   const [isConnected, setIsConnected] = useState(false)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
 
-  const {
-    addSubtitle,
-    setConnected,
-    setSlideId,
-    setSlideStatus,
-    setSlidePages,
-    setCurrentPage,
-    setLectureStarted,
-    setPaused,
-    setPresentationMode,
-    setCurrentScreen,
-    setStudentCount,
-    addChatMessage,
-    setParticipants,
-    setLectureTitle,
-    setSlideFilename,
-    setSessionId,
-    studentName,
-  } = useLectureStore()
+  // 각 setter를 개별 selector로 구독 — Zustand action은 stable 이므로 재렌더 트리거하지 않음
+  // (전체 destructure 시 store 어떤 필드가 바뀌어도 useWebSocket 재렌더 → send/connect ref 흔들림)
+  const addSubtitle = useLectureStore((s) => s.addSubtitle)
+  const setConnected = useLectureStore((s) => s.setConnected)
+  const setSlideId = useLectureStore((s) => s.setSlideId)
+  const setSlideStatus = useLectureStore((s) => s.setSlideStatus)
+  const setSlidePages = useLectureStore((s) => s.setSlidePages)
+  const setCurrentPage = useLectureStore((s) => s.setCurrentPage)
+  const setLectureStarted = useLectureStore((s) => s.setLectureStarted)
+  const setPaused = useLectureStore((s) => s.setPaused)
+  const setPresentationMode = useLectureStore((s) => s.setPresentationMode)
+  const setCurrentScreen = useLectureStore((s) => s.setCurrentScreen)
+  const setStudentCount = useLectureStore((s) => s.setStudentCount)
+  const addChatMessage = useLectureStore((s) => s.addChatMessage)
+  const setParticipants = useLectureStore((s) => s.setParticipants)
+  const setLectureTitle = useLectureStore((s) => s.setLectureTitle)
+  const setSlideFilename = useLectureStore((s) => s.setSlideFilename)
+  const setSessionId = useLectureStore((s) => s.setSessionId)
+  const studentName = useLectureStore((s) => s.studentName)
 
   const lecturerName = usePreferencesStore((s) => s.lecturerName)
 

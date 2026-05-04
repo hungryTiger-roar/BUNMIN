@@ -30,7 +30,7 @@
 │   (입력)     │    │  (텍스트추출) │    │  (한→영번역) │    │  (오버레이)  │
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
                          │                   │                   │
-                    Surya OCR           Qwen3-VL-8B         OpenCV
+                    Surya OCR           Qwen2.5-VL-7B       OpenCV
                     (Transformer)                           Inpainting
 ```
 
@@ -94,13 +94,9 @@
 
 ## 3. OCR 단계 상세
 
-### 3.1 OCR 엔진 선택
+### 3.1 OCR 엔진
 
-| 엔진 | 특징 | 한글 정확도 | 속도 |
-|------|------|-------------|------|
-| **Surya** (현재) | Transformer 기반 | **95%+** | 중 |
-| EasyOCR | CNN 기반 | 85% | 빠름 |
-| RapidOCR | ONNX 경량화 | 80% | 매우빠름 |
+Surya OCR (Transformer 기반, 한글 정확도 95%+)을 사용합니다.
 
 ### 3.2 Surya OCR 동작
 
@@ -487,13 +483,13 @@ function MaterialViewToggle({ className = '' }) {
 
 ```bash
 # VLM 설정
-VLM_BASE_MODEL=models/qwen3-vl-8b-instruct
+VLM_BASE_MODEL=models/qwen2.5-vl-7b-instruct
 VLM_DEVICE=cuda
-VLM_MAX_GPU_MEMORY=6GB
+VLM_MAX_GPU_MEMORY=4GB
 VLM_USE_4BIT=true
 
 # OCR 설정
-AUNION_OCR_ENGINE=surya  # surya, easyocr, rapid
+OCR_MODEL=surya
 ```
 
 ### 7.2 config.yaml (13개 섹션)
@@ -579,15 +575,7 @@ RuntimeError: CUDA out of memory
 
 **해결:** `.env`에서 `VLM_USE_4BIT=true` 설정 (VRAM 절반 사용)
 
-### 8.2 numpy/pillow 버전 충돌
-
-```
-ERROR: unbabel-comet requires numpy<2.0.0
-```
-
-**해결:** `npm run setup` 실행 (자동으로 버전 고정)
-
-### 8.3 번역 누락
+### 8.2 번역 누락
 
 **증상:** 일부 영역 번역 안 됨
 
@@ -595,7 +583,7 @@ ERROR: unbabel-comet requires numpy<2.0.0
 
 **해결:** 개별 재시도 로직 자동 실행됨 (코드에 포함)
 
-### 8.4 배경 잉크 번짐
+### 8.3 배경 잉크 번짐
 
 **증상:** 흰 배경에 회색 얼룩
 

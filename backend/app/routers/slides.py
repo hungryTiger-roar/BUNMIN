@@ -62,7 +62,7 @@ class SlideStatus(BaseModel):
 
 _BASELINE_SECONDS_PER_PAGE = {
     "ocr": 15.0,       # Surya OCR 한 장 처리 추정치 (초) — 실측보다 약간 여유롭게
-    "translate":50.0,  # Qwen3-VL 한 장 번역 추정치 (4bit GPU) — 실측보다 여유롭게 잡아 "잠시만" 시간 단축
+    "translate":50.0,  # Qwen2.5-VL 한 장 번역 추정치 (4bit GPU) — 실측보다 여유롭게 잡아 "잠시만" 시간 단축
 }
 _BUNDLING_BASELINE = 3.0  # PDF 묶기 짧은 고정값
 

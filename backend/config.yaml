@@ -16,7 +16,7 @@
 # 1. OCR 설정
 # ============================================================
 ocr:
-  # 사용 OCR 엔진: surya | easyocr | rapid
+  # 사용 OCR 엔진: surya
   engine: "surya"
 
   # OCR confidence 최소값
@@ -133,7 +133,7 @@ vertical_text:
 
 # ============================================================
 # 6. VLM / 번역 모델 설정
-# 현재는 Qwen3-VL을 text-only로 사용
+# 현재는 Qwen2.5-VL을 text-only로 사용
 # 향후 TowerInstruct / NLLB / Qwen-MT 등과 교체 가능
 # ============================================================
 vlm:

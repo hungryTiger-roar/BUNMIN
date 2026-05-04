@@ -230,26 +230,19 @@ step(7, TOTAL, '설치 검증...')
 
   // NMT CTranslate2 모델 확인 — 필수 파일 5개 모두 존재해야 함
   // (sentencepiece spm 파일 누락 시 nmt_service가 HF 폴백으로 떨어져 성능 저하)
-  const nmtDir = path.join(ROOT, 'models', 'opus-mt-ct2')
+  const nmtDir = path.join(ROOT, 'models', 'opus-mt-ko-en-ct2')
   for (const f of ['model.bin', 'config.json', 'shared_vocabulary.json', 'source.spm', 'target.spm']) {
     if (!fs.existsSync(path.join(nmtDir, f))) {
-      console.error(`  ✗ 누락: models/opus-mt-ct2/${f} (NMT CTranslate2 부분 변환)`)
+      console.error(`  ✗ 누락: models/opus-mt-ko-en-ct2/${f} (NMT CTranslate2 부분 변환)`)
       ok = false
     }
   }
 
-  // VLM LoRA 어댑터 확인
-  const loraDir = path.join(ROOT, 'models', 'qwen3', 'qwen3-vl-8b-lora-r64-e3-final')
-  if (!fs.existsSync(loraDir)) {
-    console.error('  ✗ 누락: models/qwen3/qwen3-vl-8b-lora-r64-e3-final/ (VLM LoRA)')
-    ok = false
-  }
-
-  // VLM Base 모델 확인 — 로컬 디렉토리 + safetensors 4 shards 존재
+  // VLM Base 모델 확인 — 로컬 디렉토리 + safetensors 5 shards 존재
   // HF 캐시 대신 평탄 디렉토리 사용으로 Windows 심볼릭 이슈 우회
-  const vlmBaseDir = path.join(ROOT, 'models', 'qwen3-vl-8b-instruct')
+  const vlmBaseDir = path.join(ROOT, 'models', 'qwen2.5-vl-7b-instruct')
   if (!fs.existsSync(vlmBaseDir)) {
-    console.error('  ✗ 누락: models/qwen3-vl-8b-instruct/ (VLM Base)')
+    console.error('  ✗ 누락: models/qwen2.5-vl-7b-instruct/ (VLM Base)')
     ok = false
   } else {
     const shards = fs.readdirSync(vlmBaseDir).filter(f => f.endsWith('.safetensors'))
@@ -257,9 +250,9 @@ step(7, TOTAL, '설치 검증...')
       (sum, f) => sum + fs.statSync(path.join(vlmBaseDir, f)).size, 0
     )
     const sizeGb = totalBytes / (1024 ** 3)
-    if (shards.length < 4 || sizeGb < 5) {
+    if (shards.length < 5 || sizeGb < 12) {
       console.error(
-        `  ✗ VLM Base 부분 다운로드 (shards ${shards.length}/4, ${sizeGb.toFixed(2)}GB / 16GB 기대)`
+        `  ✗ VLM Base 부분 다운로드 (shards ${shards.length}/5, ${sizeGb.toFixed(2)}GB / 14GB 기대)`
       )
       console.error('     conda run -n aunion python scripts/download_models.py 로 재실행')
       ok = false
@@ -271,15 +264,6 @@ step(7, TOTAL, '설치 검증...')
   if (!fs.existsSync(path.join(asrDir, 'model.bin'))) {
     console.error('  ✗ 누락: models/whisper-large-v3-turbo-ct2-int8/model.bin (ASR)')
     ok = false
-  }
-
-  // RapidOCR Korean 모델 — 로컬 디렉토리 + 핵심 파일 2개
-  const rapidocrDir = path.join(ROOT, 'models', 'rapidocr-korean')
-  for (const f of ['model.onnx', 'korean_dict.txt']) {
-    if (!fs.existsSync(path.join(rapidocrDir, f))) {
-      console.error(`  ✗ 누락: models/rapidocr-korean/${f}`)
-      ok = false
-    }
   }
 
   // .env 확인

@@ -906,4 +906,4 @@ Polishing 제외:
 
 ---
 
-*AunionAI Team - 2025.04.29*
+*AunionAI Team - 2026.04.29*

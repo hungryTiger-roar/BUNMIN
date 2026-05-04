@@ -17,7 +17,7 @@ from app.routers import ws, slides, transcripts, network, mode, install
 from app.utils.firewall import ensure_firewall_rule
 from app.utils.network import SERVER_PORT, get_lan_ip
 
-# VLM Base 모델: env 미설정이면 로컬 동봉본(qwen3-vl-8b-instruct) 우선,
+# VLM Base 모델: env 미설정이면 로컬 동봉본(qwen2.5-vl-7b-instruct) 우선,
 # 없으면 HF repo_id로 fallback. 사용자가 env로 명시하면 그 값 그대로.
 from pathlib import Path as _Path
 
@@ -35,12 +35,12 @@ def _resolve_vlm(value: str) -> str:
         return str(candidate)
     return value
 
-
 def _vlm_default() -> str:
-    """env 미지정 시 사용할 기본값. 로컬 디렉토리가 있으면 그 경로,
-    없으면 HF repo_id로 fallback해 다운로드 트리거."""
-    found = resolve_model_dir("qwen3-vl-8b-instruct")
-    return str(found) if found is not None else "Qwen/Qwen3-VL-8B-Instruct"
+    """env 미지정 시 사용할 기본값. 로컬 디렉토리(USER_DATA → INSTALL → PROJECT_ROOT)가
+    있으면 그 경로, 없으면 HF repo_id 로 fallback 해 다운로드 트리거.
+    Electron 배포 환경에서 사용자별 모델 디렉토리를 우선 사용하기 위함."""
+    found = resolve_model_dir("qwen2.5-vl-7b-instruct")
+    return str(found) if found is not None else "Qwen/Qwen2.5-VL-7B-Instruct"
 
 
 VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL") or _vlm_default())
@@ -307,7 +307,7 @@ def _download_one(model_key: str, repo_id: str):
         raise RuntimeError(
             f"{model_key.upper()} 모델이 지정된 로컬 경로에 없습니다: {repo_id}\n"
             f"  해결: 'npm run setup' 재실행 또는 .env의 {model_key.upper()}_MODEL을\n"
-            f"        HuggingFace repo_id로 변경 (예: Qwen/Qwen3-VL-8B-Instruct)."
+            f"        HuggingFace repo_id로 변경 (예: Qwen/Qwen2.5-VL-7B-Instruct)."
         )
     from huggingface_hub import snapshot_download
     _thread_model_key.key = model_key

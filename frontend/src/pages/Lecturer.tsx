@@ -106,42 +106,40 @@ function Lecturer() {
   // 커서 위치 상태 (브라우저 전체 기준 vw/vh 비율, 0~1)
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null)
 
-  const {
-    isMicOn,
-    isLectureStarted,
-    isPaused,
-    presentationMode,
-    slideId,
-    slideStatus,
-    currentPage,
-    slidePages,
-    subtitles,
-    modelMode,
-    chatMessages,
-    participants,
-    studentCount,
-    lectureTitle,
-    slideFilename,
-    sessionId,
-    setLectureTitle,
-    setMicOn,
-    setLectureStarted,
-    setPaused,
-    setPresentationMode,
-    setCurrentPage,
-    reset,
-  } = useLectureStore()
+  // selector 별 구독 — 전체 destructure 시 store 어떤 변화에도 재렌더되어
+  // useWebSocket의 콜백 ref가 흔들리고 useEffect 무한 루프 발생
+  const isMicOn = useLectureStore((s) => s.isMicOn)
+  const isLectureStarted = useLectureStore((s) => s.isLectureStarted)
+  const isPaused = useLectureStore((s) => s.isPaused)
+  const presentationMode = useLectureStore((s) => s.presentationMode)
+  const slideId = useLectureStore((s) => s.slideId)
+  const slideStatus = useLectureStore((s) => s.slideStatus)
+  const currentPage = useLectureStore((s) => s.currentPage)
+  const slidePages = useLectureStore((s) => s.slidePages)
+  const subtitles = useLectureStore((s) => s.subtitles)
+  const modelMode = useLectureStore((s) => s.modelMode)
+  const chatMessages = useLectureStore((s) => s.chatMessages)
+  const participants = useLectureStore((s) => s.participants)
+  const studentCount = useLectureStore((s) => s.studentCount)
+  const lectureTitle = useLectureStore((s) => s.lectureTitle)
+  const slideFilename = useLectureStore((s) => s.slideFilename)
+  const sessionId = useLectureStore((s) => s.sessionId)
+  const setLectureTitle = useLectureStore((s) => s.setLectureTitle)
+  const setMicOn = useLectureStore((s) => s.setMicOn)
+  const setLectureStarted = useLectureStore((s) => s.setLectureStarted)
+  const setPaused = useLectureStore((s) => s.setPaused)
+  const setPresentationMode = useLectureStore((s) => s.setPresentationMode)
+  const setCurrentPage = useLectureStore((s) => s.setCurrentPage)
+  const reset = useLectureStore((s) => s.reset)
 
-  const {
-    aspectRatio,
-    setAspectRatio,
-    lecturerName,
-    setLecturerName,
-    subtitleSettings,
-    setSubtitleSettings,
-    theme,
-    toggleTheme,
-  } = usePreferencesStore()
+  const aspectRatio = usePreferencesStore((s) => s.aspectRatio)
+  const setAspectRatio = usePreferencesStore((s) => s.setAspectRatio)
+  const lecturerName = usePreferencesStore((s) => s.lecturerName)
+  const setLecturerName = usePreferencesStore((s) => s.setLecturerName)
+  const subtitleSettings = usePreferencesStore((s) => s.subtitleSettings)
+  const setSubtitleSettings = usePreferencesStore((s) => s.setSubtitleSettings)
+  const theme = usePreferencesStore((s) => s.theme)
+  const toggleTheme = usePreferencesStore((s) => s.toggleTheme)
 
   const { isConnected, connect, send, sendChat, sendLectureTitle, sendLecturerName } =
     useWebSocket(WS_PIPELINE_URL, 'lecturer')

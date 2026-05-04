@@ -6,7 +6,9 @@ interface MaterialViewToggleProps {
 }
 
 function MaterialViewToggle({ className = '', locale = 'en' }: MaterialViewToggleProps) {
-  const { materialMode, setMaterialMode } = useLectureStore()
+  // selector 패턴 — 무관 store 변화로 컴포넌트 재렌더 폭주 방지 (slide flicker 수정)
+  const materialMode = useLectureStore((s) => s.materialMode)
+  const setMaterialMode = useLectureStore((s) => s.setMaterialMode)
   const toggle = () =>
     setMaterialMode(materialMode === 'original' ? 'translated' : 'original')
 

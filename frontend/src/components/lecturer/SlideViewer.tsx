@@ -19,17 +19,16 @@ interface SlideViewerProps {
 function SlideViewer({ onPageChange, children, containerRef }: SlideViewerProps) {
   const aspectRatio = usePreferencesStore((s) => s.aspectRatio)
   const aspectClass = ASPECT_CLASS[aspectRatio]
-  const {
-    slideId,
-    slideStatus,
-    currentPage,
-    totalPages,
-    slidePages,
-    setSlidePages,
-    nextPage,
-    prevPage,
-    materialMode,
-  } = useLectureStore()
+  // selector 별 구독 — 자막/채팅 등 무관 store 변화로 onPageChange 재구독되어 page_change 폭주 방지
+  const slideId = useLectureStore((s) => s.slideId)
+  const slideStatus = useLectureStore((s) => s.slideStatus)
+  const currentPage = useLectureStore((s) => s.currentPage)
+  const totalPages = useLectureStore((s) => s.totalPages)
+  const slidePages = useLectureStore((s) => s.slidePages)
+  const setSlidePages = useLectureStore((s) => s.setSlidePages)
+  const nextPage = useLectureStore((s) => s.nextPage)
+  const prevPage = useLectureStore((s) => s.prevPage)
+  const materialMode = useLectureStore((s) => s.materialMode)
 
   // 슬라이드 페이지 목록 로드
   useEffect(() => {

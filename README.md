@@ -12,7 +12,7 @@
 | Frontend | React + TypeScript + Vite |
 | Backend | FastAPI + uvicorn |
 | 실시간 통신 | WebSocket |
-| AI (백엔드) | ASR, NMT, Qwen3-VL (슬라이드 번역), RapidOCR |
+| AI (백엔드) | ASR, NMT, Qwen2.5-VL (슬라이드 번역), Surya OCR |
 | TTS (클라이언트) | piper-tts-web — 수강자 브라우저 내 CPU ONNX WASM |
 | 데스크탑 (선택) | Electron |
 
@@ -34,7 +34,7 @@
 npm run setup
 ```
 
-conda 환경 생성(Python 3.11), Python 패키지 설치, AI 모델 다운로드(~20GB)까지 자동으로 처리됩니다.
+conda 환경 생성(Python 3.11), Python 패키지 설치, AI 모델 다운로드(~17.5GB)까지 자동으로 처리됩니다.
 
 > **설치 시간**: 약 20~40분 (AI 모델 다운로드 포함)  
 > **GPU 없는 환경**: 자동으로 CPU 모드로 진행됩니다. 실시간 ASR 성능이 저하될 수 있습니다.
@@ -49,7 +49,7 @@ HF_TOKEN=
 
 ASR_MODEL=models/whisper-large-v3-turbo-ct2-int8
 NMT_ASR_MODEL=Helsinki-NLP/opus-mt-ko-en
-OCR_MODEL=rapidocr
+OCR_MODEL=surya
 
 ASR_DEVICE=cuda
 NMT_ASR_DEVICE=cpu
@@ -104,12 +104,9 @@ S14P31S205/
 │   ├── app/                  # 라우터 + 서비스
 │   └── run.py                # 진입점
 │
-├── evaluation/               # AI 모델 평가 스크립트
-│
 └── docs/                     # 문서
     ├── setting/              # 환경설정, 실행방법
-    ├── planning/             # 설계 문서
-    └── evaluation/           # 평가 시스템
+    └── planning/             # 설계 문서
 ```
 
 ---
@@ -122,4 +119,3 @@ S14P31S205/
 | [환경설정](docs/setting/환경설정.md) | .env 및 AI 모델 설정 |
 | [백엔드 설계](docs/planning/백엔드_설계.md) | API 명세, AI 파이프라인 |
 | [프론트 설계](docs/planning/프론트_설계.md) | 화면 구성, 디렉토리 구조 |
-| [평가 시스템](docs/evaluation/평가시스템.md) | AI 모델 품질/속도 평가 |

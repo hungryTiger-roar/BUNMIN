@@ -25,21 +25,9 @@ node_modules/
 # VAD 런타임 모델 — 작은 크기(~2MB), 프론트엔드 필수 파일이므로 예외
 !frontend/public/silero_vad_*.onnx
 
-# 다운로드 모델 디렉토리 (qwen3 LoRA 제외)
-models/rapidocr_korean/
-models/rapidocr-korean/
-models/opus-mt-ct2/
-models/qwen3-vl-8b-instruct/
-models/whisper-large-v3-turbo-ct2-int8/
-
-# LoRA 모델은 예외 (번역용 파인튜닝 모델)
-!models/qwen3/**
-# LFS 포인터 깨진 파일 제외
-models/qwen3/qwen3-vl-8b-lora-r64-e3-final/tokenizer.json
-# LoRA 모델 내 HuggingFace 캐시는 제외
-models/qwen3/**/.cache/
-# HuggingFace 자동 생성 LFS 설정 파일 제외
-models/**/.gitattributes
+# 다운로드 모델 디렉토리 — 전체 ignore
+# (모델은 npm run setup 에서 받음, git 추적 X)
+models/
 
 # 업로드 파일 (슬라이드, 이미지) — 항상 프로젝트 루트에 생성됨
 uploads/
@@ -103,16 +91,8 @@ translate_slide_v2.py
 # 프론트엔드 빌드 캐시
 frontend/.vite/
 
-# 로컬 모델 캐시
+# 로컬 모델 캐시 (백엔드 서비스 자체 캐시)
 backend/app/services/models/
-models/asr-*/
-models/*_new/
-models/nul
-
-# 테스트용 PDF
-models/*.pdf
 
 # 로컬 데이터셋
 datasets/
-models/qwen3/qwen3-vl-8b-lora-r64-e3-final/adapter_model.safetensors.bak
-models/qwen3/qwen3-vl-8b-lora-r64-e3-final/adapter_model.safetensors.local_backup
