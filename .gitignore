@@ -114,3 +114,5 @@ models/*.pdf
 
 # 로컬 데이터셋
 datasets/
+models/qwen3/qwen3-vl-8b-lora-r64-e3-final/adapter_model.safetensors.bak
+models/qwen3/qwen3-vl-8b-lora-r64-e3-final/adapter_model.safetensors.local_backup

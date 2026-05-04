@@ -2,12 +2,17 @@ import { useLectureStore } from '@/stores/lectureStore'
 
 interface MaterialViewToggleProps {
   className?: string
+  locale?: 'en' | 'ko'
 }
 
-function MaterialViewToggle({ className = '' }: MaterialViewToggleProps) {
+function MaterialViewToggle({ className = '', locale = 'en' }: MaterialViewToggleProps) {
   const { materialMode, setMaterialMode } = useLectureStore()
   const toggle = () =>
     setMaterialMode(materialMode === 'original' ? 'translated' : 'original')
+
+  const labels = locale === 'ko'
+    ? { original: '원본', translated: '번역' }
+    : { original: 'Original', translated: 'Translated' }
 
   return (
     <button
@@ -22,7 +27,7 @@ function MaterialViewToggle({ className = '' }: MaterialViewToggleProps) {
             : 'text-white/70'
         }`}
       >
-        원본
+        {labels.original}
       </span>
       <span
         className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
@@ -31,7 +36,7 @@ function MaterialViewToggle({ className = '' }: MaterialViewToggleProps) {
             : 'text-white/70'
         }`}
       >
-        번역
+        {labels.translated}
       </span>
     </button>
   )
