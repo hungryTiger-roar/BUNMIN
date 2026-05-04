@@ -12,4 +12,5 @@ contextBridge.exposeInMainWorld('electron', {
   getLanIp: () => ipcRenderer.invoke('get-lan-ip'),
   getBackendState: () => ipcRenderer.invoke('get-backend-state'),
   getScreenSources: () => ipcRenderer.invoke('get-screen-sources'),
+  quitApp: () => ipcRenderer.send('quit-app'),
 })
