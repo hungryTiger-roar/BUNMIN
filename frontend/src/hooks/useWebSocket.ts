@@ -30,6 +30,9 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
   const socketRef = useRef<WebSocket | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
+  // disconnect()로 의도적으로 닫힌 소켓의 onclose가 자동 재연결을 트리거하지 않게 하는 플래그.
+  // socket.close()가 비동기여서 disconnect()에서 clearTimeout을 해도 그 직후 onclose가 새 setTimeout을 설치 → 무한 재연결 루프.
+  const intentionallyClosedRef = useRef(false)
 
   // 각 setter를 개별 selector로 구독 — Zustand action은 stable 이므로 재렌더 트리거하지 않음
   // (전체 destructure 시 store 어떤 필드가 바뀌어도 useWebSocket 재렌더 → send/connect ref 흔들림)
@@ -245,7 +248,11 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
       default:
         console.log('[WebSocket] 알 수 없는 메시지:', data.type)
     }
-  }, [role, addSubtitle, setSlideId, setSlideStatus, setCurrentPage, setLectureStarted, setPaused, setPresentationMode, setCurrentScreen, setStudentCount, addChatMessage, setParticipants, setLectureTitle, loadSlidePages])
+  }, [role, addSubtitle, setSlideId, setSlideStatus, setCurrentPage, setLectureStarted, setPaused, setPresentationMode, setCurrentScreen, setStudentCount, addChatMessage, setParticipants, setLectureTitle, setSessionId, loadSlidePages])
+
+  // handleMessage를 ref로 분리 → connect의 deps에서 제거해 어떤 selector 흔들림에도 socket이 재생성되지 않게 한다.
+  const handleMessageRef = useRef(handleMessage)
+  useEffect(() => { handleMessageRef.current = handleMessage }, [handleMessage])
 
   const send = useCallback((data: object) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
@@ -287,6 +294,7 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     }
 
     console.log('[WebSocket] 재연결 시도...')
+    intentionallyClosedRef.current = false
     const socket = new WebSocket(url)
 
     socket.onopen = () => {
@@ -299,11 +307,12 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
       setConnected(true)
     }
 
-    socket.onclose = () => {
-      console.log('[WebSocket] 연결 종료')
+    socket.onclose = (e) => {
+      console.log(`[WebSocket] 연결 종료 (code=${e.code}, reason=${e.reason || '(none)'}, intentional=${intentionallyClosedRef.current})`)
       setIsConnected(false)
       setConnected(false)
-
+      // 의도적 close (disconnect 호출, 컴포넌트 언마운트)는 자동 재연결하지 않음
+      if (intentionallyClosedRef.current) return
       reconnectTimeoutRef.current = setTimeout(() => {
         connect()
       }, 3000)
@@ -316,18 +325,20 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     socket.onmessage = (event) => {
       try {
         const data: WebSocketMessage = JSON.parse(event.data)
-        handleMessage(data)
+        handleMessageRef.current(data)
       } catch (err) {
         console.error('[WebSocket] 메시지 파싱 실패:', err)
       }
     }
 
     socketRef.current = socket
-  }, [url, role, setConnected, handleMessage])
+  }, [url, role, setConnected])
 
   const disconnect = useCallback(() => {
+    intentionallyClosedRef.current = true
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current)
+      reconnectTimeoutRef.current = undefined
     }
     socketRef.current?.close()
     socketRef.current = null
@@ -335,11 +346,15 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     setConnected(false)
   }, [setConnected])
 
+  // 마운트/언마운트 시에만 cleanup이 호출되도록 ref 패턴 + 빈 deps.
+  // disconnect를 직접 deps에 넣으면 reference가 흔들릴 때마다 cleanup → disconnect → onclose 자동재연결 무한 루프 위험.
+  const disconnectRef = useRef(disconnect)
+  useEffect(() => { disconnectRef.current = disconnect }, [disconnect])
   useEffect(() => {
     return () => {
-      disconnect()
+      disconnectRef.current()
     }
-  }, [disconnect])
+  }, [])
 
   return {
     isConnected,
