@@ -123,26 +123,68 @@ function Loading() {
     logsEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [logs])
 
+  // wait_user_action 감지 — Electron/web 양쪽에서 /health 폴링으로 확인.
+  // status가 wait_user_action이면 즉시 /install로 redirect.
+  useEffect(() => {
+    let cancelled = false
+    let timer: number | null = null
+    const check = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/health`)
+        if (!res.ok) throw new Error()
+        const json = await res.json()
+        if (cancelled) return
+        if (json.status === 'wait_user_action') {
+          navigate('/install')
+          return
+        }
+        if (json.status === 'loading' && json.download) {
+          // 이미 다운로드 진행 중인 경우에도 /install로
+          navigate('/install')
+          return
+        }
+      } catch {
+        // 아직 백엔드 미기동
+      }
+      if (!cancelled) {
+        timer = window.setTimeout(check, 1500)
+      }
+    }
+    check()
+    return () => {
+      cancelled = true
+      if (timer !== null) window.clearTimeout(timer)
+    }
+  }, [navigate])
+
   useEffect(() => {
     console.log('[Loading] mount, window.electron =', !!window.electron)
+    // 사용자가 /install 등으로 이동한 뒤에도 IPC 리스너가 leak되어 strange navigation을
+    // 일으키는 것을 막기 위한 guard. preload가 cleanup API를 노출하지 않으므로 hash로 체크.
+    const onLoadingRoute = () => window.location.hash.startsWith('#/loading')
+
     // Electron 환경
     if (window.electron) {
       window.electron.onBackendLog((log: string) => {
+        if (!onLoadingRoute()) return
         const lines = log.split('\n').filter((l) => l.trim())
         setLogs((prev) => [...prev, ...lines].slice(-50))
       })
 
       window.electron.onBackendProgress((p: number) => {
+        if (!onLoadingRoute()) return
         console.log('[Loading] onBackendProgress', p)
         setOverallProgress(p)
       })
 
       window.electron.onBackendModelStatus((m: ModelMap) => {
+        if (!onLoadingRoute()) return
         console.log('[Loading] onBackendModelStatus', m)
         setModels((prev) => ({ ...prev, ...m }))
       })
 
       window.electron.onBackendReady((ready: boolean) => {
+        if (!onLoadingRoute()) return
         console.log('[Loading] onBackendReady', ready)
         if (ready) {
           navigate('/lecturer')
@@ -153,6 +195,7 @@ function Loading() {
 
       // 마운트 직후 캐시 상태 동기화 — IPC 이벤트가 mount 전에 발생해 유실됐을 경우 대비
       window.electron.getBackendState().then((state) => {
+        if (!onLoadingRoute()) return
         console.log('[Loading] getBackendState →', state)
         if (state.models) setModels((prev) => ({ ...prev, ...state.models! }))
         if (typeof state.progress === 'number') setOverallProgress(state.progress)

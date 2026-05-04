@@ -376,6 +376,12 @@ app.whenReady().then(() => {
     return _lastState
   })
 
+  // 앱 종료 — 설치 마법사의 "취소" / "앱 종료" 버튼에서 호출
+  ipcMain.on('quit-app', () => {
+    devLog('renderer quit-app 요청 → app.quit()')
+    app.quit()
+  })
+
   // 화면 공유 picker용 — desktopCapturer로 화면/창 목록 + 썸네일 반환.
   // renderer에서 ID 선택 후 getUserMedia(chromeMediaSourceId)로 stream 획득.
   ipcMain.handle('get-screen-sources', async () => {
