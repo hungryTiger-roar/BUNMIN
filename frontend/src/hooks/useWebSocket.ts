@@ -23,10 +23,16 @@ interface UseWebSocketOptions {
   onCursor?: (cursor: CursorMessage) => void
   /** 번역 텍스트 수신 시 콜백 (TTS 합성 등) */
   onTranslation?: (text: string) => void
+  /** WebRTC offer 수신 (수강자 전용) */
+  onWebRtcOffer?: (sdp: RTCSessionDescriptionInit) => void
+  /** WebRTC answer 수신 (강의자 전용) — sender = student id */
+  onWebRtcAnswer?: (sender: string, sdp: RTCSessionDescriptionInit) => void
+  /** WebRTC ICE candidate 수신 — 강의자는 sender(학생id), 수강자는 sender=null */
+  onWebRtcIce?: (sender: string | null, candidate: RTCIceCandidateInit) => void
 }
 
 export function useWebSocket(url: string, role: Role = 'student', options: UseWebSocketOptions = {}) {
-  const { onCursor, onTranslation } = options
+  const { onCursor, onTranslation, onWebRtcOffer, onWebRtcAnswer, onWebRtcIce } = options
   const socketRef = useRef<WebSocket | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
@@ -64,6 +70,13 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
 
   const onTranslationRef = useRef(onTranslation)
   useEffect(() => { onTranslationRef.current = onTranslation }, [onTranslation])
+
+  const onWebRtcOfferRef = useRef(onWebRtcOffer)
+  useEffect(() => { onWebRtcOfferRef.current = onWebRtcOffer }, [onWebRtcOffer])
+  const onWebRtcAnswerRef = useRef(onWebRtcAnswer)
+  useEffect(() => { onWebRtcAnswerRef.current = onWebRtcAnswer }, [onWebRtcAnswer])
+  const onWebRtcIceRef = useRef(onWebRtcIce)
+  useEffect(() => { onWebRtcIceRef.current = onWebRtcIce }, [onWebRtcIce])
 
   // 슬라이드 페이지 로드
   const loadSlidePages = useCallback(async (slideId: string) => {
@@ -176,11 +189,32 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
         break
 
       case 'screen':
-        // 화면 공유 프레임 수신
+        // 구버전 호환 (사용 안 함 — WebRTC로 대체)
+        break
+
+      case 'webrtc_offer':
         if (role === 'student') {
-          const imageData = data.image as string
-          setCurrentScreen(imageData)
-          setPresentationMode('screen')
+          onWebRtcOfferRef.current?.(data.sdp as RTCSessionDescriptionInit)
+        }
+        break
+
+      case 'webrtc_answer':
+        if (role === 'lecturer') {
+          onWebRtcAnswerRef.current?.(
+            data.sender as string,
+            data.sdp as RTCSessionDescriptionInit,
+          )
+        }
+        break
+
+      case 'webrtc_ice':
+        if (role === 'student') {
+          onWebRtcIceRef.current?.(null, data.candidate as RTCIceCandidateInit)
+        } else if (role === 'lecturer') {
+          onWebRtcIceRef.current?.(
+            data.sender as string,
+            data.candidate as RTCIceCandidateInit,
+          )
         }
         break
 
@@ -253,6 +287,11 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     } else {
       console.warn('[WebSocket] 연결되지 않음')
     }
+  }, [])
+
+  // 화면 공유 등 대용량 송신 시 백프레셔 판단용
+  const getBufferedAmount = useCallback(() => {
+    return socketRef.current?.bufferedAmount ?? 0
   }, [])
 
   const sendChat = useCallback((text: string) => {
@@ -349,5 +388,6 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     sendChat,
     sendLectureTitle,
     sendLecturerName,
+    getBufferedAmount,
   }
 }
