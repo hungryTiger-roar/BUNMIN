@@ -124,6 +124,39 @@ run('npm install --prefix frontend')
   if (!anyMissing) console.log('  VAD 모델 파일 준비 완료')
 }
 
+// 2-b. piper-tts-web WASM 런타임 복사 — 수강자 브라우저 TTS 동작에 필수
+//      node_modules/piper-tts-web/dist/{onnx,piper,worker} → frontend/public/
+//      (~110MB, 디렉토리 단위 복사. .gitignore 에 포함되어 clone 후 없음)
+{
+  const piperDist = path.join(ROOT, 'frontend', 'node_modules', 'piper-tts-web', 'dist')
+  const publicDir = path.join(ROOT, 'frontend', 'public')
+  const piperDirs = ['onnx', 'piper', 'worker']
+
+  if (!fs.existsSync(piperDist)) {
+    console.warn('  ⚠️  piper-tts-web 소스 디렉토리 없음 (npm install 누락? frontend/node_modules 확인)')
+  } else {
+    let anyMissing = false
+    for (const d of piperDirs) {
+      const dst = path.join(publicDir, d)
+      const src = path.join(piperDist, d)
+      if (fs.existsSync(dst)) {
+        console.log(`  ${d}/ 이미 존재 → 스킵`)
+        continue
+      }
+      if (!fs.existsSync(src)) {
+        console.warn(`  ⚠️  ${d}/ 소스 없음 (piper-tts-web 패키지 구조 변경 가능성)`)
+        anyMissing = true
+        continue
+      }
+      // 재귀 복사
+      fs.mkdirSync(dst, { recursive: true })
+      fs.cpSync(src, dst, { recursive: true })
+      console.log(`  ✓ ${d}/ 복사 완료`)
+    }
+    if (!anyMissing) console.log('  piper-tts-web WASM 파일 준비 완료 (수강자 TTS)')
+  }
+}
+
 // 3. .env 파일
 step(3, TOTAL, '환경 설정 파일 확인...')
 const envPath        = path.join(ROOT, '.env')
@@ -224,6 +257,14 @@ step(7, TOTAL, '설치 검증...')
   for (const f of ['silero_vad_legacy.onnx', 'silero_vad_v5.onnx']) {
     if (!fs.existsSync(path.join(publicDir, f))) {
       console.error(`  ✗ 누락: frontend/public/${f}`)
+      ok = false
+    }
+  }
+
+  // piper-tts-web WASM 파일 확인 (수강자 TTS 동작 필수)
+  for (const d of ['onnx', 'piper', 'worker']) {
+    if (!fs.existsSync(path.join(publicDir, d))) {
+      console.error(`  ✗ 누락: frontend/public/${d}/ (수강자 TTS 미동작)`)
       ok = false
     }
   }
