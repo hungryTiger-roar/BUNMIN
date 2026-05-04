@@ -25,7 +25,8 @@ node_modules/
 # VAD 런타임 모델 — 작은 크기(~2MB), 프론트엔드 필수 파일이므로 예외
 !frontend/public/silero_vad_*.onnx
 
-# 다운로드 모델 디렉토리
+# 다운로드 모델 디렉토리 — 전체 ignore
+# (모델은 npm run setup 에서 받음, git 추적 X)
 models/
 
 # 업로드 파일 (슬라이드, 이미지) — 항상 프로젝트 루트에 생성됨
@@ -42,6 +43,11 @@ uploads/
 .coverage
 htmlcov/
 
+# 평가
+evaluation/datasets/
+evaluation/datasets.zip
+evaluation/results/
+
 # IDE
 .vscode/
 .idea/
@@ -50,11 +56,18 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# 평가용 다운로드 PDF
+evaluation/pdfs/
+evaluation/datasets/ocr_pdfs/
+
 # 용어집 캐시 (glossary_builder.py가 런타임에 자동 생성)
 glossary/
 
 # Claude
 .claude/
+
+# 자동 생성 API 문서
+docs/api/
 
 # 테스트 파일 및 출력물 (프로젝트 루트)
 test_*.py
@@ -64,11 +77,22 @@ test_*.json
 test_*.txt
 compare_*.py
 create_*.py
+inference_vlm.py
 run_test.bat
 check_p*.png
 *_regions.json
 *_translated*.json
 *_translated*.png
 
+# 레거시 스크립트 (v3 사용)
+translate_slide.py
+translate_slide_v2.py
+
 # 프론트엔드 빌드 캐시
 frontend/.vite/
+
+# 로컬 모델 캐시 (백엔드 서비스 자체 캐시)
+backend/app/services/models/
+
+# 로컬 데이터셋
+datasets/

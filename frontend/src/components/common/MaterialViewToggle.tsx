@@ -2,13 +2,19 @@ import { useLectureStore } from '@/stores/lectureStore'
 
 interface MaterialViewToggleProps {
   className?: string
+  locale?: 'en' | 'ko'
 }
 
-function MaterialViewToggle({ className = '' }: MaterialViewToggleProps) {
+function MaterialViewToggle({ className = '', locale = 'en' }: MaterialViewToggleProps) {
+  // selector 패턴 — 무관 store 변화로 컴포넌트 재렌더 폭주 방지 (slide flicker 수정)
   const materialMode = useLectureStore((s) => s.materialMode)
   const setMaterialMode = useLectureStore((s) => s.setMaterialMode)
   const toggle = () =>
     setMaterialMode(materialMode === 'original' ? 'translated' : 'original')
+
+  const labels = locale === 'ko'
+    ? { original: '원본', translated: '번역' }
+    : { original: 'Original', translated: 'Translated' }
 
   return (
     <button
@@ -23,7 +29,7 @@ function MaterialViewToggle({ className = '' }: MaterialViewToggleProps) {
             : 'text-white/70'
         }`}
       >
-        원본
+        {labels.original}
       </span>
       <span
         className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
@@ -32,7 +38,7 @@ function MaterialViewToggle({ className = '' }: MaterialViewToggleProps) {
             : 'text-white/70'
         }`}
       >
-        번역
+        {labels.translated}
       </span>
     </button>
   )

@@ -106,7 +106,7 @@ function SlideViewer({ onPageChange, children, containerRef }: SlideViewerProps)
       )}
 
       {/* 강의자료 원본/번역 토글 (우측 상단) */}
-      <MaterialViewToggle className="absolute top-3 right-3 z-20" />
+      <MaterialViewToggle className="absolute top-3 right-3 z-20" locale="ko" />
 
       {/* 이전/다음 버튼 (호버 시 표시) */}
       <button
