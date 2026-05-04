@@ -127,6 +127,11 @@ class ConnectionManager:
             print(f"[WS] 강의자 비정상 종료, 자막 세션 자동 저장: {ended_id}")
             self.current_session_id = None
             self.is_lecture_started = False
+        # 슬라이드/페이지/발표모드 상태 리셋 — 다음 강의자 재연결 시 stale state 방지
+        self.current_slide_id = None
+        self.current_page = 1
+        self.presentation_mode = "slide"
+        self.is_paused = False
         print("[WS] 강의자 연결 해제")
 
     def disconnect_student(self, websocket: WebSocket):
@@ -427,6 +432,10 @@ async def handle_lecturer(websocket: WebSocket):
                     "session_id": ended_id,
                 })
                 manager.current_session_id = None
+                # 슬라이드/페이지/발표모드 상태 리셋 — 다음 강의 시작 시 stale state 방지
+                manager.current_slide_id = None
+                manager.current_page = 1
+                manager.presentation_mode = "slide"
 
             elif msg_type == "lecture_pause":
                 manager.is_paused = True

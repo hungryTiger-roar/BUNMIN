@@ -88,25 +88,24 @@ function Student() {
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const chatInputRef = useRef<HTMLInputElement>(null)
 
-  const {
-    slideStatus,
-    currentPage,
-    totalPages,
-    slidePages,
-    isLectureStarted,
-    isPaused,
-    presentationMode,
-    currentScreen,
-    subtitles,
-    studentName,
-    studentCount,
-    chatMessages,
-    participants,
-    lectureTitle,
-    slideFilename,
-    sessionId,
-    materialMode,
-  } = useLectureStore()
+  // focused selectors — 각 필드 변경 시 정확하게 리렌더 트리거 (특히 subtitles 즉시 반영)
+  const slideStatus = useLectureStore((s) => s.slideStatus)
+  const currentPage = useLectureStore((s) => s.currentPage)
+  const totalPages = useLectureStore((s) => s.totalPages)
+  const slidePages = useLectureStore((s) => s.slidePages)
+  const isLectureStarted = useLectureStore((s) => s.isLectureStarted)
+  const isPaused = useLectureStore((s) => s.isPaused)
+  const presentationMode = useLectureStore((s) => s.presentationMode)
+  const currentScreen = useLectureStore((s) => s.currentScreen)
+  const subtitles = useLectureStore((s) => s.subtitles)
+  const studentName = useLectureStore((s) => s.studentName)
+  const studentCount = useLectureStore((s) => s.studentCount)
+  const chatMessages = useLectureStore((s) => s.chatMessages)
+  const participants = useLectureStore((s) => s.participants)
+  const lectureTitle = useLectureStore((s) => s.lectureTitle)
+  const slideFilename = useLectureStore((s) => s.slideFilename)
+  const sessionId = useLectureStore((s) => s.sessionId)
+  const materialMode = useLectureStore((s) => s.materialMode)
 
   const displayTitle =
     lectureTitle.trim() ||
@@ -310,14 +309,14 @@ function Student() {
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="bg-surface rounded-2xl shadow-2xl p-6 w-[min(90%,400px)] flex flex-col gap-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-onSurface">Save lecture subtitles</h2>
+              <h2 className="text-lg font-semibold text-onSurface">Save Lecture Subtitles</h2>
               <button
                 type="button"
                 onClick={() => setShowTranscriptModal(false)}
                 className="w-7 h-7 rounded-full flex items-center justify-center text-onSurface/60 hover:bg-black/10 transition-colors"
               >✕</button>
             </div>
-            <p className="text-sm text-onSurface/70">Download the recognized subtitles<br />from the lecture as a file.</p>
+            <p className="text-sm text-onSurface/70">Download the subtitles recognized during the lecture.</p>
             <div className="flex flex-col gap-2">
               <a
                 href={`${API_BASE}/transcripts/${sessionId}/download?format=txt`}
@@ -341,7 +340,7 @@ function Student() {
       {/* 헤더 */}
       <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-primaryContainer bg-surface backdrop-blur-md shadow-sm flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          <h1 className="text-lg font-special-gothic tracking-wide">Aunion AI</h1>
+          <h1 className="text-xl font-special-gothic tracking-wide">Aunion AI</h1>
           {isLectureStarted && !isPaused && (
             <span className="flex items-center gap-1.5 px-2.5 py-1 bg-error text-white text-xs font-semibold rounded-full shadow-lg shadow-error/30">
               <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
@@ -357,7 +356,7 @@ function Student() {
               Paused
             </span>
           )}
-          {slideStatus === 'ready' && totalPages > 0 && (
+          {isLectureStarted && slideStatus === 'ready' && totalPages > 0 && (
             <div className="flex items-center gap-1.5 px-3 py-1 bg-primaryContainer/60 rounded-full text-sm text-onSurface">
               <span className="font-medium">{currentPage}</span>
               <span className="opacity-60">/</span>
@@ -446,8 +445,8 @@ function Student() {
             {/* 강의자 커서 오버레이 (ref 기반, 리렌더링 없음) */}
             <StudentCursorOverlay spotlightRef={spotlightRef} />
 
-            {/* 강의자료 원본/번역 토글 (슬라이드 표시 중일 때만) */}
-            {presentationMode === 'slide' && slideStatus === 'ready' && slideImageUrl && (
+            {/* 강의자료 원본/번역 토글 (강의 시작 후 슬라이드 표시 중일 때만) */}
+            {isLectureStarted && presentationMode === 'slide' && slideStatus === 'ready' && slideImageUrl && (
               <MaterialViewToggle className={`absolute top-3 z-30 right-3`} />
             )}
 
@@ -473,14 +472,14 @@ function Student() {
               </div>
             )}
 
-            {/* 슬라이드/화면공유 */}
-            {presentationMode === 'screen' && currentScreen ? (
+            {/* 슬라이드/화면공유 — 강의 시작 후에만 노출 */}
+            {isLectureStarted && presentationMode === 'screen' && currentScreen ? (
               <img
                 src={`data:image/jpeg;base64,${currentScreen}`}
                 alt="화면 공유"
                 className="w-full h-full object-contain"
               />
-            ) : slideStatus === 'ready' && slideImageUrl ? (
+            ) : isLectureStarted && slideStatus === 'ready' && slideImageUrl ? (
               <img
                 key={`${currentPage}`}
                 src={slideImageUrl}
