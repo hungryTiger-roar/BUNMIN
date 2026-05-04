@@ -1,8 +1,16 @@
 const { execSync, execFileSync } = require('child_process')
 const fs = require('fs')
+const os = require('os')
 const path = require('path')
 
 const ROOT = path.resolve(__dirname, '..')
+
+// Windows cmd 의 기본 코드페이지가 cp949 (한국어) 라 한글 console.log 가
+// mojibake 로 출력되는 경우 방지. attached console 의 codepage 를 UTF-8 로 변경.
+// (PowerShell / Anaconda Prompt / Windows Terminal 은 보통 UTF-8 이라 무영향)
+if (process.platform === 'win32') {
+  try { execSync('chcp 65001', { stdio: 'ignore' }) } catch { /* ignore */ }
+}
 
 function run(cmd, opts = {}) {
   execSync(cmd, { stdio: 'inherit', cwd: ROOT, ...opts })
@@ -71,12 +79,74 @@ console.log('========================================')
 console.log('  Aunion AI 환경 설정')
 console.log('========================================')
 
+// ── conda 자동 탐색 ────────────────────────────────────────────────────────
+// PowerShell / cmd / git bash / Anaconda Prompt 등 셸별 PATH 차이 흡수.
+// PATH 에 conda 가 없으면 표준 설치 위치를 검색해 process.env.PATH 에 prepend.
+// → 이후 execSync/execFileSync 가 spawn 하는 자식 프로세스에 모두 상속됨.
+function ensureCondaInPath() {
+  if (runOutput('conda --version')) return  // 이미 PATH 에 있음
+
+  // CONDA_EXE: 일부 conda init 스크립트가 PATH 등록 없이 이것만 설정해두는 경우 있음
+  if (process.env.CONDA_EXE && fs.existsSync(process.env.CONDA_EXE)) {
+    const dir = path.dirname(process.env.CONDA_EXE)
+    process.env.PATH = `${dir}${path.delimiter}${process.env.PATH || ''}`
+    console.log(`  conda 자동 탐색: CONDA_EXE → ${dir}`)
+    return
+  }
+
+  const home = os.homedir()
+  const candidates = process.platform === 'win32'
+    ? [
+        path.join(home, 'miniforge3', 'Scripts'),
+        path.join(home, 'miniconda3', 'Scripts'),
+        path.join(home, 'anaconda3', 'Scripts'),
+        path.join(home, 'AppData', 'Local', 'miniforge3', 'Scripts'),
+        path.join(home, 'AppData', 'Local', 'miniconda3', 'Scripts'),
+        'C:\\ProgramData\\miniforge3\\Scripts',
+        'C:\\ProgramData\\Anaconda3\\Scripts',
+        'C:\\miniforge3\\Scripts',
+        'C:\\miniconda3\\Scripts',
+        'C:\\Anaconda3\\Scripts',
+      ]
+    : [
+        path.join(home, 'miniforge3', 'bin'),
+        path.join(home, 'miniconda3', 'bin'),
+        path.join(home, 'anaconda3', 'bin'),
+        '/opt/miniforge3/bin',
+        '/opt/miniconda3/bin',
+        '/opt/anaconda3/bin',
+        '/usr/local/miniforge3/bin',
+        '/usr/local/miniconda3/bin',
+        '/usr/local/anaconda3/bin',
+      ]
+
+  const exeName = process.platform === 'win32' ? 'conda.exe' : 'conda'
+  for (const dir of candidates) {
+    if (fs.existsSync(path.join(dir, exeName))) {
+      process.env.PATH = `${dir}${path.delimiter}${process.env.PATH || ''}`
+      console.log(`  conda 자동 탐색: ${dir} 을 PATH 에 추가`)
+      return
+    }
+  }
+}
+
+ensureCondaInPath()
+
 // ── 사전 확인: conda ───────────────────────────────────────────────────────
 const condaVersion = runOutput('conda --version')
 if (!condaVersion) {
   console.error('\n[오류] conda를 찾을 수 없습니다.')
-  console.error('  Miniconda 또는 Anaconda를 먼저 설치해주세요:')
+  console.error('  Miniconda 또는 Anaconda를 표준 위치에 설치해주세요:')
   console.error('  https://docs.conda.io/en/latest/miniconda.html')
+  console.error('')
+  console.error('  비표준 위치에 설치한 경우 PATH 에 직접 추가 후 재실행:')
+  if (process.platform === 'win32') {
+    console.error('    PowerShell : $env:Path = "<conda경로>\\Scripts;$env:Path"')
+    console.error('    cmd        : set PATH=<conda경로>\\Scripts;%PATH%')
+    console.error('    git bash   : export PATH=<conda경로>/Scripts:$PATH')
+  } else {
+    console.error('    bash/zsh   : export PATH=<conda경로>/bin:$PATH')
+  }
   process.exit(1)
 }
 console.log(`\n  conda 확인: ${condaVersion}`)
