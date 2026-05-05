@@ -54,7 +54,7 @@ hiddenimports = [
     'soundfile',
     # ASR - openai/whisper-large-v3-turbo (CTranslate2 int8 변환본)
     'accelerate',
-    # NMT-ASR - Helsinki-NLP/opus-mt-ko-en (CTranslate2 CT2 우선, HF 폴백)
+    # NMT-ASR - facebook/nllb-200-distilled-600M (CTranslate2 CT2 우선, HF 폴백)
     'sentencepiece',
     'PIL',
     # Slide OCR + VLM (Surya OCR + Qwen2.5-VL 번역)

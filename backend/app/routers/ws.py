@@ -125,6 +125,12 @@ class ConnectionManager:
         if self.is_lecture_started and self.current_session_id:
             ended_id = transcripts.end_session(self.current_session_id)
             print(f"[WS] 강의자 비정상 종료, 자막 세션 자동 저장: {ended_id}")
+            # NMT 용어집도 해제 (잔존 매핑 방지)
+            if _nmt_service:
+                try:
+                    _nmt_service.set_glossary(None)
+                except Exception:
+                    pass
             self.current_session_id = None
             self.is_lecture_started = False
         # 슬라이드/페이지/발표모드 상태 리셋 — 다음 강의자 재연결 시 stale state 방지
@@ -410,6 +416,14 @@ async def handle_lecturer(websocket: WebSocket):
                 manager.current_session_id = transcripts.start_session(
                     manager.current_slide_id
                 )
+                # 슬라이드 도메인 용어집 → 실시간 NMT 에 주입 (도메인 용어 환각 억제)
+                if _nmt_service and manager.current_slide_id:
+                    try:
+                        from app.routers.slides import get_slide_glossary
+                        glossary = get_slide_glossary(manager.current_slide_id)
+                        _nmt_service.set_glossary(glossary)
+                    except Exception as e:
+                        print(f"[WS] 용어집 주입 실패 (무시): {e}")
                 print(f"[WS] 강의 시작: {manager.current_slide_id}, 모드: {manager.presentation_mode}, 세션: {manager.current_session_id}")
                 # 강의자에게 session_id 회신 (다운로드 시 필요)
                 await websocket.send_json({
@@ -430,6 +444,12 @@ async def handle_lecturer(websocket: WebSocket):
             elif msg_type == "lecture_end":
                 manager.is_lecture_started = False
                 manager.is_paused = False
+                # NMT 용어집 해제 — 다음 강의에서 잔존 용어가 오작용하지 않도록
+                if _nmt_service:
+                    try:
+                        _nmt_service.set_glossary(None)
+                    except Exception:
+                        pass
                 # 자막 세션 종료 — jsonl → 최종 json 병합
                 ended_id = transcripts.end_session(manager.current_session_id)
                 print(f"[WS] 강의 종료 (세션: {ended_id})")
@@ -567,6 +587,16 @@ async def process_audio(message: dict):
 
     try:
         t_start = time.perf_counter()
+
+        # 일시정지 race 차단 — 강의자가 발화 중간에 [일시정지] 누른 직후
+        # 이미 in-flight 상태였던 audio chunk 가 backend 에 도착하는 케이스 대응.
+        # frontend handleAudioData 의 isPaused 가드는 "다음" chunk 부터 차단하므로
+        # 호흡 시점에 떠있던 마지막 chunk 1개가 그대로 도착함 → ASR/NMT 거쳐 학생에게
+        # 자막 1줄 + TTS 음성 1번 흘러나가 일시정지 의도와 어긋남.
+        # 여기서 backend state(is_paused) 기준으로 한 번 더 차단해 UI/동작 일관성 보장.
+        if manager.is_paused:
+            return
+
         sent_at = message.get("sentAt")
 
         audio_b64 = message.get("audio", "") or message.get("data", "")
