@@ -48,7 +48,7 @@ conda 환경 생성(Python 3.11), Python 패키지 설치, AI 모델 다운로�
 HF_TOKEN=
 
 ASR_MODEL=models/whisper-large-v3-turbo-ct2-int8
-NMT_ASR_MODEL=Helsinki-NLP/opus-mt-ko-en
+NMT_ASR_MODEL=facebook/nllb-200-distilled-600M
 OCR_MODEL=surya
 
 ASR_DEVICE=cuda

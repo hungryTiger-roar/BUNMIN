@@ -30,6 +30,9 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
   const socketRef = useRef<WebSocket | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
+  // 의도적 disconnect 표시 — onclose 가 reconnect 타이머를 잡지 않도록 차단.
+  // (StrictMode dev cleanup → disconnect → onclose 재예약 → ghost WS 생성 방지)
+  const intentionalCloseRef = useRef(false)
 
   // 각 setter를 개별 selector로 구독 — Zustand action은 stable 이므로 재렌더 트리거하지 않음
   // (전체 destructure 시 store 어떤 필드가 바뀌어도 useWebSocket 재렌더 → send/connect ref 흔들림)
@@ -304,6 +307,12 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
       setIsConnected(false)
       setConnected(false)
 
+      // 의도적 close 면 reconnect 안 함 (cleanup 직후 ghost WS 방지)
+      if (intentionalCloseRef.current) {
+        intentionalCloseRef.current = false
+        return
+      }
+
       reconnectTimeoutRef.current = setTimeout(() => {
         connect()
       }, 3000)
@@ -326,6 +335,7 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
   }, [url, role, setConnected, handleMessage])
 
   const disconnect = useCallback(() => {
+    intentionalCloseRef.current = true   // onclose 의 reconnect 차단
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current)
     }
