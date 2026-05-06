@@ -3,6 +3,7 @@
 PDF 업로드 및 전처리 (OCR + VLM 번역)
 """
 import asyncio
+import hashlib
 import json
 import shutil
 import sys
@@ -42,6 +43,10 @@ IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 # 번역된 이미지 저장 경로
 TRANSLATED_DIR = _REPO_DIR / "uploads" / "translated"
 TRANSLATED_DIR.mkdir(parents=True, exist_ok=True)
+
+# 라이브러리 메타데이터 저장 경로 — PDF 디렉토리와 분리해서 깔끔하게 관리
+LIBRARY_DIR = _REPO_DIR / "uploads" / "library"
+LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
 
 # 처리 상태 저장 (메모리, 실제 서비스에서는 Redis 사용 권장)
 slide_status: dict[str, dict] = {}
@@ -87,6 +92,9 @@ def _recover_glossary_from_cache(meta: dict) -> dict[str, str]:
         except Exception:
             continue
     return {}
+
+# 콘텐츠 해시(SHA256) → 기존 slide_id 매핑 — 동일 파일 재업로드 dedup용
+_hash_to_slide_id: dict[str, str] = {}
 
 
 class SlideStatus(BaseModel):
@@ -236,7 +244,7 @@ class RenameSlideResponse(BaseModel):
 
 # ─── 메타데이터 저장 / 라이브러리 초기화 ─────────────────────────────────────
 def _meta_path(slide_id: str) -> Path:
-    return UPLOAD_DIR / f"{slide_id}.meta.json"
+    return LIBRARY_DIR / f"{slide_id}.meta.json"
 
 
 def save_metadata(slide_id: str) -> None:
@@ -251,6 +259,8 @@ def save_metadata(slide_id: str) -> None:
         "uploaded_at": s.get("uploaded_at") or datetime.now().isoformat(timespec="seconds"),
         "total_pages": s.get("total_pages", 0),
         "status": s.get("status", "completed"),
+        "content_hash": s.get("content_hash"),  # 재업로드 dedup용 (없을 수도 있음 — migrate된 레거시)
+        "last_page": s.get("last_page", 1),  # 마지막 본 페이지 (1-indexed) — 다음 로드 시 그 페이지부터 시작
         "page_data": slide_data.get(slide_id, []),
         # 실시간 NMT 환각 억제용 도메인 용어집 — 슬라이드 재로드 시 복원됨
         "glossary": slide_glossary.get(slide_id, {}),
@@ -260,15 +270,40 @@ def save_metadata(slide_id: str) -> None:
             json.dump(meta, f, ensure_ascii=False, indent=2)
         # uploaded_at을 메모리에도 동기화 (이후 라이브러리 응답에서 일관성 유지)
         s["uploaded_at"] = meta["uploaded_at"]
+        # 해시 → ID 맵 갱신 (다음 동일 파일 업로드 시 dedup 동작하도록)
+        ch = meta.get("content_hash")
+        if ch:
+            _hash_to_slide_id[ch] = slide_id
     except Exception as e:
         print(f"[Slides] 메타데이터 저장 실패: {slide_id} - {e}")
+
+
+def update_last_page(slide_id: str, page: int) -> None:
+    """슬라이드의 마지막 본 페이지를 메타에 저장 — 다음 /load 시 해당 페이지부터 시작.
+    페이지 변경 시마다 호출됨 (작은 파일이라 부담 적음)."""
+    if page < 1:
+        return
+    s = slide_status.get(slide_id)
+    if s is not None:
+        s["last_page"] = page
+    meta_path = _meta_path(slide_id)
+    if not meta_path.exists():
+        return  # 처리 안 끝난 슬라이드면 메타 없음 — 스킵
+    try:
+        with open(meta_path, encoding="utf-8") as f:
+            meta = json.load(f)
+        meta["last_page"] = page
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[Slides] last_page 저장 실패: {slide_id} - {e}")
 
 
 def init_slide_library() -> None:
     """서버 시작 시 기존 메타파일 스캔 → 메모리 목록 복원 (page_data는 load 시 지연 로드)."""
     print("[Slides] 강의자료 라이브러리 초기화...")
     count = 0
-    for meta_file in UPLOAD_DIR.glob("*.meta.json"):
+    for meta_file in LIBRARY_DIR.glob("*.meta.json"):
         try:
             with open(meta_file, encoding="utf-8") as f:
                 meta = json.load(f)
@@ -286,7 +321,13 @@ def init_slide_library() -> None:
                 "error": None,
                 "filename": meta.get("filename", f"{sid}.pdf"),
                 "uploaded_at": meta.get("uploaded_at"),
+                "content_hash": meta.get("content_hash"),
+                "last_page": meta.get("last_page", 1),
             }
+            # 해시 맵 복원 (재업로드 dedup용)
+            ch = meta.get("content_hash")
+            if ch:
+                _hash_to_slide_id[ch] = sid
             count += 1
         except Exception as e:
             print(f"[Slides] 메타 로드 실패: {meta_file.name} - {e}")
@@ -341,7 +382,7 @@ def repair_legacy_metadata() -> None:
     """이전에 마이그레이션된 meta.json 중 page_data가 비어있는 항목 보정.
     (이전 버전의 마이그레이션은 page_data를 비어둬서 슬라이드 로드 시 0페이지로 표시됐음)"""
     repaired = 0
-    for meta_file in UPLOAD_DIR.glob("*.meta.json"):
+    for meta_file in LIBRARY_DIR.glob("*.meta.json"):
         try:
             with open(meta_file, encoding="utf-8") as f:
                 meta = json.load(f)
@@ -392,13 +433,24 @@ async def upload_slide(
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "PDF 파일만 업로드 가능합니다")
 
+    content = await file.read()
+
+    # 동일 파일 재업로드 dedup — SHA256 해시 일치 시 기존 slide_id 재사용 (처리 스킵)
+    content_hash = hashlib.sha256(content).hexdigest()
+    existing_id = _hash_to_slide_id.get(content_hash)
+    if existing_id and (UPLOAD_DIR / f"{existing_id}.pdf").exists():
+        print(f"[Slides] 동일 파일 재업로드 감지 → 기존 slide_id 재사용: {existing_id} (filename={file.filename})")
+        return {
+            "slide_id": existing_id,
+            "message": "동일 파일이 이미 처리되어 있어 재사용합니다",
+            "reused": True,
+        }
+
     # 고유 ID 생성
     slide_id = str(uuid.uuid4())[:8]
 
     # 파일 저장
     save_path = UPLOAD_DIR / f"{slide_id}.pdf"
-    content = await file.read()
-
     with open(save_path, "wb") as f:
         f.write(content)
 
@@ -417,12 +469,13 @@ async def upload_slide(
         "error": None,
         "filename": file.filename or f"{slide_id}.pdf",
         "uploaded_at": datetime.now().isoformat(timespec="seconds"),
+        "content_hash": content_hash,
     }
 
     # 백그라운드 처리 시작
     background_tasks.add_task(process_slide, slide_id, save_path)
 
-    return {"slide_id": slide_id, "message": "업로드 완료, 처리 시작"}
+    return {"slide_id": slide_id, "message": "업로드 완료, 처리 시작", "reused": False}
 
 
 @router.get("/list")
@@ -469,8 +522,19 @@ async def get_status(slide_id: str) -> SlideStatus:
 @router.get("/pages/{slide_id}")
 async def get_pages(slide_id: str):
     """처리된 페이지 데이터 조회"""
+    # 메모리에 없으면 디스크 meta.json에서 lazy-load — 재시작 후 /load 안 거치고 바로 /pages 호출 시 안전망
     if slide_id not in slide_data:
-        raise HTTPException(404, "슬라이드를 찾을 수 없습니다")
+        meta_path = _meta_path(slide_id)
+        if meta_path.exists():
+            try:
+                with open(meta_path, encoding="utf-8") as f:
+                    meta = json.load(f)
+                slide_data[slide_id] = meta.get("page_data", [])
+            except Exception as e:
+                print(f"[Slides] /pages lazy-load 실패: {slide_id} - {e}")
+                raise HTTPException(404, "슬라이드를 찾을 수 없습니다")
+        else:
+            raise HTTPException(404, "슬라이드를 찾을 수 없습니다")
 
     pages = [
         PageData(
@@ -567,7 +631,7 @@ async def download_slide(
 async def get_library(sort: str = Query("recent", pattern="^(recent|name)$")):
     """저장된 강의자료 목록 (파일 기반, 서버 재시작 후에도 유지)."""
     items = []
-    for meta_file in UPLOAD_DIR.glob("*.meta.json"):
+    for meta_file in LIBRARY_DIR.glob("*.meta.json"):
         try:
             with open(meta_file, encoding="utf-8") as f:
                 meta = json.load(f)
@@ -628,6 +692,8 @@ async def load_slide(slide_id: str):
         "error": None,
         "filename": meta.get("filename", f"{slide_id}.pdf"),
         "uploaded_at": meta.get("uploaded_at"),
+        "content_hash": meta.get("content_hash"),
+        "last_page": meta.get("last_page", 1),
     }
     slide_data[slide_id] = page_data
     # 메타에 보존된 도메인 용어집 복원 (실시간 NMT 가 사용)
@@ -654,6 +720,7 @@ async def load_slide(slide_id: str):
         "slide_id": slide_id,
         "message": "강의자료 로드 완료",
         "total_pages": total_pages,
+        "last_page": meta.get("last_page", 1),
     }
 
 

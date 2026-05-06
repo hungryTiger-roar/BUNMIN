@@ -23,16 +23,24 @@ interface UseWebSocketOptions {
   onCursor?: (cursor: CursorMessage) => void
   /** 번역 텍스트 수신 시 콜백 (TTS 합성 등) */
   onTranslation?: (text: string) => void
+  /** WebRTC offer 수신 (수강자 전용) */
+  onWebRtcOffer?: (sdp: RTCSessionDescriptionInit) => void
+  /** WebRTC answer 수신 (강의자 전용) — sender = student id */
+  onWebRtcAnswer?: (sender: string, sdp: RTCSessionDescriptionInit) => void
+  /** WebRTC ICE candidate 수신 — 강의자는 sender(학생id), 수강자는 sender=null */
+  onWebRtcIce?: (sender: string | null, candidate: RTCIceCandidateInit) => void
 }
 
 export function useWebSocket(url: string, role: Role = 'student', options: UseWebSocketOptions = {}) {
-  const { onCursor, onTranslation } = options
+  const { onCursor, onTranslation, onWebRtcOffer, onWebRtcAnswer, onWebRtcIce } = options
   const socketRef = useRef<WebSocket | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
-  // 의도적 disconnect 표시 — onclose 가 reconnect 타이머를 잡지 않도록 차단.
-  // (StrictMode dev cleanup → disconnect → onclose 재예약 → ghost WS 생성 방지)
-  const intentionalCloseRef = useRef(false)
+  // disconnect()로 의도적으로 닫힌 소켓의 onclose가 자동 재연결을 트리거하지 않게 하는 플래그.
+  // socket.close()가 비동기여서 disconnect()에서 clearTimeout을 해도 그 직후 onclose가 새 setTimeout을 설치 → 무한 재연결 루프.
+  // 부수 효과: React 18 StrictMode dev 의 합성 unmount → cleanup → disconnect → onclose 경로에서
+  // ghost reconnect 타이머가 잡혀 같은 audio 가 두 번 송출되던 race 도 함께 차단.
+  const intentionallyClosedRef = useRef(false)
 
   // 각 setter를 개별 selector로 구독 — Zustand action은 stable 이므로 재렌더 트리거하지 않음
   // (전체 destructure 시 store 어떤 필드가 바뀌어도 useWebSocket 재렌더 → send/connect ref 흔들림)
@@ -67,6 +75,13 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
 
   const onTranslationRef = useRef(onTranslation)
   useEffect(() => { onTranslationRef.current = onTranslation }, [onTranslation])
+
+  const onWebRtcOfferRef = useRef(onWebRtcOffer)
+  useEffect(() => { onWebRtcOfferRef.current = onWebRtcOffer }, [onWebRtcOffer])
+  const onWebRtcAnswerRef = useRef(onWebRtcAnswer)
+  useEffect(() => { onWebRtcAnswerRef.current = onWebRtcAnswer }, [onWebRtcAnswer])
+  const onWebRtcIceRef = useRef(onWebRtcIce)
+  useEffect(() => { onWebRtcIceRef.current = onWebRtcIce }, [onWebRtcIce])
 
   // 슬라이드 페이지 로드
   const loadSlidePages = useCallback(async (slideId: string) => {
@@ -179,11 +194,32 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
         break
 
       case 'screen':
-        // 화면 공유 프레임 수신
+        // 구버전 호환 (사용 안 함 — WebRTC로 대체)
+        break
+
+      case 'webrtc_offer':
         if (role === 'student') {
-          const imageData = data.image as string
-          setCurrentScreen(imageData)
-          setPresentationMode('screen')
+          onWebRtcOfferRef.current?.(data.sdp as RTCSessionDescriptionInit)
+        }
+        break
+
+      case 'webrtc_answer':
+        if (role === 'lecturer') {
+          onWebRtcAnswerRef.current?.(
+            data.sender as string,
+            data.sdp as RTCSessionDescriptionInit,
+          )
+        }
+        break
+
+      case 'webrtc_ice':
+        if (role === 'student') {
+          onWebRtcIceRef.current?.(null, data.candidate as RTCIceCandidateInit)
+        } else if (role === 'lecturer') {
+          onWebRtcIceRef.current?.(
+            data.sender as string,
+            data.candidate as RTCIceCandidateInit,
+          )
         }
         break
 
@@ -248,7 +284,11 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
       default:
         console.log('[WebSocket] 알 수 없는 메시지:', data.type)
     }
-  }, [role, addSubtitle, setSlideId, setSlideStatus, setCurrentPage, setLectureStarted, setPaused, setPresentationMode, setCurrentScreen, setStudentCount, addChatMessage, setParticipants, setLectureTitle, loadSlidePages])
+  }, [role, addSubtitle, setSlideId, setSlideStatus, setCurrentPage, setLectureStarted, setPaused, setPresentationMode, setCurrentScreen, setStudentCount, addChatMessage, setParticipants, setLectureTitle, setSessionId, loadSlidePages])
+
+  // handleMessage를 ref로 분리 → connect의 deps에서 제거해 어떤 selector 흔들림에도 socket이 재생성되지 않게 한다.
+  const handleMessageRef = useRef(handleMessage)
+  useEffect(() => { handleMessageRef.current = handleMessage }, [handleMessage])
 
   const send = useCallback((data: object) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
@@ -256,6 +296,11 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     } else {
       console.warn('[WebSocket] 연결되지 않음')
     }
+  }, [])
+
+  // 화면 공유 등 대용량 송신 시 백프레셔 판단용
+  const getBufferedAmount = useCallback(() => {
+    return socketRef.current?.bufferedAmount ?? 0
   }, [])
 
   const sendChat = useCallback((text: string) => {
@@ -290,6 +335,7 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     }
 
     console.log('[WebSocket] 재연결 시도...')
+    intentionallyClosedRef.current = false
     const socket = new WebSocket(url)
 
     socket.onopen = () => {
@@ -302,17 +348,12 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
       setConnected(true)
     }
 
-    socket.onclose = () => {
-      console.log('[WebSocket] 연결 종료')
+    socket.onclose = (e) => {
+      console.log(`[WebSocket] 연결 종료 (code=${e.code}, reason=${e.reason || '(none)'}, intentional=${intentionallyClosedRef.current})`)
       setIsConnected(false)
       setConnected(false)
-
-      // 의도적 close 면 reconnect 안 함 (cleanup 직후 ghost WS 방지)
-      if (intentionalCloseRef.current) {
-        intentionalCloseRef.current = false
-        return
-      }
-
+      // 의도적 close (disconnect 호출, 컴포넌트 언마운트)는 자동 재연결하지 않음
+      if (intentionallyClosedRef.current) return
       reconnectTimeoutRef.current = setTimeout(() => {
         connect()
       }, 3000)
@@ -325,19 +366,20 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     socket.onmessage = (event) => {
       try {
         const data: WebSocketMessage = JSON.parse(event.data)
-        handleMessage(data)
+        handleMessageRef.current(data)
       } catch (err) {
         console.error('[WebSocket] 메시지 파싱 실패:', err)
       }
     }
 
     socketRef.current = socket
-  }, [url, role, setConnected, handleMessage])
+  }, [url, role, setConnected])
 
   const disconnect = useCallback(() => {
-    intentionalCloseRef.current = true   // onclose 의 reconnect 차단
+    intentionallyClosedRef.current = true
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current)
+      reconnectTimeoutRef.current = undefined
     }
     socketRef.current?.close()
     socketRef.current = null
@@ -345,11 +387,15 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     setConnected(false)
   }, [setConnected])
 
+  // 마운트/언마운트 시에만 cleanup이 호출되도록 ref 패턴 + 빈 deps.
+  // disconnect를 직접 deps에 넣으면 reference가 흔들릴 때마다 cleanup → disconnect → onclose 자동재연결 무한 루프 위험.
+  const disconnectRef = useRef(disconnect)
+  useEffect(() => { disconnectRef.current = disconnect }, [disconnect])
   useEffect(() => {
     return () => {
-      disconnect()
+      disconnectRef.current()
     }
-  }, [disconnect])
+  }, [])
 
   return {
     isConnected,
@@ -359,5 +405,6 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     sendChat,
     sendLectureTitle,
     sendLecturerName,
+    getBufferedAmount,
   }
 }

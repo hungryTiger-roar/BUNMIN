@@ -23,30 +23,35 @@ export function useCursorOverlay(containerRef: React.RefObject<HTMLDivElement | 
     const container = containerRef.current
     if (!el || !container) return
 
-    // 컨테이너 내 이미지 요소 찾기
-    const img = container.querySelector('img') as HTMLImageElement | null
+    // 컨테이너 내 미디어 요소 찾기 (슬라이드 모드 = img, 화면공유 모드 = video)
+    const media = container.querySelector('img, video') as HTMLImageElement | HTMLVideoElement | null
     const containerRect = container.getBoundingClientRect()
 
     if (containerRect.width === 0 || containerRect.height === 0) return
 
-    // 이미지의 실제 렌더링 영역 계산 (object-fit: contain 고려)
+    // 이미지/비디오의 실제 렌더링 영역 계산 (object-fit: contain 고려)
     let imgOffsetX = 0
     let imgOffsetY = 0
     let imgWidth = containerRect.width
     let imgHeight = containerRect.height
 
-    if (img && img.naturalWidth && img.naturalHeight) {
-      const imgRatio = img.naturalWidth / img.naturalHeight
+    const naturalW = media instanceof HTMLImageElement ? media.naturalWidth
+                   : media instanceof HTMLVideoElement ? media.videoWidth
+                   : 0
+    const naturalH = media instanceof HTMLImageElement ? media.naturalHeight
+                   : media instanceof HTMLVideoElement ? media.videoHeight
+                   : 0
+
+    if (naturalW && naturalH) {
+      const ratio = naturalW / naturalH
       const containerRatio = containerRect.width / containerRect.height
 
-      if (imgRatio > containerRatio) {
-        // 이미지가 더 넓음 → 좌우 맞춤, 위아래 여백
+      if (ratio > containerRatio) {
         imgWidth = containerRect.width
-        imgHeight = containerRect.width / imgRatio
+        imgHeight = containerRect.width / ratio
       } else {
-        // 이미지가 더 좁음 → 위아래 맞춤, 좌우 여백
         imgHeight = containerRect.height
-        imgWidth = containerRect.height * imgRatio
+        imgWidth = containerRect.height * ratio
       }
       imgOffsetX = (containerRect.width - imgWidth) / 2
       imgOffsetY = (containerRect.height - imgHeight) / 2
@@ -95,7 +100,7 @@ export function StudentCursorOverlay({ spotlightRef }: StudentCursorOverlayProps
         background: 'radial-gradient(circle, #60A5FA66 0%, #60A5FA22 50%, #60A5FA00 70%)',
         boxShadow: `0 0 ${SPOTLIGHT_SIZE / 2}px #60A5FA88, inset 0 0 ${SPOTLIGHT_SIZE / 3}px #60A5FA44`,
         willChange: 'transform, opacity',
-        transition: 'opacity 0.1s ease-out',
+        transition: 'transform 60ms linear, opacity 0.1s ease-out',
       }}
     />
   )

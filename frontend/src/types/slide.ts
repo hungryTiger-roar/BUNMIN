@@ -19,6 +19,7 @@ export interface SlideLoadResponse {
   slide_id: string
   message: string
   total_pages: number
+  last_page?: number  // 마지막 본 페이지 (1-indexed). 없으면 1로 시작.
 }
 
 export interface SlideDeleteResponse {

@@ -24,7 +24,7 @@ const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
   { value: 'ru', label: '러시아어 (Русский)' },
 ]
 
-const AUDIO_LANG_OPTIONS = LANG_OPTIONS
+const AUDIO_LANG_OPTIONS = LANG_OPTIONS.filter((o) => o.value !== 'ko')
 const SUBTITLE_LANG_OPTIONS = LANG_OPTIONS
 
 const STYLE_LABEL: Record<SubtitleStyle, string> = {
@@ -96,7 +96,6 @@ function Student() {
   const isLectureStarted = useLectureStore((s) => s.isLectureStarted)
   const isPaused = useLectureStore((s) => s.isPaused)
   const presentationMode = useLectureStore((s) => s.presentationMode)
-  const currentScreen = useLectureStore((s) => s.currentScreen)
   const subtitles = useLectureStore((s) => s.subtitles)
   const studentName = useLectureStore((s) => s.studentName)
   const studentCount = useLectureStore((s) => s.studentCount)
@@ -156,11 +155,59 @@ function Student() {
   // slideRef를 전달해서 컨테이너 크기 기준으로 px 변환
   const { spotlightRef, onCursor } = useCursorOverlay(slideRef)
 
-  const { isConnected, connect, sendChat } = useWebSocket(
+  // 화면 공유 = WebRTC peer-to-peer (Zoom과 동일 방식)
+  // 강의자가 보낸 offer를 받아 answer 회신 → ontrack으로 MediaStream 수신 → <video srcObject>
+  const screenVideoRef = useRef<HTMLVideoElement>(null)
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null)
+  const pendingStreamRef = useRef<MediaStream | null>(null)
+  const sendRef = useRef<((data: object) => void) | null>(null)
+
+  const handleWebRtcOffer = useCallback(async (sdp: RTCSessionDescriptionInit) => {
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close()
+      peerConnectionRef.current = null
+    }
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+    })
+    peerConnectionRef.current = pc
+    pc.ontrack = (e) => {
+      const stream = e.streams[0]
+      pendingStreamRef.current = stream
+      if (screenVideoRef.current) {
+        screenVideoRef.current.srcObject = stream
+      }
+    }
+    pc.onicecandidate = (e) => {
+      if (e.candidate && sendRef.current) {
+        sendRef.current({ type: 'webrtc_ice', candidate: e.candidate.toJSON() })
+      }
+    }
+    try {
+      await pc.setRemoteDescription(sdp)
+      const answer = await pc.createAnswer()
+      await pc.setLocalDescription(answer)
+      sendRef.current?.({ type: 'webrtc_answer', sdp: pc.localDescription })
+    } catch (err) {
+      console.error('[Student] WebRTC handshake failed:', err)
+      pc.close()
+      peerConnectionRef.current = null
+    }
+  }, [])
+
+  const handleWebRtcIce = useCallback((_sender: string | null, candidate: RTCIceCandidateInit) => {
+    const pc = peerConnectionRef.current
+    if (!pc) return
+    pc.addIceCandidate(candidate).catch(() => { /* 핸드셰이크 도중 도착 가능 — 무시 */ })
+  }, [])
+
+  const { isConnected, connect, send, sendChat } = useWebSocket(
     WS_PIPELINE_URL,
     'student',
-    { onCursor, onTranslation }
+    { onCursor, onTranslation, onWebRtcOffer: handleWebRtcOffer, onWebRtcIce: handleWebRtcIce }
   )
+
+  useEffect(() => { sendRef.current = send }, [send])
 
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [volume, setVolume] = useState(70)
@@ -204,6 +251,25 @@ function Student() {
   useEffect(() => {
     connect()
   }, [connect])
+
+  // 화면 공유 모드 진입 → 이미 받아둔 stream을 video에 연결, 종료 시 PC + srcObject 정리
+  useEffect(() => {
+    const video = screenVideoRef.current
+    if (isLectureStarted && presentationMode === 'screen') {
+      // ontrack이 useEffect보다 먼저 발화했을 수 있으므로 pendingStream을 적용
+      if (video && pendingStreamRef.current) {
+        video.srcObject = pendingStreamRef.current
+      }
+      return
+    }
+    // 화면 공유 모드 이탈 → PC 종료 + video 비우기
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close()
+      peerConnectionRef.current = null
+    }
+    pendingStreamRef.current = null
+    if (video) video.srcObject = null
+  }, [isLectureStarted, presentationMode])
 
   // Start 페이지 "강의 참여" 클릭 경유 시 transient activation 살아있을 때 즉시 언락
   useEffect(() => {
@@ -443,7 +509,7 @@ function Student() {
             className={`group relative bg-black rounded-xl overflow-hidden ${theme === 'light' ? 'shadow-[0_4px_20px_rgba(0,0,0,0.08)]' : 'shadow-2xl'} h-full ${aspectClass} max-w-full`}
           >
             {/* 강의자 커서 오버레이 (ref 기반, 리렌더링 없음) */}
-            <StudentCursorOverlay spotlightRef={spotlightRef} />
+            {!isPaused && <StudentCursorOverlay spotlightRef={spotlightRef} />}
 
             {/* 강의자료 원본/번역 토글 (강의 시작 후 슬라이드 표시 중일 때만) */}
             {isLectureStarted && presentationMode === 'slide' && slideStatus === 'ready' && slideImageUrl && (
@@ -473,10 +539,12 @@ function Student() {
             )}
 
             {/* 슬라이드/화면공유 — 강의 시작 후에만 노출 */}
-            {isLectureStarted && presentationMode === 'screen' && currentScreen ? (
-              <img
-                src={`data:image/jpeg;base64,${currentScreen}`}
-                alt="화면 공유"
+            {isLectureStarted && presentationMode === 'screen' ? (
+              <video
+                ref={screenVideoRef}
+                autoPlay
+                muted
+                playsInline
                 className="w-full h-full object-contain"
               />
             ) : isLectureStarted && slideStatus === 'ready' && slideImageUrl ? (
@@ -756,7 +824,7 @@ function Student() {
                         </button>
                         <span className="font-medium">Language</span>
                       </div>
-                      <div className="grid grid-cols-3 gap-8 p-6">
+                      <div className="grid grid-cols-3 gap-6 p-6">
                         <LangColumn
                           title="Audio"
                           value={audioLang}
@@ -1050,7 +1118,7 @@ interface LangColumnProps {
 function LangColumn({ title, value, onChange, options }: LangColumnProps) {
   return (
     <div>
-      <h3 className="text-lg font-semibold mb-4 pl-6">{title}</h3>
+      <h3 className="text-base font-semibold mb-4 pl-6 h-12 leading-snug">{title}</h3>
       <ul className="space-y-2">
         {options.map((opt) => {
           const selected = value === opt.value
