@@ -15,7 +15,7 @@ import numpy as np
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
-from app.routers import transcripts
+from app.routers import transcripts, slides
 
 
 def _validate_audio(audio_bytes: bytes) -> tuple[bool, str]:
@@ -396,6 +396,9 @@ async def handle_lecturer(websocket: WebSocket):
             elif msg_type == "page_change":
                 manager.current_page = message.get("page", 1)
                 print(f"[WS] 페이지 변경: {manager.current_page}")
+                # 마지막 본 페이지를 메타에 저장 — 다음 /load 시 그 페이지부터 시작
+                if manager.current_slide_id:
+                    slides.update_last_page(manager.current_slide_id, manager.current_page)
                 await manager.broadcast_to_students({
                     "type": "page_change",
                     "slide_id": manager.current_slide_id,

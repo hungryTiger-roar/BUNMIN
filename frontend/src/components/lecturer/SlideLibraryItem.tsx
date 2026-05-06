@@ -30,6 +30,7 @@ export default function SlideLibraryItem({
   const setSlideStatus = useLectureStore((s) => s.setSlideStatus)
   const setSlideFilename = useLectureStore((s) => s.setSlideFilename)
   const setModelMode = useLectureStore((s) => s.setModelMode)
+  const setCurrentPage = useLectureStore((s) => s.setCurrentPage)
 
   useEffect(() => {
     if (editing && inputRef.current) {
@@ -50,9 +51,11 @@ export default function SlideLibraryItem({
     if (item.status !== 'completed') return
     setLoading(true)
     try {
-      await loadSlide(item.slide_id)
+      const res = await loadSlide(item.slide_id)
       setSlideId(item.slide_id)
       setSlideFilename(item.filename)
+      // 마지막 본 페이지로 복원 (없으면 1페이지)
+      setCurrentPage(res.last_page ?? 1)
       setSlideStatus('ready')
       // 새 업로드 흐름과 동일하게 실시간 모드로 전환 (강의 시작 가능 상태)
       setModelMode('switching')

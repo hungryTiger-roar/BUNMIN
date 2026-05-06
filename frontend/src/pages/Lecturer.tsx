@@ -414,6 +414,19 @@ function Lecturer() {
     setShowTranscriptModal(true)
   }
 
+  // 같은 슬라이드로 강의 다시 시작 — 새 자막 세션이 발급되어 별도 자막 파일로 저장됨
+  const restartLecture = () => {
+    setShowTranscriptModal(false)
+    startLecture()  // slideStatus/slideId/모델모드 검증은 startLecture가 알아서 처리
+  }
+
+  // 다른 강의자료 선택 — 라이브러리 페이지로 이동 (강의자 홈)
+  const exitToLibrary = () => {
+    setShowTranscriptModal(false)
+    reset()
+    navigate('/lecturer/home')
+  }
+
   const handleExit = () => {
     stopAudioCapture()
     stopScreenCapture()
@@ -789,6 +802,29 @@ function Lecturer() {
               >
                 <span>🎬</span> SRT 다운로드
               </a>
+            </div>
+            {/* 강의 종료 후 다음 동작 선택 */}
+            <div className="border-t border-onSurface/10 pt-3 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={restartLecture}
+                className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-secondaryContainer text-onSecondaryContainer font-medium hover:opacity-90 transition-opacity"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                같은 슬라이드로 다시 시작
+              </button>
+              <button
+                type="button"
+                onClick={exitToLibrary}
+                className="flex items-center justify-center gap-2 w-full py-3 rounded-xl border border-onSurface/20 text-onSurface font-medium hover:bg-onSurface/5 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+                다른 강의자료 선택
+              </button>
             </div>
           </div>
         </div>
