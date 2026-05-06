@@ -628,7 +628,7 @@ async def download_slide(
 
 # ─── 라이브러리 / 로드 / 삭제 엔드포인트 ─────────────────────────────────────
 @router.get("/library")
-async def get_library(sort: str = Query("recent", pattern="^(recent|name)$")):
+async def get_library(sort: str = Query("recent", pattern="^(recent|name|size)$")):
     """저장된 강의자료 목록 (파일 기반, 서버 재시작 후에도 유지)."""
     items = []
     for meta_file in LIBRARY_DIR.glob("*.meta.json"):
@@ -639,6 +639,12 @@ async def get_library(sort: str = Query("recent", pattern="^(recent|name)$")):
             print(f"[Slides] 메타 읽기 실패: {meta_file.name} - {e}")
             continue
         translated_pdf = TRANSLATED_DIR / f"{meta['slide_id']}_translated.pdf"
+        # 원본 PDF 크기 — 라이브러리 정렬/표시용. 파일이 없거나 stat 실패해도 0으로 폴백.
+        pdf_path = UPLOAD_DIR / f"{meta['slide_id']}.pdf"
+        try:
+            file_size = pdf_path.stat().st_size if pdf_path.exists() else 0
+        except OSError:
+            file_size = 0
         items.append({
             "slide_id": meta["slide_id"],
             "filename": meta.get("filename", f"{meta['slide_id']}.pdf"),
@@ -646,10 +652,13 @@ async def get_library(sort: str = Query("recent", pattern="^(recent|name)$")):
             "total_pages": meta.get("total_pages", 0),
             "status": meta.get("status", "completed"),
             "has_translated": translated_pdf.exists(),
+            "file_size": file_size,
         })
 
     if sort == "name":
         items.sort(key=lambda x: x["filename"].lower())
+    elif sort == "size":
+        items.sort(key=lambda x: x["file_size"], reverse=True)
     else:
         items.sort(key=lambda x: x["uploaded_at"], reverse=True)
 

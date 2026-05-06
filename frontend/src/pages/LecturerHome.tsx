@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { usePreferencesStore } from '@/stores/preferencesStore'
+import { useLectureStore } from '@/stores/lectureStore'
 
 export default function LecturerHome() {
   const navigate = useNavigate()
   const lecturerName = usePreferencesStore((s) => s.lecturerName)
   const setLecturerName = usePreferencesStore((s) => s.setLecturerName)
+  const resetLecture = useLectureStore((s) => s.reset)
 
   const [name, setName] = useState(lecturerName)
   const [error, setError] = useState('')
@@ -18,6 +20,9 @@ export default function LecturerHome() {
       return
     }
     setLecturerName(trimmed)
+    // 새 강의 진입: 이전 세션의 slideId/slideStatus 등을 깨끗하게 비움.
+    // (이렇게 안 하면 자료 미선택 상태에서도 이전에 띄웠던 자료가 강의 시작 시 학생 화면에 노출됨)
+    resetLecture()
     navigate('/lecturer')
   }
 
