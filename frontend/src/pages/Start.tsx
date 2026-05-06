@@ -37,7 +37,7 @@ const TEXT = {
   },
 } as const
 
-// 음성/자막 공통 옵션 — 'off', 'both' 제외 (둘 다 강제 선택)
+// 자막 옵션
 const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
   { value: 'ko', label: '한국어 (Korean)' },
   { value: 'en', label: '영어 (English)' },
@@ -45,6 +45,9 @@ const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
   { value: 'es', label: '스페인어 (Español)' },
   { value: 'ru', label: '러시아어 (Русский)' },
 ]
+
+// 음성 옵션 — 강의실에서 한국어는 직접 들리므로 제외
+const AUDIO_LANG_OPTIONS = LANG_OPTIONS.filter((o) => o.value !== 'ko')
 
 export default function Start() {
   const navigate = useNavigate()
@@ -71,8 +74,8 @@ export default function Start() {
       setName(saved)
       setSaveInfo(true)
     }
-    // 이전에 저장된 'off'/'both' 등 옵션에 없는 값이 있으면 'en'으로 정리
-    if (!LANG_OPTIONS.some((o) => o.value === audioLang)) setAudioLang('en')
+    // 이전에 저장된 'off'/'both'/'ko' 등 옵션에 없는 값이 있으면 'en'으로 정리
+    if (!AUDIO_LANG_OPTIONS.some((o) => o.value === audioLang)) setAudioLang('en')
     if (!LANG_OPTIONS.some((o) => o.value === subtitleLang)) setSubtitleLang('en')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -176,7 +179,7 @@ export default function Start() {
                 onChange={(e) => setAudioLang(e.target.value as TranslationLang)}
                 className="w-full bg-white rounded-full px-4 py-2.5 text-gray-900 focus:outline-none focus:ring-2 focus:ring-onPrimary appearance-none"
               >
-                {LANG_OPTIONS.map((opt) => (
+                {AUDIO_LANG_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
                 ))}
               </select>

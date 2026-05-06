@@ -24,7 +24,7 @@ const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
   { value: 'ru', label: '러시아어 (Русский)' },
 ]
 
-const AUDIO_LANG_OPTIONS = LANG_OPTIONS
+const AUDIO_LANG_OPTIONS = LANG_OPTIONS.filter((o) => o.value !== 'ko')
 const SUBTITLE_LANG_OPTIONS = LANG_OPTIONS
 
 const STYLE_LABEL: Record<SubtitleStyle, string> = {
@@ -756,7 +756,7 @@ function Student() {
                         </button>
                         <span className="font-medium">Language</span>
                       </div>
-                      <div className="grid grid-cols-3 gap-8 p-6">
+                      <div className="grid grid-cols-3 gap-6 p-6">
                         <LangColumn
                           title="Audio"
                           value={audioLang}
@@ -1050,7 +1050,7 @@ interface LangColumnProps {
 function LangColumn({ title, value, onChange, options }: LangColumnProps) {
   return (
     <div>
-      <h3 className="text-lg font-semibold mb-4 pl-6">{title}</h3>
+      <h3 className="text-base font-semibold mb-4 pl-6 h-12 leading-snug">{title}</h3>
       <ul className="space-y-2">
         {options.map((opt) => {
           const selected = value === opt.value
