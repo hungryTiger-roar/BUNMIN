@@ -85,6 +85,7 @@ function Lecturer() {
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const chatInputRef = useRef<HTMLInputElement>(null)
   const slideBoxRef = useRef<HTMLDivElement>(null)
+  const thumbnailStripRef = useRef<HTMLDivElement>(null)
 
   const [shareUrl, setShareUrl] = useState('')
   const [copied, setCopied] = useState(false)
@@ -325,6 +326,19 @@ function Lecturer() {
       behavior: 'smooth',
     })
   }, [chatMessages.length])
+
+  // 현재 페이지 썸네일이 스트립 중앙에 오도록 스크롤 (앞/뒤 끝에서는 클램프)
+  useEffect(() => {
+    const strip = thumbnailStripRef.current
+    if (!strip) return
+    const ITEM_WIDTH = 96 + 8 // w-24(96px) + gap-2(8px)
+    const thumbCenter = (currentPage - 1) * ITEM_WIDTH + 48
+    const scrollLeft = thumbCenter - strip.clientWidth / 2
+    strip.scrollTo({
+      left: Math.max(0, Math.min(scrollLeft, strip.scrollWidth - strip.clientWidth)),
+      behavior: 'smooth',
+    })
+  }, [currentPage])
 
   useEffect(() => {
     const handle = () => setIsFullscreen(!!document.fullscreenElement)
@@ -1164,6 +1178,7 @@ function Lecturer() {
             {/* 썸네일 행 — 슬라이드 준비 완료 시에만 (슬라이드 폭에 맞춤) */}
             {presentationMode === 'slide' && slideStatus === 'ready' && slidePages.length > 0 && (
               <div
+                ref={thumbnailStripRef}
                 className="flex gap-2 overflow-x-auto scrollbar-hide flex-shrink-0 mx-auto max-w-full"
                 style={{ width: slideBoxWidth }}
               >
