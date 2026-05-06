@@ -221,6 +221,16 @@ function Student() {
   const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 1000)
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
+  // 슬라이드 줌/팬
+  const [zoom, setZoom] = useState(100)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [zoomBadgeVisible, setZoomBadgeVisible] = useState(false)
+  const [isDragging, setIsDragging] = useState(false)
+  const zoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isDraggingRef = useRef(false)
+  const dragStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
+  const zoomRef = useRef(zoom)
+
   useEffect(() => {
     if (sessionId) setShowTranscriptModal(true)
   }, [sessionId])
@@ -310,6 +320,83 @@ function Student() {
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
+
+  // 휠 스크롤 줌 (passive: false 필요 → addEventListener 직접)
+  useEffect(() => {
+    const el = slideRef.current
+    if (!el) return
+    const handleWheel = (e: WheelEvent) => {
+      if (!isLectureStarted || presentationMode !== 'slide') return
+      e.preventDefault()
+      const step = e.deltaY < 0 ? 10 : -10
+      setZoom(prev => Math.max(100, Math.min(500, prev + step)))
+      setZoomBadgeVisible(true)
+      if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current)
+      zoomTimerRef.current = setTimeout(() => setZoomBadgeVisible(false), 1500)
+    }
+    el.addEventListener('wheel', handleWheel, { passive: false })
+    return () => el.removeEventListener('wheel', handleWheel)
+  }, [isLectureStarted, presentationMode])
+
+  // zoomRef 동기화 (드래그 핸들러 클로저에서 최신 zoom 참조용)
+  useEffect(() => { zoomRef.current = zoom }, [zoom])
+
+  // 줌 변경 시 pan을 이미지 경계 내로 clamp (축소 시 범위 벗어난 pan 보정)
+  useEffect(() => {
+    if (zoom === 100) { setPan({ x: 0, y: 0 }); return }
+    const el = slideRef.current
+    if (!el) return
+    const f = zoom / 100
+    const maxX = (f - 1) * el.clientWidth / 2
+    const maxY = (f - 1) * el.clientHeight / 2
+    setPan(prev => ({
+      x: Math.max(-maxX, Math.min(maxX, prev.x)),
+      y: Math.max(-maxY, Math.min(maxY, prev.y)),
+    }))
+  }, [zoom])
+
+  // 모드 전환(슬라이드↔화면공유) 시 줌/팬 리셋
+  useEffect(() => {
+    setZoom(100)
+    setPan({ x: 0, y: 0 })
+  }, [presentationMode])
+
+  // 드래그 팬 — window 기준으로 추적해 컨테이너 밖으로 빠져도 동작
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDraggingRef.current) return
+      const dx = e.clientX - dragStartRef.current.x
+      const dy = e.clientY - dragStartRef.current.y
+      const rawX = dragStartRef.current.panX + dx
+      const rawY = dragStartRef.current.panY + dy
+      const f = zoomRef.current / 100
+      const el = slideRef.current
+      if (el) {
+        const maxX = (f - 1) * el.clientWidth / 2
+        const maxY = (f - 1) * el.clientHeight / 2
+        setPan({
+          x: Math.max(-maxX, Math.min(maxX, rawX)),
+          y: Math.max(-maxY, Math.min(maxY, rawY)),
+        })
+      } else {
+        setPan({ x: rawX, y: rawY })
+      }
+    }
+    const handleMouseUp = () => {
+      if (!isDraggingRef.current) return
+      isDraggingRef.current = false
+      setIsDragging(false)
+    }
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [])
+
+  // 줌 배지 타이머 정리
+  useEffect(() => () => { if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current) }, [])
 
   // volume/muted → TTS GainNode 실시간 동기화
   useEffect(() => {
@@ -506,7 +593,14 @@ function Student() {
         <div className="flex-1 flex items-center justify-center min-w-0 min-h-0">
           <div
             ref={slideRef}
-            className={`group relative bg-black rounded-xl overflow-hidden ${theme === 'light' ? 'shadow-[0_4px_20px_rgba(0,0,0,0.08)]' : 'shadow-2xl'} h-full ${aspectClass} max-w-full`}
+            className={`group relative bg-black rounded-xl overflow-hidden ${theme === 'light' ? 'shadow-[0_4px_20px_rgba(0,0,0,0.08)]' : 'shadow-2xl'} h-full ${aspectClass} max-w-full ${zoom > 100 ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
+            onMouseDown={(e) => {
+              if (zoom <= 100) return
+              e.preventDefault()
+              isDraggingRef.current = true
+              setIsDragging(true)
+              dragStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y }
+            }}
           >
             {/* 강의자 커서 오버레이 (ref 기반, 리렌더링 없음) */}
             {!isPaused && <StudentCursorOverlay spotlightRef={spotlightRef} />}
@@ -514,6 +608,17 @@ function Student() {
             {/* 강의자료 원본/번역 토글 (강의 시작 후 슬라이드 표시 중일 때만) */}
             {isLectureStarted && presentationMode === 'slide' && slideStatus === 'ready' && slideImageUrl && (
               <MaterialViewToggle className={`absolute top-3 z-30 right-3`} />
+            )}
+
+            {/* 줌 배율 배지 — 스크롤 직후 잠시 표시 후 fade-out */}
+            {isLectureStarted && presentationMode === 'slide' && slideStatus === 'ready' && slideImageUrl && (
+              <div
+                className={`absolute top-14 right-3 z-30 px-3 py-1 bg-black/60 backdrop-blur-sm text-white text-sm font-semibold rounded-lg shadow-lg pointer-events-none transition-opacity duration-500 ${
+                  zoomBadgeVisible ? 'opacity-100' : 'opacity-0'
+                }`}
+              >
+                {zoom}%
+              </div>
             )}
 
             {/* 상단 강의 제목 바 — 마우스 올렸을 때만 표시 */}
@@ -552,7 +657,13 @@ function Student() {
                 key={`${currentPage}`}
                 src={slideImageUrl}
                 alt={`슬라이드 ${currentPage}`}
-                className="w-full h-full object-contain"
+                className="w-full h-full object-contain select-none"
+                draggable={false}
+                style={{
+                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom / 100})`,
+                  transformOrigin: 'center center',
+                  transition: isDragging ? 'none' : 'transform 0.1s ease-out',
+                }}
               />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center text-white/50">
