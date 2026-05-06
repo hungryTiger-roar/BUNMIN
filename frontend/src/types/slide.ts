@@ -1,6 +1,6 @@
 // 강의자료 라이브러리 관련 타입
 
-export type SortOrder = 'recent' | 'name'
+export type SortOrder = 'recent' | 'name' | 'size'
 
 export interface SlideLibraryItem {
   slide_id: string
@@ -9,6 +9,7 @@ export interface SlideLibraryItem {
   total_pages: number
   status: 'pending' | 'processing' | 'completed' | 'failed'
   has_translated: boolean
+  file_size?: number  // bytes — 검색 모달 정렬/표시용 (백엔드가 제공)
 }
 
 export interface SlideLibraryResponse {

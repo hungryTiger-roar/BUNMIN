@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { getSlideLibrary, deleteSlidesBatch } from '@/lib/api'
-import type { SlideLibraryItem as Item, SortOrder } from '@/types/slide'
+import type { SlideLibraryItem as Item } from '@/types/slide'
 import SlideLibraryItem from './SlideLibraryItem'
-import LibraryMoreMenu from './LibraryMoreMenu'
 import DeleteConfirmModal from './DeleteConfirmModal'
+import SlideLibrarySearchModal from './SlideLibrarySearchModal'
 
 interface Props {
   /** 외부에서 라이브러리 새로고침을 트리거하는 키 (값 변경 시 재조회) */
@@ -17,11 +17,11 @@ export default function SlideLibrary({ refreshKey = 0 }: Props) {
   const [items, setItems] = useState<Item[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [sortOrder, setSortOrder] = useState<SortOrder>('recent')
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [showDeleteModal, setShowDeleteModal] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [showSearchModal, setShowSearchModal] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -46,16 +46,10 @@ export default function SlideLibrary({ refreshKey = 0 }: Props) {
     }
   }, [refreshKey])
 
-  // 클라이언트 측 정렬 (서버는 기본 최신순으로만 받음)
+  // 라이브러리 카드 영역은 항상 최신순 (검색/정렬은 검색 모달에서)
   const sortedItems = useMemo(() => {
-    const arr = [...items]
-    if (sortOrder === 'name') {
-      arr.sort((a, b) => a.filename.localeCompare(b.filename, 'ko'))
-    } else {
-      arr.sort((a, b) => b.uploaded_at.localeCompare(a.uploaded_at))
-    }
-    return arr
-  }, [items, sortOrder])
+    return [...items].sort((a, b) => b.uploaded_at.localeCompare(a.uploaded_at))
+  }, [items])
 
   const toggleSelect = (slideId: string) => {
     setSelectedIds((prev) => {
@@ -105,13 +99,6 @@ export default function SlideLibrary({ refreshKey = 0 }: Props) {
     }
   }
 
-  const sortButtonClass = (active: boolean) =>
-    `px-2 py-1 text-xs rounded transition-colors ${
-      active
-        ? 'bg-primary/10 text-primary font-medium'
-        : 'text-onSurface/60 hover:bg-primaryContainer/40'
-    }`
-
   return (
     <div className="flex flex-col h-full">
       {/* 헤더 */}
@@ -122,36 +109,29 @@ export default function SlideLibrary({ refreshKey = 0 }: Props) {
           <div className="flex items-center gap-1">
             <button
               type="button"
-              onClick={() => setSortOrder('recent')}
-              className={sortButtonClass(sortOrder === 'recent')}
+              aria-label="강의자료 검색"
+              title="강의자료 검색"
+              onClick={() => setShowSearchModal(true)}
+              className="p-1.5 text-onSurface/60 hover:text-onSurface hover:bg-primaryContainer/40 rounded transition-colors"
             >
-              최신순
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
             </button>
             <button
               type="button"
-              onClick={() => setSortOrder('name')}
-              className={sortButtonClass(sortOrder === 'name')}
+              aria-label="강의자료 삭제"
+              title="강의자료 삭제"
+              onClick={enterSelectionMode}
+              className="p-1.5 text-onSurface/60 hover:text-onSurface hover:bg-primaryContainer/40 rounded transition-colors"
             >
-              이름순
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
             </button>
-            <LibraryMoreMenu onSelectDelete={enterSelectionMode} />
           </div>
         ) : (
           <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => setSortOrder('recent')}
-              className={sortButtonClass(sortOrder === 'recent')}
-            >
-              최신순
-            </button>
-            <button
-              type="button"
-              onClick={() => setSortOrder('name')}
-              className={sortButtonClass(sortOrder === 'name')}
-            >
-              이름순
-            </button>
             <button
               type="button"
               onClick={exitSelectionMode}
@@ -185,7 +165,7 @@ export default function SlideLibrary({ refreshKey = 0 }: Props) {
         </p>
       ) : (
         <div
-          className="space-y-2 overflow-y-auto pr-1 scrollbar-hide"
+          className="space-y-2 overflow-y-auto pr-1 scrollbar-always"
           style={{ maxHeight: `${VISIBLE_MAX_HEIGHT}px` }}
         >
           {sortedItems.map((item) => (
@@ -206,6 +186,16 @@ export default function SlideLibrary({ refreshKey = 0 }: Props) {
           count={selectedIds.size}
           onConfirm={handleBatchDelete}
           onCancel={() => setShowDeleteModal(false)}
+        />
+      )}
+
+      {showSearchModal && (
+        <SlideLibrarySearchModal
+          items={items}
+          onClose={() => setShowSearchModal(false)}
+          onDeleted={(slideId) => {
+            setItems((prev) => prev.filter((it) => it.slide_id !== slideId))
+          }}
         />
       )}
     </div>
