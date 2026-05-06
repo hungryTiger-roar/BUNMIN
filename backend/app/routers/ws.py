@@ -210,7 +210,7 @@ manager = ConnectionManager()
 
 # ASR: GPU 직렬화 (단일 모델 인스턴스, 동시 호출 방지)
 _asr_semaphore = asyncio.Semaphore(1)
-# NMT: CPU 모델 인스턴스 보호 (PyTorch generate() 비thread-safe)
+# NMT: GPU 모델 인스턴스 보호 (CT2 Translator 비thread-safe + ASR 와 GPU 자원 분리 위해 직렬화)
 _nmt_semaphore = asyncio.Semaphore(1)
 _MAX_QUEUED_AUDIO = 2   # ASR 대기 큐 최대 발화 수 — 초과 시 신규 발화 스킵
 _queued_audio_count = 0  # 현재 ASR 세마포어 대기 중인 발화 수
@@ -571,11 +571,11 @@ async def handle_student(websocket: WebSocket, pong_event: asyncio.Event | None 
 
 async def process_audio(message: dict):
     """
-    오디오 처리 파이프라인: 오디오 → ASR(GPU) → NMT(CPU) → 수강자 전송
+    오디오 처리 파이프라인: 오디오 → ASR(GPU) → NMT(GPU) → 수강자 전송
     TTS는 수강자 브라우저에서 WASM(piper-tts-web)으로 처리
 
-    - _asr_semaphore: ASR GPU 직렬화 (한 번에 하나의 발화만 GPU 사용)
-    - _nmt_semaphore: NMT CPU 모델 보호 (ASR 해제 직후 다음 발화 ASR 시작 가능)
+    - _asr_semaphore: ASR 직렬화 (한 번에 하나의 발화만 ASR 모델 사용)
+    - _nmt_semaphore: NMT 직렬화 (ASR 해제 직후 다음 발화 ASR 시작 가능 — pipeline parallelism)
     - seq: 발화 순서 번호 (NMT 처리 시간 편차로 인한 순서 역전 대응)
     - 큐 포화 방지: _MAX_QUEUED_AUDIO 초과 또는 6s 이상 대기 시 스킵
     """
@@ -639,8 +639,8 @@ async def process_audio(message: dict):
 
             print(f"[ASR  seq={seq}] {korean_text}", flush=True)
 
-        # _asr_semaphore 해제 → 다음 발화 ASR이 즉시 GPU 사용 가능
-        # Phase 2: NMT — CPU, 모델 인스턴스 보호
+        # _asr_semaphore 해제 → 다음 발화 ASR이 즉시 시작 가능 (pipeline parallelism)
+        # Phase 2: NMT — 모델 인스턴스 보호 (GPU 직렬화)
         t_nmt = time.perf_counter()
         async with _nmt_semaphore:
             english_text = await asyncio.to_thread(
