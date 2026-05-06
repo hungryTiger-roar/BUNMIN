@@ -37,7 +37,7 @@ function ChatPanel({ messages, input, onInputChange, onSubmit, isConnected }: Ch
         className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3"
       >
         {messages.length === 0 ? (
-          <div className="text-center text-2xl text-onSurface/60 mt-8">
+          <div className="text-center text-lg wide:text-sm text-onSurface/60 mt-8">
             No messages yet
           </div>
         ) : (
@@ -46,7 +46,7 @@ function ChatPanel({ messages, input, onInputChange, onSubmit, isConnected }: Ch
               <div className="flex items-center gap-1.5 mb-0.5">
                 {msg.sender === 'lecturer' && (
                   <svg
-                    className="w-4 h-4 text-lecturerAccent flex-shrink-0"
+                    className="w-4 h-4 wide:w-3.5 wide:h-3.5 text-lecturerAccent flex-shrink-0"
                     fill="none"
                     stroke="currentColor"
                     strokeWidth={1.7}
@@ -57,20 +57,20 @@ function ChatPanel({ messages, input, onInputChange, onSubmit, isConnected }: Ch
                   </svg>
                 )}
                 <span
-                  className={`text-2xl font-semibold ${
+                  className={`text-lg wide:text-sm font-semibold ${
                     msg.sender === 'lecturer' ? 'text-lecturerAccent' : 'text-onSurface'
                   }`}
                 >
                   {msg.name}
                 </span>
                 {msg.sender === 'lecturer' && (
-                  <span className="text-xl px-3 py-1 bg-lecturerAccent/15 text-lecturerAccent rounded font-medium">
+                  <span className="text-base wide:text-xs px-2 py-0.5 bg-lecturerAccent/15 text-lecturerAccent rounded font-medium">
                     Lecturer
                   </span>
                 )}
               </div>
               <p
-                className={`text-2xl leading-relaxed break-words ${
+                className={`text-lg wide:text-sm leading-relaxed break-words ${
                   msg.sender === 'lecturer'
                     ? 'text-lecturerAccent/95'
                     : 'text-onSurface/90'
@@ -86,7 +86,7 @@ function ChatPanel({ messages, input, onInputChange, onSubmit, isConnected }: Ch
       {/* Input area */}
       <form
         onSubmit={handleSubmit}
-        className="p-5 border-t border-primaryContainer flex gap-4 shrink-0"
+        className="p-3 wide:p-3 border-t border-primaryContainer flex gap-2 shrink-0"
       >
         <input
           ref={inputRef}
@@ -95,13 +95,13 @@ function ChatPanel({ messages, input, onInputChange, onSubmit, isConnected }: Ch
           onChange={(e) => onInputChange(e.target.value)}
           placeholder={isConnected ? 'Type a message...' : 'Connecting...'}
           disabled={!isConnected}
-          className="flex-1 bg-white text-gray-900 placeholder-gray-400 rounded-xl px-6 py-5 text-2xl focus:outline-none focus:ring-2 focus:ring-onPrimary disabled:opacity-60"
+          className="flex-1 bg-white text-gray-900 placeholder-gray-400 rounded-lg px-4 py-3 wide:px-3 wide:py-2 text-lg wide:text-sm focus:outline-none focus:ring-2 focus:ring-onPrimary disabled:opacity-60"
           maxLength={200}
         />
         <button
           type="submit"
           disabled={!input.trim() || !isConnected}
-          className="px-8 py-5 bg-primary hover:opacity-90 disabled:opacity-40 text-onPrimary rounded-xl text-2xl font-medium transition-opacity"
+          className="px-5 py-3 wide:px-4 wide:py-2 bg-primary hover:opacity-90 disabled:opacity-40 text-onPrimary rounded-lg text-lg wide:text-sm font-medium transition-opacity"
         >
           Send
         </button>

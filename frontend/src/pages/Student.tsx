@@ -502,18 +502,18 @@ function Student() {
       )}
 
       {/* 헤더 */}
-      <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-primaryContainer bg-surface backdrop-blur-md shadow-sm flex-shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
-          <h1 className="text-3xl font-special-gothic tracking-wide">Aunion AI</h1>
+      <header className="flex items-center justify-between gap-2 wide:gap-4 px-3 wide:px-4 py-2 wide:py-3 border-b border-primaryContainer bg-surface backdrop-blur-md shadow-sm flex-shrink-0">
+        <div className="flex items-center gap-2 wide:gap-3 min-w-0">
+          <h1 className="text-xl wide:text-2xl font-special-gothic tracking-wide">Aunion AI</h1>
           {isLectureStarted && !isPaused && (
-            <span className="flex items-center gap-2 px-3 py-1.5 bg-error text-white text-xl font-semibold rounded-full shadow-lg shadow-error/30">
-              <span className="w-2.5 h-2.5 bg-white rounded-full animate-pulse" />
+            <span className="flex items-center gap-1.5 px-2.5 py-1 wide:px-3 wide:py-1.5 bg-error text-white text-base wide:text-sm font-semibold rounded-full shadow-lg shadow-error/30">
+              <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
               LIVE
             </span>
           )}
           {isPaused && (
-            <span className="flex items-center gap-2 px-3 py-1.5 bg-yellow-500 text-white text-xl font-semibold rounded-full shadow-lg shadow-yellow-500/30">
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 6 8" aria-hidden="true">
+            <span className="flex items-center gap-1.5 px-2.5 py-1 wide:px-3 wide:py-1.5 bg-yellow-500 text-white text-base wide:text-sm font-semibold rounded-full shadow-lg shadow-yellow-500/30">
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 6 8" aria-hidden="true">
                 <rect x="0" y="0" width="2" height="8" rx="0.5" />
                 <rect x="4" y="0" width="2" height="8" rx="0.5" />
               </svg>
@@ -521,7 +521,7 @@ function Student() {
             </span>
           )}
           {isLectureStarted && slideStatus === 'ready' && totalPages > 0 && (
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-primaryContainer/60 rounded-full text-xl text-onSurface">
+            <div className="flex items-center gap-1.5 px-2.5 py-1 wide:px-3 wide:py-1.5 bg-primaryContainer/60 rounded-full text-base wide:text-sm text-onSurface">
               <span className="font-medium">{currentPage}</span>
               <span className="opacity-60">/</span>
               <span className="opacity-60">{totalPages}</span>
@@ -540,27 +540,27 @@ function Student() {
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 wide:gap-2">
           {/* 라이트 / 다크 / 그라데이션 3-모드 토글 */}
           <button
             type="button"
             onClick={toggleTheme}
-            className="flex items-center justify-center w-11 h-11 rounded-xl transition-colors bg-primaryContainer/60 hover:bg-primaryContainer text-onSurface"
+            className="flex items-center justify-center w-9 h-9 wide:w-10 wide:h-10 rounded-lg transition-colors bg-primaryContainer/60 hover:bg-primaryContainer text-onSurface"
             aria-label={`Current: ${theme} mode (click to cycle)`}
             title={`${
               theme === 'light' ? 'Light' : theme === 'dark' ? 'Dark' : 'Gradient'
             } mode — click to cycle`}
           >
             {theme === 'light' ? (
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
               </svg>
             ) : theme === 'dark' ? (
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
               </svg>
             ) : (
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
               </svg>
             )}
@@ -575,22 +575,22 @@ function Student() {
                 setActiveTab(activeTab === 'participants' ? 'chat' : 'participants')
               }
             }}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xl transition-colors ${
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 wide:px-3 wide:py-2 rounded-lg text-base wide:text-sm transition-colors ${
               activeTab === 'participants'
                 ? 'bg-primary text-onPrimary'
                 : 'bg-primaryContainer/60 hover:bg-primaryContainer text-onSurface'
             }`}
             title="Participant list"
           >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5 wide:w-4 wide:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
             <span>{displayParticipantCount}</span>
           </button>
 
           {studentName && (
-            <div className="hidden sm:flex items-center gap-2 px-3 py-2 bg-primaryContainer/60 rounded-xl text-xl text-onSurface">
-              <svg className="w-6 h-6 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="hidden wide:flex items-center gap-1.5 px-3 py-2 bg-primaryContainer/60 rounded-lg text-sm text-onSurface">
+              <svg className="w-4 h-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
               </svg>
               {studentName}
@@ -599,7 +599,7 @@ function Student() {
 
           <button
             onClick={handleExit}
-            className="px-4 py-2 bg-primaryContainer/60 hover:bg-primaryContainer text-onSurface rounded-xl text-xl"
+            className="px-3 py-1.5 wide:px-3 wide:py-2 bg-primaryContainer/60 hover:bg-primaryContainer text-onSurface rounded-lg text-base wide:text-sm"
           >
             Leave
           </button>
