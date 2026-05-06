@@ -157,13 +157,6 @@ def _has_vlm_weights(directory: Path) -> bool:
     return False
 
 
-def _resolve_vlm(value: str) -> str:
-    p = Path(value)
-    if p.is_absolute():
-        return value
-    candidate = _PROJECT_ROOT / value
-    return str(candidate) if _has_vlm_weights(candidate) else value
-
 def _vlm_default() -> str:
     """env 미지정 시 기본값. 로컬 동봉본 있으면 거기, 없으면 HF repo_id로 fallback해
     다운로드 트리거. Electron 배포 환경에서 동봉 모델 우선 사용."""
@@ -171,6 +164,25 @@ def _vlm_default() -> str:
     if _has_vlm_weights(local):
         return str(local)
     return "Qwen/Qwen2.5-VL-7B-Instruct"
+
+
+def _resolve_vlm(value: str) -> str:
+    p = Path(value)
+    if p.is_absolute():
+        # 절대 경로 — 디렉토리 + 가중치 있으면 그대로, 없으면 기본값으로 fallback
+        if _has_vlm_weights(p):
+            return value
+        return _vlm_default()
+    # 상대 경로 → PROJECT_ROOT 기준으로 해석
+    candidate = _PROJECT_ROOT / value
+    if _has_vlm_weights(candidate):
+        return str(candidate)
+    # 로컬 경로 형식인데 어디에도 없음 → HF repo_id 기본값으로 fallback
+    # (그렇지 않으면 from_pretrained가 "not a local folder and not a valid model identifier" 에러)
+    if value.startswith(("models/", "models\\", "./", "../", ".\\", "..\\")):
+        return _vlm_default()
+    # repo_id 형식 (예: "Qwen/Qwen2.5-VL-7B-Instruct") — 그대로
+    return value
 
 
 VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL") or _vlm_default())
