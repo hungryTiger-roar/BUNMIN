@@ -204,6 +204,65 @@ VLM 동봉본 만들려면 electron:build 뒤에 `cp -r models/qwen2.5-vl-7b-ins
 
 ---
 
+## 단일 인스턴스 락 (Single Instance Lock)
+
+설치된 `Aunion AI.exe`는 **한 번에 하나만** 실행되도록 [main.cjs](../../frontend/electron/main.cjs)가 강제. 사용자가 시작메뉴/바탕화면에서 두 번 더블클릭하거나 이미 켜져 있는 상태에서 다시 실행하면 두 번째 시도는 즉시 종료되고 첫 인스턴스 창이 포커스됨.
+
+### 왜 필요한가
+
+두 번째 인스턴스가 정상 부팅되면 다음 두 가지가 모두 첫 인스턴스를 망가뜨림:
+
+1. **포트 충돌**: 백엔드가 8000 포트를 사용 중인데 두 번째 인스턴스도 같은 포트로 띄우려다 실패
+2. **백엔드 학살**: 두 번째 인스턴스의 `startBackend()` 시작 부분에서 `taskkill /F /IM aunion_backend.exe /T` 실행 → **첫 인스턴스의 백엔드까지 죽임** (모델 로딩 중이었다면 사용자 데이터 손실)
+
+### 구현 위치
+
+[main.cjs](../../frontend/electron/main.cjs)에 두 부분:
+
+1. **모듈 로드 시점** — 로그 setup 직후, 다른 모든 핸들러 등록 *전*:
+   ```js
+   if (!app.requestSingleInstanceLock()) {
+     appendLog('이미 실행 중인 인스턴스가 있어 종료합니다')
+     process.exit(0)   // app.quit() 은 비동기라 위험 핸들러 등록을 막을 수 없음
+   }
+   ```
+   `process.exit(0)` 으로 즉시 종료해야 `before-quit`/`window-all-closed`의 `taskkill`이 절대 안 돌게 됨.
+
+2. **`second-instance` 이벤트 핸들러** — 첫 인스턴스에서만 발화:
+   ```js
+   app.on('second-instance', () => {
+     if (mainWindow && !mainWindow.isDestroyed()) {
+       if (mainWindow.isMinimized()) mainWindow.restore()
+       if (!mainWindow.isVisible()) mainWindow.show()
+       mainWindow.focus()
+     }
+   })
+   ```
+
+### 검증 시나리오 (4가지)
+
+설치본 설치 후 검증:
+
+| # | 시나리오 | 기대 동작 |
+|---|---|---|
+| 1 | 부팅 완료 후 시작메뉴에서 두 번째 더블클릭 | 새 창 X, 첫 창 자동 포커스 |
+| 2 | 백엔드 PID 메모 → 두 번째 실행 시도 → PID 재확인 | 같은 PID 유지 (백엔드 보호) |
+| 3 | 첫 창 최소화 → 두 번째 실행 시도 | 최소화 창 자동 복원 + 포커스 |
+| 4 | 첫 인스턴스 X 종료 → 단축키 재실행 | 정상 부팅 (락 해제) |
+
+`%LOCALAPPDATA%\Aunion AI\error_log.txt`에 다음 라인이 찍히면 정상:
+```
+[...] 두 번째 인스턴스 차단 — 기존 창 활성화          # 첫 인스턴스 측
+[...] 이미 실행 중인 인스턴스가 있어 종료합니다        # 두 번째 인스턴스 측
+```
+
+### 적용 범위
+
+- ✅ **앱 본체** (`Aunion AI.exe`) — 락 적용
+- ❌ **설치 프로그램** (`Aunion-AI-Setup-{버전}.exe`) — Inno Setup 측에서 별도 처리 필요. 현재는 두 번 더블클릭 시 마법사 두 개 뜸. 필요하면 `installer.iss`의 `[Setup]`에 `AppMutex=AunionAISetupMutex` 추가.
+
+---
+
 ## 자주 막히는 지점 (트러블슈팅)
 
 ### "Aunion AI.exe: Access is denied" — electron-builder 실패
