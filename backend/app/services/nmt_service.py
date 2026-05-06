@@ -2,8 +2,13 @@
 NMT (Neural Machine Translation) 서비스
 한국어 → 영어 번역
 
+기본 모델: facebook/nllb-200-distilled-600M
+  - 200개 언어 다국어 transformer (Meta)
+  - 짧은 인사말 / 구두점 없는 다문장에서도 환각 거의 없음
+  - CT2 int8 변환본 ~600MB
+
 우선순위:
-1. CTranslate2 (models/opus-mt-ko-en-ct2/ 존재 시) — CPU 3~5배 가속, int8 양자화
+1. CTranslate2 (models/<name>-ct2/ 존재 시) — CPU 가속, int8 양자화
 2. HuggingFace transformers 폴백 — ctranslate2 미설치 또는 변환 전 상태
 """
 import re
@@ -13,10 +18,15 @@ from pathlib import Path
 from app.config import resolve_model_dir, PROJECT_ROOT, USER_DATA_DIR
 
 
+# NLLB FLORES-200 언어 코드 — 입력/출력에 명시해야 NLLB 가 정확히 번역
+_NLLB_SRC_LANG = "kor_Hang"   # 한국어 한글 표기
+_NLLB_TGT_LANG = "eng_Latn"   # 영어 라틴 표기
+
+
 def _ct2_model_dir(model_name: str) -> Path:
     """CT2 변환된 모델 디렉토리.
-    "Helsinki-NLP/opus-mt-ko-en" → "{name}-ct2"
-    USER_DATA_DIR/INSTALL_DIR/PROJECT_ROOT 다단계 폴백(Electron 배포 호환),
+    "facebook/nllb-200-distilled-600M" → "{name}-ct2" 형태로 매핑.
+    USER_DATA_DIR / INSTALL_DIR / PROJECT_ROOT 다단계 폴백 (Electron 배포 호환),
     어디에도 없으면 frozen 시 USER_DATA_DIR, dev 시 PROJECT_ROOT 아래 새로 만듦.
     """
     name = model_name.split("/")[-1] + "-ct2"
@@ -27,51 +37,15 @@ def _ct2_model_dir(model_name: str) -> Path:
     return base / "models" / name
 
 
-# 대학교 강의 맥락: 관사·접속사·조동사는 정상적으로 반복되므로 반복 감지 제외
-_STOP_WORDS = frozenset({
-    'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
-    'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'as',
-    'and', 'or', 'but', 'not', 'so', 'if', 'it', 'this', 'that',
-    'you', 'we', 'i', 'do', 'can', 'will', 'have', 'has', 'had', 'just',
-    'how', 'what', 'when', 'where', 'who', 'which', 'about',
-})
-
-
-def _postprocess_translation(text: str) -> str:
-    """opus-mt 반복 생성 제거:
-    1) 문장 경계 이후 추가 생성된 내용 제거
-    2) 동일 어간 단어가 세 번 등장하면 첫 반복 직전까지만 반환 (기술 용어 정상 반복 허용)
-    """
-    text = text.strip()
-
-    # 1) 첫 완성 문장 이후 내용 제거 ("How are you? How are..." → "How are you?")
-    m = re.match(r'^(.+?[.!?])\s+\S', text)
-    if m:
-        return m.group(1)
-
-    # 2) 단어 반복 감지 — stop word 제외, 동일 어간이 세 번째 등장 시 그 전까지만 반환
-    words = text.split()
-    seen: dict[str, int] = {}
-    for i, w in enumerate(words):
-        stem = re.sub(r'[^a-z]', '', w.lower())  # 구두점·대소문자 제거
-        if not stem or stem in _STOP_WORDS:
-            continue
-        seen[stem] = seen.get(stem, 0) + 1
-        if seen[stem] >= 3:
-            truncated = ' '.join(words[:i]).rstrip(',.;')
-            if truncated:
-                return truncated + '.'
-            break
-
-    return text
-
-
 class NMTService:
-    def __init__(self, model_name: str = "Helsinki-NLP/opus-mt-ko-en", device: str = "cpu", dtype: str = "float32"):
+    def __init__(self, model_name: str = "facebook/nllb-200-distilled-600M", device: str = "cpu", dtype: str = "float32"):
         self.model_name = model_name
         self.device = "cuda" if device in ("cuda", "cuda:0") else "cpu"
         self.dtype = dtype
         self._mode = None  # "ct2" | "hf"
+        # 도메인 용어집 — 강의 시작 시 set_glossary() 로 주입됨.
+        # 길이 내림차순 정렬된 (한글, 영어) 튜플 리스트로 관리해 긴 용어 우선 매치 ("자연어 처리"가 "자연어"보다 먼저).
+        self._glossary_pairs: list[tuple[str, str]] = []
 
         # CT2 → HF 순으로 시도
         if self._try_load_ct2():
@@ -79,6 +53,35 @@ class NMTService:
         else:
             self._load_hf()
             self._mode = "hf"
+
+    # ── 도메인 용어집 ────────────────────────────────────────────────────────
+
+    def set_glossary(self, glossary: dict[str, str] | None) -> None:
+        """한글 → 영어 도메인 용어 매핑 주입. None / 빈 dict 면 비활성.
+        translate() 호출 시 한글 입력에서 매칭되는 용어를 영어로 inline 치환 →
+        NLLB sentencepiece 가 영어 토큰을 그대로 통과시키므로 고유명사·약어 보호.
+        """
+        if not glossary:
+            self._glossary_pairs = []
+            print("[NMT] 용어집 비활성")
+            return
+        self._glossary_pairs = sorted(
+            ((k, v) for k, v in glossary.items() if k and v),
+            key=lambda kv: -len(kv[0]),
+        )
+        print(f"[NMT] 용어집 적용: {len(self._glossary_pairs)}개")
+
+    def _apply_glossary_inline(self, text: str) -> str:
+        """한글 텍스트의 도메인 용어를 영어로 inline 치환.
+        NLLB 입력에 영어가 섞여 있으면 그대로 통과되는 특성 활용. 양 옆 공백으로 토큰 경계 보장.
+        """
+        if not self._glossary_pairs:
+            return text
+        result = text
+        for ko, en in self._glossary_pairs:
+            if ko in result:
+                result = result.replace(ko, f" {en} ")
+        return re.sub(r"\s+", " ", result).strip()
 
     # ── CTranslate2 ─────────────────────────────────────────────────────────
 
@@ -91,7 +94,7 @@ class NMTService:
 
         try:
             import ctranslate2
-            import sentencepiece as spm
+            from transformers import AutoTokenizer
 
             ct2_dir = _ct2_model_dir(self.model_name)
             if not ct2_dir.exists():
@@ -102,10 +105,12 @@ class NMTService:
                 device=self.device,
                 inter_threads=2,
             )
-            self._sp_src = spm.SentencePieceProcessor()
-            self._sp_src.Load(str(ct2_dir / "source.spm"))
-            self._sp_tgt = spm.SentencePieceProcessor()
-            self._sp_tgt.Load(str(ct2_dir / "target.spm"))
+            # NLLB 토크나이저 — src_lang 명시로 한국어 prefix 자동 부여
+            # ct2-transformers-converter 가 --copy_files 로 동봉한 tokenizer 파일을 사용
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                str(ct2_dir),
+                src_lang=_NLLB_SRC_LANG,
+            )
 
             print(f"[NMT] CTranslate2 {self.model_name} 로드 완료 ({self.device}, int8) [{ct2_dir}]")
             return True
@@ -114,6 +119,10 @@ class NMTService:
             return False
 
     def _convert_model(self, ct2_dir: Path):
+        """ct2-transformers-converter 로 NLLB 변환 + 토크나이저 파일 동봉.
+        --copy_files 로 tokenizer.json / sentencepiece.bpe.model / special_tokens_map.json /
+        tokenizer_config.json 을 함께 복사 → AutoTokenizer.from_pretrained(local_dir) 직접 가능.
+        """
         print(f"[NMT] CTranslate2 변환 중: {self.model_name} → {ct2_dir}")
         ct2_dir.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(
@@ -121,18 +130,14 @@ class NMTService:
                 "ct2-transformers-converter",
                 "--model", self.model_name,
                 "--output_dir", str(ct2_dir),
+                "--copy_files",
+                "tokenizer.json", "sentencepiece.bpe.model",
+                "special_tokens_map.json", "tokenizer_config.json",
                 "--quantization", "int8",
                 "--force",
             ],
             check=True,
         )
-        from huggingface_hub import hf_hub_download
-        for spm in ["source.spm", "target.spm"]:
-            hf_hub_download(
-                repo_id=self.model_name,
-                filename=spm,
-                local_dir=str(ct2_dir),
-            )
         print("[NMT] 변환 완료!")
 
     # ── HuggingFace 폴백 ─────────────────────────────────────────────────────
@@ -144,13 +149,18 @@ class NMTService:
     def _load_hf(self):
         try:
             from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-            self._hf_tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self._hf_tokenizer = AutoTokenizer.from_pretrained(
+                self.model_name,
+                src_lang=_NLLB_SRC_LANG,
+            )
             self._hf_model = AutoModelForSeq2SeqLM.from_pretrained(
                 self.model_name,
                 torch_dtype=self._torch_dtype(),
                 device_map=self.device,
             )
             self._hf_model.eval()
+            # NLLB 는 forced_bos_token_id 로 타겟 언어를 지정해야 함
+            self._hf_tgt_id = self._hf_tokenizer.convert_tokens_to_ids(_NLLB_TGT_LANG)
             print(f"[NMT] HuggingFace {self.model_name} 로드 완료 ({self.dtype}, {self.device})")
         except ImportError as e:
             raise RuntimeError(f"필요한 패키지가 설치되지 않았습니다: {e}")
@@ -167,51 +177,56 @@ class NMTService:
         normalized = text.strip()
         if not normalized:
             return ""
+        # 도메인 용어 inline 치환 (활성화된 경우만) — NLLB 가 영어 부분을 통과시킴
+        normalized = self._apply_glossary_inline(normalized)
         try:
             if self._mode == "ct2":
-                result = self._translate_ct2(normalized)
+                return self._translate_ct2(normalized).strip()
             else:
-                result = self._translate_hf(normalized, max_length)
-            return _postprocess_translation(result)
+                return self._translate_hf(normalized, max_length).strip()
         except Exception as e:
             print(f"[NMT] 번역 오류: {e}")
             return ""
 
     def _translate_ct2(self, text: str) -> str:
-        tokens = self._sp_src.Encode(text, out_type=str)
-        # floor를 입력 길이 기준으로 — 절댓값 20은 짧은 입력에서 hallucination 유발
-        # 영어 학술 문장은 한국어보다 길어지므로 2.5x 여유 확보
-        max_decoding_length = max(len(tokens) + 5, int(len(tokens) * 2.5))
-        # 짧은 입력(≤6토큰)은 greedy — beam search가 대소문자 변형 반복 토큰을 선택하는 문제 방지
-        beam_size = 1 if len(tokens) <= 6 else 4
+        # NLLB 토크나이저 → 토큰 ID → 토큰 문자열 (CT2 입력 형식)
+        # src_lang 으로 한국어 prefix 자동 부여, EOS 자동 부여
+        input_ids = self._tokenizer(text, return_tensors=None).input_ids
+        src_tokens = self._tokenizer.convert_ids_to_tokens(input_ids)
+
+        # NLLB 는 길이 비례 출력이 안정적이라 2.0배면 충분 (opus-mt 의 2.5배 → 절감)
+        max_decoding_length = max(len(src_tokens) + 5, int(len(src_tokens) * 2.0))
         results = self._ct2.translate_batch(
-            [tokens],
+            [src_tokens],
+            target_prefix=[[_NLLB_TGT_LANG]],   # 디코더 첫 토큰으로 타겟 언어 지정 필수
             max_decoding_length=max_decoding_length,
-            beam_size=beam_size,
+            beam_size=4,
             length_penalty=1.0,
-            # 2.5: 기술 용어 정상 반복을 허용하면서 hallucination 억제 (3.0은 과도하게 억제)
-            repetition_penalty=2.5,
-            no_repeat_ngram_size=3,
+            repetition_penalty=1.1,             # NLLB 는 환각 적어서 가벼운 페널티로 충분
         )
-        return self._sp_tgt.Decode(results[0].hypotheses[0]).strip()
+        target_tokens = results[0].hypotheses[0]
+        # target_prefix 의 eng_Latn 토큰이 출력에 포함될 수 있어 제거
+        if target_tokens and target_tokens[0] == _NLLB_TGT_LANG:
+            target_tokens = target_tokens[1:]
+        target_ids = self._tokenizer.convert_tokens_to_ids(target_tokens)
+        return self._tokenizer.decode(target_ids, skip_special_tokens=True)
 
     def _translate_hf(self, text: str, max_length: int) -> str:
         import torch
         inputs = self._hf_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         input_len = inputs["input_ids"].shape[1]
-        adjusted_max = min(max_length, max(input_len + 5, int(input_len * 2.5)))
-        num_beams = 1 if input_len <= 6 else 4
+        adjusted_max = min(max_length, max(input_len + 5, int(input_len * 2.0)))
         with torch.no_grad():
             outputs = self._hf_model.generate(
                 **inputs,
+                forced_bos_token_id=self._hf_tgt_id,   # NLLB 타겟 언어 강제
                 max_length=adjusted_max,
-                num_beams=num_beams,
+                num_beams=4,
                 length_penalty=1.0,
-                repetition_penalty=2.5,
-                no_repeat_ngram_size=3,
+                repetition_penalty=1.1,
             )
-        return self._hf_tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+        return self._hf_tokenizer.decode(outputs[0], skip_special_tokens=True)
 
     def translate_batch(
         self,

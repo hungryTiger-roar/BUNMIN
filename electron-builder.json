@@ -33,8 +33,8 @@
       "filter": ["**/*"]
     },
     {
-      "from": "models/opus-mt-ko-en-ct2",
-      "to": "backend/models/opus-mt-ko-en-ct2",
+      "from": "models/nllb-200-distilled-600M-ct2",
+      "to": "backend/models/nllb-200-distilled-600M-ct2",
       "filter": ["**/*"]
     }
   ],

@@ -3,13 +3,13 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
+    "preinstall": "node ../scripts/check-no-self-link.js",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
     "@ricky0123/vad-web": "^0.0.30",
-    "aunion-ai": "file:..",
     "onnxruntime-web": "^1.24.3",
     "piper-tts-web": "^1.1.2",
     "react": "^18.2.0",

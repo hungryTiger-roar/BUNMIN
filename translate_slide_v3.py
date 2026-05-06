@@ -1342,8 +1342,9 @@ Translate:"""
             },
         ]
 
-        # Qwen3-VL은 thinking 모드 활성화 시 <think>...</think> 블록을 출력해
-        # 번호 매핑 파싱이 오염됨. 지원하지 않는 processor(Qwen2.5-VL 등)는 TypeError 발생.
+        # Qwen2.5-VL processor 는 enable_thinking 인자를 받지 않아 TypeError → no-arg 폴백.
+        # try 분기는 thinking 모드를 가진 다른 VLM(예: Qwen3-VL)으로 교체될 때 <think>...</think>
+        # 블록이 번호 매핑 파싱을 오염시키지 않도록 방어용으로 남겨둠.
         try:
             text = processor.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True, enable_thinking=False

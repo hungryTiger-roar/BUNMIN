@@ -38,6 +38,8 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
   // disconnect()로 의도적으로 닫힌 소켓의 onclose가 자동 재연결을 트리거하지 않게 하는 플래그.
   // socket.close()가 비동기여서 disconnect()에서 clearTimeout을 해도 그 직후 onclose가 새 setTimeout을 설치 → 무한 재연결 루프.
+  // 부수 효과: React 18 StrictMode dev 의 합성 unmount → cleanup → disconnect → onclose 경로에서
+  // ghost reconnect 타이머가 잡혀 같은 audio 가 두 번 송출되던 race 도 함께 차단.
   const intentionallyClosedRef = useRef(false)
 
   // 각 setter를 개별 selector로 구독 — Zustand action은 stable 이므로 재렌더 트리거하지 않음
