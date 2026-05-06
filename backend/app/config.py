@@ -152,7 +152,7 @@ class ModelConfig:
     ASR_DEVICE = _resolve_device("ASR_DEVICE", "asr")
     ASR_DTYPE  = _dtype(ASR_DEVICE)  # faster-whisper는 compute_type을 ASRService 내부에서 결정
 
-    NMT_ASR_MODEL  = os.environ.get("NMT_ASR_MODEL", "Helsinki-NLP/opus-mt-ko-en")
+    NMT_ASR_MODEL  = os.environ.get("NMT_ASR_MODEL", "facebook/nllb-200-distilled-600M")
     NMT_ASR_DEVICE = _resolve_device("NMT_ASR_DEVICE", "nmt_asr")
     NMT_ASR_DTYPE  = os.environ.get("NMT_ASR_DTYPE", _dtype(NMT_ASR_DEVICE))
 

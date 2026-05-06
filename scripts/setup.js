@@ -12,6 +12,17 @@ if (process.platform === 'win32') {
   try { execSync('chcp 65001', { stdio: 'ignore' }) } catch { /* ignore */ }
 }
 
+// ANSI 색상 (TTY 에서만 적용 — 로그 파일/리다이렉트 시 자동으로 무영향)
+// step 진행 상황 = cyan, 성공 = green, 경고 = yellow, 오류 = red
+const C = process.stdout.isTTY ? {
+  green:  '\x1b[32m',
+  red:    '\x1b[31m',
+  yellow: '\x1b[33m',
+  cyan:   '\x1b[36m',
+  bold:   '\x1b[1m',
+  reset:  '\x1b[0m',
+} : { green: '', red: '', yellow: '', cyan: '', bold: '', reset: '' }
+
 function run(cmd, opts = {}) {
   execSync(cmd, { stdio: 'inherit', cwd: ROOT, ...opts })
 }
@@ -24,9 +35,11 @@ function runWithLog(cmd, logName) {
   try {
     if (process.platform === 'win32') {
       // PowerShell Tee-Object: 콘솔 + 파일 동시 출력, 내부 명령 종료 코드 보존
+      // ForEach-Object { "$_" }: stderr 의 ErrorRecord 를 일반 문자열로 변환
+      // → pip/conda 의 진행 메시지가 빨간색으로 렌더링되는 문제 방지 (실제 오류만 빨강)
       const psCmd =
         `$ErrorActionPreference='Continue'; ` +
-        `& { ${cmd} } 2>&1 | Tee-Object -FilePath '${logPath.replace(/'/g, "''")}'; ` +
+        `& { ${cmd} } 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath '${logPath.replace(/'/g, "''")}'; ` +
         `exit $LASTEXITCODE`
       execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', psCmd], {
         cwd: ROOT, stdio: 'inherit',
@@ -44,10 +57,10 @@ function runWithLog(cmd, logName) {
         /^\s*ERROR/i.test(l) || /\berror: /i.test(l) || /^\s*fatal:/i.test(l)
       )
       if (errorLines.length) {
-        console.error('\n  ▼ 에러 요약 (전체 로그는 위 경로 참조) ▼')
-        errorLines.slice(-30).forEach(l => console.error('    ' + l.trim()))
+        console.error(`\n  ${C.red}▼ 에러 요약 (전체 로그는 위 경로 참조) ▼${C.reset}`)
+        errorLines.slice(-30).forEach(l => console.error(`    ${C.red}${l.trim()}${C.reset}`))
       } else {
-        console.error(`\n  ✗ 실패. 전체 로그: ${logPath}`)
+        console.error(`\n  ${C.red}✗ 실패. 전체 로그:${C.reset} ${logPath}`)
       }
     }
     throw err
@@ -72,12 +85,12 @@ function runOutput(cmd) {
 }
 
 function step(n, total, label) {
-  console.log(`\n[${n}/${total}] ${label}`)
+  console.log(`\n${C.cyan}${C.bold}[${n}/${total}] ${label}${C.reset}`)
 }
 
-console.log('========================================')
+console.log(`${C.bold}========================================`)
 console.log('  Aunion AI 환경 설정')
-console.log('========================================')
+console.log(`========================================${C.reset}`)
 
 // ── conda 자동 탐색 ────────────────────────────────────────────────────────
 // PowerShell / cmd / git bash / Anaconda Prompt 등 셸별 PATH 차이 흡수.
@@ -90,7 +103,7 @@ function ensureCondaInPath() {
   if (process.env.CONDA_EXE && fs.existsSync(process.env.CONDA_EXE)) {
     const dir = path.dirname(process.env.CONDA_EXE)
     process.env.PATH = `${dir}${path.delimiter}${process.env.PATH || ''}`
-    console.log(`  conda 자동 탐색: CONDA_EXE → ${dir}`)
+    console.log(`  ${C.cyan}conda 자동 탐색:${C.reset} CONDA_EXE → ${dir}`)
     return
   }
 
@@ -124,7 +137,7 @@ function ensureCondaInPath() {
   for (const dir of candidates) {
     if (fs.existsSync(path.join(dir, exeName))) {
       process.env.PATH = `${dir}${path.delimiter}${process.env.PATH || ''}`
-      console.log(`  conda 자동 탐색: ${dir} 을 PATH 에 추가`)
+      console.log(`  ${C.cyan}conda 자동 탐색:${C.reset} ${dir} 을 PATH 에 추가`)
       return
     }
   }
@@ -135,7 +148,7 @@ ensureCondaInPath()
 // ── 사전 확인: conda ───────────────────────────────────────────────────────
 const condaVersion = runOutput('conda --version')
 if (!condaVersion) {
-  console.error('\n[오류] conda를 찾을 수 없습니다.')
+  console.error(`\n${C.red}[오류] conda를 찾을 수 없습니다.${C.reset}`)
   console.error('  Miniconda 또는 Anaconda를 표준 위치에 설치해주세요:')
   console.error('  https://docs.conda.io/en/latest/miniconda.html')
   console.error('')
@@ -149,7 +162,7 @@ if (!condaVersion) {
   }
   process.exit(1)
 }
-console.log(`\n  conda 확인: ${condaVersion}`)
+console.log(`\n  ${C.green}conda 확인:${C.reset} ${condaVersion}`)
 
 // ── 사전 확인: node / npm ─────────────────────────────────────────────────
 const nodeVersion = runOutput('node --version')
@@ -161,7 +174,7 @@ const TOTAL = 7
 // 1. 루트 npm 패키지
 step(1, TOTAL, '루트 npm 패키지 설치...')
 run('npm install')
-console.log('  완료')
+console.log(`  ${C.green}완료${C.reset}`)
 
 // 2. 프론트엔드 npm 패키지
 step(2, TOTAL, '프론트엔드 npm 패키지 설치...')
@@ -185,13 +198,13 @@ run('npm install --prefix frontend')
     if (fs.existsSync(src)) {
       fs.mkdirSync(publicDir, { recursive: true })
       fs.copyFileSync(src, dst)
-      console.log(`  ✓ ${f} 복사 완료`)
+      console.log(`  ${C.green}✓${C.reset} ${f} 복사 완료`)
     } else {
-      console.warn(`  ⚠️  ${f} 소스 없음 (node_modules가 설치됐는지 확인)`)
+      console.warn(`  ${C.yellow}⚠️  ${f} 소스 없음 (node_modules가 설치됐는지 확인)${C.reset}`)
       anyMissing = true
     }
   }
-  if (!anyMissing) console.log('  VAD 모델 파일 준비 완료')
+  if (!anyMissing) console.log(`  ${C.green}VAD 모델 파일 준비 완료${C.reset}`)
 }
 
 // 2-b. piper-tts-web WASM 런타임 복사 — 수강자 브라우저 TTS 동작에 필수
@@ -203,7 +216,7 @@ run('npm install --prefix frontend')
   const piperDirs = ['onnx', 'piper', 'worker']
 
   if (!fs.existsSync(piperDist)) {
-    console.warn('  ⚠️  piper-tts-web 소스 디렉토리 없음 (npm install 누락? frontend/node_modules 확인)')
+    console.warn(`  ${C.yellow}⚠️  piper-tts-web 소스 디렉토리 없음 (npm install 누락? frontend/node_modules 확인)${C.reset}`)
   } else {
     let anyMissing = false
     for (const d of piperDirs) {
@@ -214,16 +227,16 @@ run('npm install --prefix frontend')
         continue
       }
       if (!fs.existsSync(src)) {
-        console.warn(`  ⚠️  ${d}/ 소스 없음 (piper-tts-web 패키지 구조 변경 가능성)`)
+        console.warn(`  ${C.yellow}⚠️  ${d}/ 소스 없음 (piper-tts-web 패키지 구조 변경 가능성)${C.reset}`)
         anyMissing = true
         continue
       }
       // 재귀 복사
       fs.mkdirSync(dst, { recursive: true })
       fs.cpSync(src, dst, { recursive: true })
-      console.log(`  ✓ ${d}/ 복사 완료`)
+      console.log(`  ${C.green}✓${C.reset} ${d}/ 복사 완료`)
     }
-    if (!anyMissing) console.log('  piper-tts-web WASM 파일 준비 완료 (수강자 TTS)')
+    if (!anyMissing) console.log(`  ${C.green}piper-tts-web WASM 파일 준비 완료 (수강자 TTS)${C.reset}`)
   }
 }
 
@@ -235,11 +248,11 @@ if (fs.existsSync(envPath)) {
   console.log('  .env 이미 존재 → 스킵')
 } else if (fs.existsSync(envExamplePath)) {
   fs.copyFileSync(envExamplePath, envPath)
-  console.log('  .env 생성 완료 (.env.example 복사)')
+  console.log(`  ${C.green}.env 생성 완료${C.reset} (.env.example 복사)`)
   console.log('  ※ HF_TOKEN은 선택사항 (공개 모델은 토큰 없이 다운로드 가능)')
   console.log('    빠른 다운로드 원하면: https://huggingface.co/settings/tokens')
 } else {
-  console.log('  ⚠️  .env.example 없음 — .env를 수동으로 만들어주세요.')
+  console.log(`  ${C.yellow}⚠️  .env.example 없음 — .env를 수동으로 만들어주세요.${C.reset}`)
 }
 
 // 4. conda aunion 환경
@@ -263,10 +276,10 @@ if (envExists) {
   // 기본 채널 시도 → 실패 시 conda-forge 로 폴백 (TOS 불필요)
   const created = runSilent('conda create -n aunion python=3.11 -y')
   if (!created) {
-    console.log('  기본 채널 실패 → conda-forge 채널로 재시도...')
+    console.log(`  ${C.yellow}기본 채널 실패 → conda-forge 채널로 재시도...${C.reset}`)
     run('conda create -n aunion python=3.11 -y -c conda-forge --override-channels')
   }
-  console.log('  완료')
+  console.log(`  ${C.green}완료${C.reset}`)
 }
 
 // 5. Python 패키지
@@ -296,19 +309,19 @@ const hasCudaTorch = runSilent(
 if (hasCudaTorch) {
   console.log('  torch CUDA 버전 이미 설치됨 → 스킵')
 } else if (hasNvidiaGpu) {
-  console.log('  NVIDIA GPU 감지 → torch CUDA 버전 설치 중 (cu126)...')
+  console.log(`  ${C.cyan}NVIDIA GPU 감지${C.reset} → torch CUDA 버전 설치 중 (cu126)...`)
   run(
     'conda run --no-capture-output -n aunion pip install --force-reinstall --no-deps' +
     ' torch torchvision torchaudio' +
     ' --index-url https://download.pytorch.org/whl/cu126'
   )
-  console.log('  torch 설치 완료')
+  console.log(`  ${C.green}torch 설치 완료${C.reset}`)
 } else {
-  console.log('  ⚠️ NVIDIA GPU 미감지(nvidia-smi 실패) → CPU 버전 torch 유지')
+  console.log(`  ${C.yellow}⚠️ NVIDIA GPU 미감지(nvidia-smi 실패) → CPU 버전 torch 유지${C.reset}`)
   console.log('     VLM 번역 등 GPU 필요 기능은 동작하지 않습니다.')
   console.log('     GPU가 있는데도 이 메시지가 보이면 NVIDIA 드라이버를 확인하세요.')
 }
-console.log('  완료')
+console.log(`  ${C.green}완료${C.reset}`)
 
 // 6. AI 모델 다운로드
 step(6, TOTAL, 'AI 모델 다운로드...')
@@ -326,7 +339,7 @@ step(7, TOTAL, '설치 검증...')
   const publicDir = path.join(ROOT, 'frontend', 'public')
   for (const f of ['silero_vad_legacy.onnx', 'silero_vad_v5.onnx']) {
     if (!fs.existsSync(path.join(publicDir, f))) {
-      console.error(`  ✗ 누락: frontend/public/${f}`)
+      console.error(`  ${C.red}✗ 누락:${C.reset} frontend/public/${f}`)
       ok = false
     }
   }
@@ -334,17 +347,21 @@ step(7, TOTAL, '설치 검증...')
   // piper-tts-web WASM 파일 확인 (수강자 TTS 동작 필수)
   for (const d of ['onnx', 'piper', 'worker']) {
     if (!fs.existsSync(path.join(publicDir, d))) {
-      console.error(`  ✗ 누락: frontend/public/${d}/ (수강자 TTS 미동작)`)
+      console.error(`  ${C.red}✗ 누락:${C.reset} frontend/public/${d}/ (수강자 TTS 미동작)`)
       ok = false
     }
   }
 
-  // NMT CTranslate2 모델 확인 — 필수 파일 5개 모두 존재해야 함
-  // (sentencepiece spm 파일 누락 시 nmt_service가 HF 폴백으로 떨어져 성능 저하)
-  const nmtDir = path.join(ROOT, 'models', 'opus-mt-ko-en-ct2')
-  for (const f of ['model.bin', 'config.json', 'shared_vocabulary.json', 'source.spm', 'target.spm']) {
+  // NMT CTranslate2 모델 확인 — NLLB 토크나이저 파일이 모두 동봉되어야 정상 동작
+  // (tokenizer.json / sentencepiece.bpe.model 누락 시 nmt_service 가 HF 폴백으로 떨어져 성능 저하)
+  const nmtDir = path.join(ROOT, 'models', 'nllb-200-distilled-600M-ct2')
+  for (const f of [
+    'model.bin', 'config.json',
+    'tokenizer.json', 'sentencepiece.bpe.model',
+    'tokenizer_config.json', 'special_tokens_map.json',
+  ]) {
     if (!fs.existsSync(path.join(nmtDir, f))) {
-      console.error(`  ✗ 누락: models/opus-mt-ko-en-ct2/${f} (NMT CTranslate2 부분 변환)`)
+      console.error(`  ${C.red}✗ 누락:${C.reset} models/nllb-200-distilled-600M-ct2/${f} (NMT CTranslate2 부분 변환)`)
       ok = false
     }
   }
@@ -353,7 +370,7 @@ step(7, TOTAL, '설치 검증...')
   // HF 캐시 대신 평탄 디렉토리 사용으로 Windows 심볼릭 이슈 우회
   const vlmBaseDir = path.join(ROOT, 'models', 'qwen2.5-vl-7b-instruct')
   if (!fs.existsSync(vlmBaseDir)) {
-    console.error('  ✗ 누락: models/qwen2.5-vl-7b-instruct/ (VLM Base)')
+    console.error(`  ${C.red}✗ 누락:${C.reset} models/qwen2.5-vl-7b-instruct/ (VLM Base)`)
     ok = false
   } else {
     const shards = fs.readdirSync(vlmBaseDir).filter(f => f.endsWith('.safetensors'))
@@ -363,7 +380,7 @@ step(7, TOTAL, '설치 검증...')
     const sizeGb = totalBytes / (1024 ** 3)
     if (shards.length < 5 || sizeGb < 12) {
       console.error(
-        `  ✗ VLM Base 부분 다운로드 (shards ${shards.length}/5, ${sizeGb.toFixed(2)}GB / 14GB 기대)`
+        `  ${C.red}✗ VLM Base 부분 다운로드${C.reset} (shards ${shards.length}/5, ${sizeGb.toFixed(2)}GB / 14GB 기대)`
       )
       console.error('     conda run -n aunion python scripts/download_models.py 로 재실행')
       ok = false
@@ -373,24 +390,24 @@ step(7, TOTAL, '설치 검증...')
   // ASR 모델 (faster-whisper CTranslate2 int8) — 로컬 디렉토리 + model.bin
   const asrDir = path.join(ROOT, 'models', 'whisper-large-v3-turbo-ct2-int8')
   if (!fs.existsSync(path.join(asrDir, 'model.bin'))) {
-    console.error('  ✗ 누락: models/whisper-large-v3-turbo-ct2-int8/model.bin (ASR)')
+    console.error(`  ${C.red}✗ 누락:${C.reset} models/whisper-large-v3-turbo-ct2-int8/model.bin (ASR)`)
     ok = false
   }
 
   // .env 확인
   if (!fs.existsSync(path.join(ROOT, '.env'))) {
-    console.error('  ✗ 누락: .env')
+    console.error(`  ${C.red}✗ 누락:${C.reset} .env`)
     ok = false
   }
 
   if (ok) {
-    console.log('  모든 파일 확인 완료 ✓')
+    console.log(`  ${C.green}모든 파일 확인 완료 ✓${C.reset}`)
   } else {
-    console.error('\n  ⚠️  일부 파일이 누락됐습니다. 위 오류를 확인하세요.')
+    console.error(`\n  ${C.yellow}⚠️  일부 파일이 누락됐습니다. 위 오류를 확인하세요.${C.reset}`)
   }
 }
 
-console.log('\n========================================')
+console.log(`\n${C.green}${C.bold}========================================`)
 console.log('  Setup 완료!')
 console.log('  npm run dev 로 서버를 시작하세요.')
-console.log('========================================\n')
+console.log(`========================================${C.reset}\n`)

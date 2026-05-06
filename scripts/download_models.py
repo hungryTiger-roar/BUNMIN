@@ -49,11 +49,12 @@ ASR_MODEL = {
 }
 
 # NMT 모델 (실시간 번역) — CTranslate2 변환 대상
+# Meta 의 200개 언어 다국어 모델, 짧은 인사말·다문장에서도 환각 거의 없음
 NMT_MODEL = {
-    "repo_id": "Helsinki-NLP/opus-mt-ko-en",
-    "local_dir": MODELS_DIR / "opus-mt-ko-en-ct2",
-    "description": "NMT 실시간 번역 모델 (CTranslate2 int8)",
-    "size": "~150MB",
+    "repo_id": "facebook/nllb-200-distilled-600M",
+    "local_dir": MODELS_DIR / "nllb-200-distilled-600M-ct2",
+    "description": "NMT 실시간 번역 모델 (CTranslate2 int8, 다국어)",
+    "size": "~600MB",
 }
 
 # Surya OCR 모델 (Transformer 기반, 고정확도)
@@ -159,7 +160,9 @@ def _find_ct2_converter() -> str:
 
 
 def convert_nmt_ct2(model: dict, step: str) -> bool:
-    """Helsinki opus-mt 모델을 CTranslate2 int8 포맷으로 변환"""
+    """NLLB-200 모델을 CTranslate2 int8 포맷으로 변환.
+    --copy_files 로 NllbTokenizer 가 필요로 하는 파일들을 동봉 →
+    nmt_service 가 AutoTokenizer.from_pretrained(local_dir) 로 직접 로드 가능."""
     import subprocess
 
     print(f"\n[{step}] {model['description']} ({model['size']})")
@@ -167,8 +170,12 @@ def convert_nmt_ct2(model: dict, step: str) -> bool:
     print(f"      경로: {model['local_dir']}")
     print("-" * 60)
 
-    # CTranslate2가 사용하는 필수 파일들 — 일부만 있는 부분 변환 상태 차단
-    required = ["model.bin", "source.spm", "target.spm", "shared_vocabulary.json", "config.json"]
+    # CT2 변환 산출물 + NLLB 토크나이저 파일 — 일부만 있는 부분 변환 상태 차단
+    required = [
+        "model.bin", "config.json",
+        "tokenizer.json", "sentencepiece.bpe.model",
+        "tokenizer_config.json", "special_tokens_map.json",
+    ]
     if model["local_dir"].exists():
         missing = [f for f in required if not (model["local_dir"] / f).exists()]
         if not missing:
@@ -179,7 +186,7 @@ def convert_nmt_ct2(model: dict, step: str) -> bool:
         shutil.rmtree(model["local_dir"])
 
     try:
-        print("CTranslate2 변환 중 (int8 양자화)...")
+        print("CTranslate2 변환 중 (int8 양자화 + 토크나이저 동봉)...")
         model["local_dir"].parent.mkdir(parents=True, exist_ok=True)
         converter = _find_ct2_converter()
         subprocess.run(
@@ -187,24 +194,14 @@ def convert_nmt_ct2(model: dict, step: str) -> bool:
                 converter,
                 "--model", model["repo_id"],
                 "--output_dir", str(model["local_dir"]),
+                "--copy_files",
+                "tokenizer.json", "sentencepiece.bpe.model",
+                "special_tokens_map.json", "tokenizer_config.json",
                 "--quantization", "int8",
                 "--force",
             ],
             check=True,
         )
-
-        # SentencePiece 파일은 변환기가 생성하지 않음 — HF 원본에서 직접 받아 동일 폴더에 배치
-        # (nmt_service.py가 _CT2_MODEL_DIR / "source.spm" / "target.spm" 로딩)
-        # local_dir 직접 저장으로 HF 캐시 심볼릭 우회
-        from huggingface_hub import hf_hub_download
-        for spm in ["source.spm", "target.spm"]:
-            hf_hub_download(
-                repo_id=model["repo_id"],
-                filename=spm,
-                local_dir=str(model["local_dir"]),
-            )
-            print(f"  + {spm} 복사 완료")
-
         print(f"✓ {model['description']} 변환 완료!")
         return True
     except FileNotFoundError:
@@ -272,7 +269,7 @@ def main():
     print(f"  2. {ASR_MODEL['description']} ({ASR_MODEL['size']})")
     print(f"  3. {NMT_MODEL['description']} ({NMT_MODEL['size']})")
     print(f"  4. {SURYA_OCR['description']} ({SURYA_OCR['size']})")
-    print(f"\n총 예상 용량: ~17.5GB (최초 1회만 다운로드)")
+    print(f"\n총 예상 용량: ~18GB (최초 1회만 다운로드)")
 
     results = []
 
