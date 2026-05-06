@@ -28,11 +28,16 @@ import { PiperWebEngine, OnnxWebRuntime, OnnxWebGPURuntime, PhonemizeWebRuntime 
 import * as ortWebGPU from 'onnxruntime-web/webgpu'
 import type { TranslationLang } from '@/stores/preferencesStore'
 
-// piper-tts-web v1.1.2 의 .d.ts 에 OnnxWebGPURuntime 가 누락 (런타임엔 export 됨).
+// piper-tts-web v1.1.2 의 .d.ts 에 OnnxWebGPURuntime / destroy() 가 누락 (런타임엔 존재).
 // 모듈 augmentation 으로 타입 보강.
 declare module 'piper-tts-web' {
   export class OnnxWebGPURuntime extends OnnxWebRuntime {
     constructor(options?: { ort?: unknown; basePath?: string; numThreads?: number })
+  }
+  // PiperWebEngine.destroy() — 내부 OnnxWebWorker / PhonemizeWebWorker terminate +
+  // FetchProvider 의 blob URL revoke. 언어 전환 시 명시적으로 호출해 WASM heap 누수 방지.
+  interface PiperWebEngine {
+    destroy(): void
   }
 }
 
@@ -250,6 +255,11 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
 
     updateStatus('loading')
 
+    // 빈번한 언어 전환 race 방어 — 엔진 생성 await 도중에 cleanup 이 실행되면
+    // 이 flag 가 true 가 되고, 늦게 도착한 엔진은 즉시 destroy 후 폐기됨.
+    // (없으면 좀비 엔진 + Worker 가 누적되어 WASM heap OOM 유발)
+    let aborted = false
+
     const init = async () => {
       try {
         // (2) 엔진 초기화와 병행해 voice 파일을 백그라운드 프리페치 — 의도적으로 await 안 함.
@@ -286,6 +296,15 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
           onnxRuntime,
           phonemizeRuntime: new PhonemizeWebRuntime(),
         })
+
+        // 엔진 생성 await 가 끝났는데 그 사이 cleanup 이 실행됐으면 (audioLang 빠르게 전환 등)
+        // 이 엔진은 이미 폐기 대상 — 즉시 destroy 후 return 으로 ref 에 안 올림.
+        // (안 그러면 새 엔진과 동시에 살아있어 Worker 2벌이 누적)
+        if (aborted) {
+          try { engine.destroy() } catch { /* ignore */ }
+          return
+        }
+
         engineRef.current = engine
         updateStatus('ready')
         setLoadingProgress(100)
@@ -308,9 +327,18 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
     init()
 
     return () => {
-      // 이전 엔진 참조 해제 → 내부 OnnxWebWorker / PhonemizeWebWorker GC 대상
-      // → WASM 힙 메모리 해제 → 새 언어 모델 로드 시 OOM 방지
+      // race 차단 — init 아직 await 중이면 늦게 도착한 엔진이 즉시 폐기됨
+      aborted = true
+
+      // 이전 엔진 명시적 destroy — 내부 OnnxWebWorker / PhonemizeWebWorker terminate +
+      // FetchProvider 의 voice blob URL revoke. 단순 ref=null 로는 Worker 가 살아남아
+      // WASM heap 누수 (특히 빈번한 언어 전환 시 좀비 엔진 누적 → OOM).
+      const prevEngine = engineRef.current
+      if (prevEngine) {
+        try { prevEngine.destroy() } catch { /* ignore */ }
+      }
       engineRef.current = null
+
       // 언어 변경 시 진행 중 task 도 정리 (이전 언어로 재생 안 되게)
       if (currentTaskRef.current) {
         try { currentTaskRef.current.source.stop() } catch { /* ignore */ }
