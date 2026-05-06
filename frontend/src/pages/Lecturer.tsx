@@ -103,6 +103,12 @@ function Lecturer() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [slideBoxWidth, setSlideBoxWidth] = useState<number | undefined>(undefined)
   const [pendingStart, setPendingStart] = useState(false)
+  // 강의 시작 전 화면공유 시도 시 잠깐 보여줄 안내 문구
+  const [screenShareNotice, setScreenShareNotice] = useState(false)
+  const screenShareNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => {
+    if (screenShareNoticeTimerRef.current) clearTimeout(screenShareNoticeTimerRef.current)
+  }, [])
 
   // 커서 위치 상태 (브라우저 전체 기준 vw/vh 비율, 0~1)
   const [cursorPos, setCursorPos] = useState<{ x: number; y: number } | null>(null)
@@ -196,15 +202,15 @@ function Lecturer() {
 
   const screenVideoRef = useRef<HTMLVideoElement>(null)
 
-  // 캡처 종료 시 슬라이드 모드 복귀 — 미동작 시 강의자/수강자 모두 마지막 프레임에 멈춤
+  // 캡처 종료 시 슬라이드 모드 복귀 — 가드 없이 항상 알림.
+  // closure에 presentationMode를 묶어두면 stale일 때 메시지가 누락 → 학생이 마지막 프레임에 멈춤.
+  // onCaptureEnd는 캡처가 실제로 활성이었을 때만 호출되므로 가드 필요 없음.
   const handleScreenCaptureEnd = useCallback(() => {
-    if (presentationMode === 'screen') {
-      setPresentationMode('slide')
-      if (isLectureStarted && isConnected) {
-        send({ type: 'presentation_mode', mode: 'slide' })
-      }
+    setPresentationMode('slide')
+    if (useLectureStore.getState().isLectureStarted) {
+      send({ type: 'presentation_mode', mode: 'slide' })
     }
-  }, [presentationMode, setPresentationMode, isLectureStarted, isConnected, send])
+  }, [setPresentationMode, send])
 
   const {
     isCapturing: isScreenSharing,
@@ -601,9 +607,9 @@ function Lecturer() {
     }
   }
 
-  const canStartLecture = isConnected && (
-    presentationMode === 'screen' || slideStatus === 'ready'
-  )
+  // 강의 자료 선택은 필수 — 화면공유만을 위해 강의 시작하는 시나리오는 허용하지 않음.
+  // (선택 없이 시작하면 store에 남아있던 이전 자료가 학생 화면에 잘못 노출됨)
+  const canStartLecture = isConnected && slideStatus === 'ready'
 
   const participantTotal =
     (participants.lecturer?.connected ? 1 : 0) + participants.students.length
@@ -1161,13 +1167,38 @@ function Lecturer() {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                       </svg>
                       <p>화면을 공유하세요</p>
-                      <button
-                        onClick={startScreenCapture}
-                        disabled={!isLectureStarted}
-                        className="mt-4 px-4 py-2 bg-primary hover:opacity-90 text-onPrimary rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        화면 공유 시작
-                      </button>
+                      <div className="relative inline-flex flex-col items-center mt-4">
+                        <button
+                          onClick={() => {
+                            if (!isLectureStarted) {
+                              if (screenShareNoticeTimerRef.current) {
+                                clearTimeout(screenShareNoticeTimerRef.current)
+                              }
+                              setScreenShareNotice(true)
+                              screenShareNoticeTimerRef.current = setTimeout(() => {
+                                setScreenShareNotice(false)
+                                screenShareNoticeTimerRef.current = null
+                              }, 2200)
+                              return
+                            }
+                            startScreenCapture()
+                          }}
+                          aria-disabled={!isLectureStarted}
+                          className={`px-4 py-2 bg-primary text-onPrimary rounded-lg transition-colors ${
+                            isLectureStarted ? 'hover:opacity-90' : 'opacity-50 cursor-not-allowed'
+                          }`}
+                        >
+                          화면 공유 시작
+                        </button>
+                        <div
+                          aria-live="polite"
+                          className={`pointer-events-none absolute top-full mt-2 px-3 py-1.5 rounded-md text-xs whitespace-nowrap bg-black/80 text-white shadow-md transition-opacity duration-200 ${
+                            screenShareNotice ? 'opacity-100' : 'opacity-0'
+                          }`}
+                        >
+                          강의 시작 후 화면을 공유해주세요.
+                        </div>
+                      </div>
                     </div>
                   )}
                   {slideInnerOverlays}
@@ -1489,16 +1520,28 @@ function Lecturer() {
                 ) : (
                   chatMessages.map((msg) => (
                     <div key={msg.id}>
-                      <div className="flex items-baseline gap-1.5 mb-0.5">
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        {msg.sender === 'lecturer' && (
+                          <svg
+                            className="w-4 h-4 text-lecturerAccent flex-shrink-0"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth={1.7}
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M4.26 10.147a60.438 60.438 0 0 0-.491 6.347A48.62 48.62 0 0 1 12 20.904a48.62 48.62 0 0 1 8.232-4.41 60.46 60.46 0 0 0-.491-6.347m-15.482 0a50.636 50.636 0 0 0-2.658-.813A59.906 59.906 0 0 1 12 3.493a59.903 59.903 0 0 1 10.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.717 50.717 0 0 1 12 13.489a50.702 50.702 0 0 1 7.74-3.342M6.75 15a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm0 0v-3.675A55.378 55.378 0 0 1 12 8.443m-7.007 11.55A5.981 5.981 0 0 0 6.75 15.75v-1.5" />
+                          </svg>
+                        )}
                         <span
                           className={`text-sm font-semibold ${
-                            msg.sender === 'lecturer' ? 'text-gradientPurple' : 'text-onSurface'
+                            msg.sender === 'lecturer' ? 'text-lecturerAccent' : 'text-onSurface'
                           }`}
                         >
                           {msg.name}
                         </span>
                         {msg.sender === 'lecturer' && (
-                          <span className="text-[10px] px-1.5 py-0.5 bg-gradientPurple/20 text-gradientPurple rounded font-medium">
+                          <span className="text-xs px-1.5 py-0.5 bg-lecturerAccent/15 text-lecturerAccent rounded font-medium">
                             강사
                           </span>
                         )}

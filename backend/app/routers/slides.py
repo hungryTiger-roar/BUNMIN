@@ -51,6 +51,47 @@ LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
 # 처리 상태 저장 (메모리, 실제 서비스에서는 Redis 사용 권장)
 slide_status: dict[str, dict] = {}
 slide_data: dict[str, list[dict]] = {}
+# 슬라이드별 한↔영 도메인 용어집 (실시간 NMT 환각 억제 — ws.py 가 lecture_start 시 가져감)
+slide_glossary: dict[str, dict[str, str]] = {}
+
+
+def get_slide_glossary(slide_id: str) -> dict[str, str]:
+    """주어진 slide_id 의 도메인 용어집 ({한글: 영어}) 반환. 없으면 빈 dict."""
+    return slide_glossary.get(slide_id, {})
+
+
+def _recover_glossary_from_cache(meta: dict) -> dict[str, str]:
+    """metadata 에 glossary 필드가 없는 구버전 처리분 자료를 위한 자동 복원.
+    page_data 의 첫 overlay_items 텍스트(=lecture_title 후보)로 glossary 캐시 디렉토리를
+    탐색해 매칭되는 캐시가 있으면 그 terms 를 반환. 못 찾으면 빈 dict.
+    """
+    page_data = meta.get("page_data") or []
+    if not page_data:
+        return {}
+    first_overlay = page_data[0].get("overlay_items") or []
+    if not first_overlay:
+        return {}
+    candidate_title = (first_overlay[0].get("original") or "")[:50]
+    if not candidate_title:
+        return {}
+
+    try:
+        from app.services.glossary_builder import GLOSSARY_DIR
+    except Exception:
+        return {}
+
+    if not GLOSSARY_DIR.exists():
+        return {}
+
+    for cache_file in GLOSSARY_DIR.glob("glossary_*.json"):
+        try:
+            with open(cache_file, encoding="utf-8") as f:
+                cache = json.load(f)
+            if cache.get("lecture_title", "") == candidate_title:
+                return cache.get("terms", {}) or {}
+        except Exception:
+            continue
+    return {}
 
 # 콘텐츠 해시(SHA256) → 기존 slide_id 매핑 — 동일 파일 재업로드 dedup용
 _hash_to_slide_id: dict[str, str] = {}
@@ -221,6 +262,8 @@ def save_metadata(slide_id: str) -> None:
         "content_hash": s.get("content_hash"),  # 재업로드 dedup용 (없을 수도 있음 — migrate된 레거시)
         "last_page": s.get("last_page", 1),  # 마지막 본 페이지 (1-indexed) — 다음 로드 시 그 페이지부터 시작
         "page_data": slide_data.get(slide_id, []),
+        # 실시간 NMT 환각 억제용 도메인 용어집 — 슬라이드 재로드 시 복원됨
+        "glossary": slide_glossary.get(slide_id, {}),
     }
     try:
         with open(_meta_path(slide_id), "w", encoding="utf-8") as f:
@@ -585,7 +628,7 @@ async def download_slide(
 
 # ─── 라이브러리 / 로드 / 삭제 엔드포인트 ─────────────────────────────────────
 @router.get("/library")
-async def get_library(sort: str = Query("recent", pattern="^(recent|name)$")):
+async def get_library(sort: str = Query("recent", pattern="^(recent|name|size)$")):
     """저장된 강의자료 목록 (파일 기반, 서버 재시작 후에도 유지)."""
     items = []
     for meta_file in LIBRARY_DIR.glob("*.meta.json"):
@@ -596,6 +639,12 @@ async def get_library(sort: str = Query("recent", pattern="^(recent|name)$")):
             print(f"[Slides] 메타 읽기 실패: {meta_file.name} - {e}")
             continue
         translated_pdf = TRANSLATED_DIR / f"{meta['slide_id']}_translated.pdf"
+        # 원본 PDF 크기 — 라이브러리 정렬/표시용. 파일이 없거나 stat 실패해도 0으로 폴백.
+        pdf_path = UPLOAD_DIR / f"{meta['slide_id']}.pdf"
+        try:
+            file_size = pdf_path.stat().st_size if pdf_path.exists() else 0
+        except OSError:
+            file_size = 0
         items.append({
             "slide_id": meta["slide_id"],
             "filename": meta.get("filename", f"{meta['slide_id']}.pdf"),
@@ -603,10 +652,13 @@ async def get_library(sort: str = Query("recent", pattern="^(recent|name)$")):
             "total_pages": meta.get("total_pages", 0),
             "status": meta.get("status", "completed"),
             "has_translated": translated_pdf.exists(),
+            "file_size": file_size,
         })
 
     if sort == "name":
         items.sort(key=lambda x: x["filename"].lower())
+    elif sort == "size":
+        items.sort(key=lambda x: x["file_size"], reverse=True)
     else:
         items.sort(key=lambda x: x["uploaded_at"], reverse=True)
 
@@ -653,6 +705,25 @@ async def load_slide(slide_id: str):
         "last_page": meta.get("last_page", 1),
     }
     slide_data[slide_id] = page_data
+    # 메타에 보존된 도메인 용어집 복원 (실시간 NMT 가 사용)
+    saved_glossary = meta.get("glossary") or {}
+    if not saved_glossary:
+        # 구버전 처리분(이번 변경 이전) 자동 복원: glossary 캐시 디렉토리에서 lecture_title 매칭
+        recovered = _recover_glossary_from_cache(meta)
+        if recovered:
+            saved_glossary = recovered
+            # metadata 에 보강 저장 → 다음 로드 시엔 캐시 탐색 안 해도 됨
+            try:
+                meta["glossary"] = recovered
+                with open(meta_path, "w", encoding="utf-8") as f:
+                    json.dump(meta, f, ensure_ascii=False, indent=2)
+                print(f"[Slides] {slide_id} 용어집 자동 복원: {len(recovered)}개 (캐시 매칭 → metadata 보강)")
+            except Exception as e:
+                print(f"[Slides] {slide_id} 용어집 복원은 됐으나 metadata 저장 실패 (무시): {e}")
+    if saved_glossary:
+        slide_glossary[slide_id] = saved_glossary
+        if meta.get("glossary"):
+            print(f"[Slides] {slide_id} 용어집 복원: {len(saved_glossary)}개")
 
     return {
         "slide_id": slide_id,
@@ -693,6 +764,7 @@ def _delete_slide_files(slide_id: str) -> list[str]:
 
     slide_status.pop(slide_id, None)
     slide_data.pop(slide_id, None)
+    slide_glossary.pop(slide_id, None)
 
     return deleted
 
@@ -839,6 +911,10 @@ async def process_slide(slide_id: str, pdf_path: Path):
                 glossary = await asyncio.to_thread(
                     build_glossary_from_ocr_results, ocr_results, lecture_title
                 )
+                # 실시간 NMT 가 가져갈 수 있게 slide_id 별로 보존
+                if glossary:
+                    slide_glossary[slide_id] = glossary
+                    print(f"[Slides] {slide_id} 용어집 보존: {len(glossary)}개 (실시간 NMT 활용)")
             except Exception as e:
                 print(f"[Slides] 용어집 빌드 실패 (무시): {e}")
 

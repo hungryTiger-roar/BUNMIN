@@ -21,10 +21,21 @@ from app.utils.network import SERVER_PORT, get_lan_ip
 # 없으면 HF repo_id로 fallback. 사용자가 env로 명시하면 그 값 그대로.
 from pathlib import Path as _Path
 
+def _vlm_default() -> str:
+    """env 미지정 시 사용할 기본값. 로컬 디렉토리(USER_DATA → INSTALL → PROJECT_ROOT)가
+    있으면 그 경로, 없으면 HF repo_id 로 fallback 해 다운로드 트리거.
+    Electron 배포 환경에서 사용자별 모델 디렉토리를 우선 사용하기 위함."""
+    found = resolve_model_dir("qwen2.5-vl-7b-instruct")
+    return str(found) if found is not None else "Qwen/Qwen2.5-VL-7B-Instruct"
+
+
 def _resolve_vlm(value: str) -> str:
     p = _Path(value)
     if p.is_absolute():
-        return value
+        # 절대 경로 — 디렉토리 존재하면 그대로, 없으면 기본값으로 fallback
+        if p.is_dir():
+            return value
+        return _vlm_default()
     # 상대 경로면 다단계 폴백 (USER_DATA → INSTALL → PROJECT_ROOT)
     found = resolve_model_dir(_Path(value).name)
     if found is not None:
@@ -33,14 +44,12 @@ def _resolve_vlm(value: str) -> str:
     candidate = PROJECT_ROOT / value
     if candidate.is_dir():
         return str(candidate)
+    # 로컬 경로 형식인데 어디에도 없음 → HF repo_id 기본값으로 fallback
+    # (그렇지 않으면 _download_one이 "로컬 경로에 없습니다" 에러로 막힘)
+    if value.startswith(("models/", "models\\", "./", "../", ".\\", "..\\")):
+        return _vlm_default()
+    # repo_id 형식 (예: "Qwen/Qwen2.5-VL-7B-Instruct") — 그대로
     return value
-
-def _vlm_default() -> str:
-    """env 미지정 시 사용할 기본값. 로컬 디렉토리(USER_DATA → INSTALL → PROJECT_ROOT)가
-    있으면 그 경로, 없으면 HF repo_id 로 fallback 해 다운로드 트리거.
-    Electron 배포 환경에서 사용자별 모델 디렉토리를 우선 사용하기 위함."""
-    found = resolve_model_dir("qwen2.5-vl-7b-instruct")
-    return str(found) if found is not None else "Qwen/Qwen2.5-VL-7B-Instruct"
 
 
 VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL") or _vlm_default())
@@ -628,7 +637,17 @@ async def spa_fallback(path: str):
         except (OSError, ValueError):
             pass
     # 2) SPA 라우트 (/, /lecturer 등) → index.html
+    # index.html은 항상 최신 빌드(에셋 해시 참조)를 가리켜야 하므로 캐시 비활성.
+    # /assets/index-<hash>.js 같은 해시된 정적 파일은 위쪽 경로에서 FileResponse로
+    # 그대로 캐시 가능(해시가 바뀌면 자동으로 cache miss).
     index = os.path.join(_FRONTEND_DIST, 'index.html')
     if os.path.isfile(index):
-        return FileResponse(index)
+        return FileResponse(
+            index,
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
     return {'service': 'Aunion AI Backend', 'version': '1.0.0'}

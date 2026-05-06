@@ -157,13 +157,6 @@ def _has_vlm_weights(directory: Path) -> bool:
     return False
 
 
-def _resolve_vlm(value: str) -> str:
-    p = Path(value)
-    if p.is_absolute():
-        return value
-    candidate = _PROJECT_ROOT / value
-    return str(candidate) if _has_vlm_weights(candidate) else value
-
 def _vlm_default() -> str:
     """env 미지정 시 기본값. 로컬 동봉본 있으면 거기, 없으면 HF repo_id로 fallback해
     다운로드 트리거. Electron 배포 환경에서 동봉 모델 우선 사용."""
@@ -171,6 +164,25 @@ def _vlm_default() -> str:
     if _has_vlm_weights(local):
         return str(local)
     return "Qwen/Qwen2.5-VL-7B-Instruct"
+
+
+def _resolve_vlm(value: str) -> str:
+    p = Path(value)
+    if p.is_absolute():
+        # 절대 경로 — 디렉토리 + 가중치 있으면 그대로, 없으면 기본값으로 fallback
+        if _has_vlm_weights(p):
+            return value
+        return _vlm_default()
+    # 상대 경로 → PROJECT_ROOT 기준으로 해석
+    candidate = _PROJECT_ROOT / value
+    if _has_vlm_weights(candidate):
+        return str(candidate)
+    # 로컬 경로 형식인데 어디에도 없음 → HF repo_id 기본값으로 fallback
+    # (그렇지 않으면 from_pretrained가 "not a local folder and not a valid model identifier" 에러)
+    if value.startswith(("models/", "models\\", "./", "../", ".\\", "..\\")):
+        return _vlm_default()
+    # repo_id 형식 (예: "Qwen/Qwen2.5-VL-7B-Instruct") — 그대로
+    return value
 
 
 VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL") or _vlm_default())
@@ -1330,8 +1342,9 @@ Translate:"""
             },
         ]
 
-        # Qwen3-VL은 thinking 모드 활성화 시 <think>...</think> 블록을 출력해
-        # 번호 매핑 파싱이 오염됨. 지원하지 않는 processor(Qwen2.5-VL 등)는 TypeError 발생.
+        # Qwen2.5-VL processor 는 enable_thinking 인자를 받지 않아 TypeError → no-arg 폴백.
+        # try 분기는 thinking 모드를 가진 다른 VLM(예: Qwen3-VL)으로 교체될 때 <think>...</think>
+        # 블록이 번호 매핑 파싱을 오염시키지 않도록 방어용으로 남겨둠.
         try:
             text = processor.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
