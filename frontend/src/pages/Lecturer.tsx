@@ -141,8 +141,31 @@ function Lecturer() {
   const theme = usePreferencesStore((s) => s.theme)
   const toggleTheme = usePreferencesStore((s) => s.toggleTheme)
 
+  // WebRTC: 학생별 RTCPeerConnection 관리. participants로부터 학생 ID 추적.
+  const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
+
+  const handleWebRtcAnswer = useCallback(async (sender: string, sdp: RTCSessionDescriptionInit) => {
+    const pc = peerConnectionsRef.current.get(sender)
+    if (!pc) return
+    try {
+      await pc.setRemoteDescription(sdp)
+    } catch (err) {
+      console.error('[Lecturer] setRemoteDescription failed:', err)
+    }
+  }, [])
+
+  const handleWebRtcIce = useCallback((sender: string | null, candidate: RTCIceCandidateInit) => {
+    if (!sender) return
+    const pc = peerConnectionsRef.current.get(sender)
+    if (!pc) return
+    pc.addIceCandidate(candidate).catch(() => { /* 핸드셰이크 도중 도착 가능 — 무시 */ })
+  }, [])
+
   const { isConnected, connect, send, sendChat, sendLectureTitle, sendLecturerName } =
-    useWebSocket(WS_PIPELINE_URL, 'lecturer')
+    useWebSocket(WS_PIPELINE_URL, 'lecturer', {
+      onWebRtcAnswer: handleWebRtcAnswer,
+      onWebRtcIce: handleWebRtcIce,
+    })
 
   const displayTitle =
     lectureTitle.trim() ||
@@ -161,12 +184,6 @@ function Lecturer() {
     send({ type: 'audio', audio: base64, sample_rate: 16000, sentAt: Date.now() })
   }, [send, isPaused])
 
-  const handleScreenData = useCallback((imageData: string) => {
-    if (!isPaused && isConnected) {
-      send({ type: 'screen', data: imageData })
-    }
-  }, [send, isPaused, isConnected])
-
   const {
     startCapture: startAudioCapture,
     stopCapture: stopAudioCapture,
@@ -176,14 +193,111 @@ function Lecturer() {
 
   const [micGainPct, setMicGainPct] = useState(100)
 
+  const screenVideoRef = useRef<HTMLVideoElement>(null)
+
+  // 캡처 종료 시 슬라이드 모드 복귀 — 미동작 시 강의자/수강자 모두 마지막 프레임에 멈춤
+  const handleScreenCaptureEnd = useCallback(() => {
+    if (presentationMode === 'screen') {
+      setPresentationMode('slide')
+      if (isLectureStarted && isConnected) {
+        send({ type: 'presentation_mode', mode: 'slide' })
+      }
+    }
+  }, [presentationMode, setPresentationMode, isLectureStarted, isConnected, send])
+
   const {
     isCapturing: isScreenSharing,
+    stream: screenStream,
     startCapture: startScreenCapture,
     stopCapture: stopScreenCapture,
     pickerSources: screenPickerSources,
     selectPickerSource: selectScreenSource,
     cancelPicker: cancelScreenPicker,
-  } = useScreenCapture({ onFrame: handleScreenData, frameRate: 2 })
+  } = useScreenCapture({
+    maxWidth: 1280,
+    onCaptureEnd: handleScreenCaptureEnd,
+  })
+
+  // 강의자 본인 화면용 — srcObject + autoPlay 조합은 일부 브라우저에서 자동재생 X → 명시적 play()
+  useEffect(() => {
+    const v = screenVideoRef.current
+    if (v) {
+      v.srcObject = screenStream
+      if (screenStream) v.play().catch(() => {})
+    }
+  }, [screenStream])
+
+  // WebRTC: 학생당 1개 PC 생성 → 화면 트랙 add → offer 송신
+  const createOfferForStudent = useCallback(async (studentId: string, stream: MediaStream) => {
+    // 기존 PC 있으면 닫고 새로 생성 (재협상 단순화)
+    const existing = peerConnectionsRef.current.get(studentId)
+    if (existing) {
+      existing.close()
+      peerConnectionsRef.current.delete(studentId)
+    }
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+    })
+    peerConnectionsRef.current.set(studentId, pc)
+    pc.onicecandidate = (e) => {
+      if (e.candidate) {
+        send({ type: 'webrtc_ice', target: studentId, candidate: e.candidate.toJSON() })
+      }
+    }
+    pc.onconnectionstatechange = () => {
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        peerConnectionsRef.current.delete(studentId)
+      }
+    }
+    stream.getTracks().forEach((t) => pc.addTrack(t, stream))
+    try {
+      const offer = await pc.createOffer()
+      await pc.setLocalDescription(offer)
+      send({ type: 'webrtc_offer', target: studentId, sdp: pc.localDescription })
+    } catch (err) {
+      console.error('[Lecturer] createOffer failed:', err)
+      pc.close()
+      peerConnectionsRef.current.delete(studentId)
+    }
+  }, [send])
+
+  // 화면 공유 시작/종료 + 학생 입출에 따라 PC 동기화
+  // 트래킹용 prev refs — 변화 종류별로 다르게 처리 (스트림 교체 vs 학생 변경)
+  const prevStreamRef = useRef<MediaStream | null>(null)
+  const prevStudentIdsRef = useRef<Set<string>>(new Set())
+  useEffect(() => {
+    const prevStream = prevStreamRef.current
+    const prevIds = prevStudentIdsRef.current
+    const currentIds = new Set(participants.students.map((s) => s.id))
+
+    if (!screenStream) {
+      // 스트림 종료 → 모든 PC 닫기
+      peerConnectionsRef.current.forEach((pc) => pc.close())
+      peerConnectionsRef.current.clear()
+    } else if (screenStream !== prevStream) {
+      // 스트림 새로 시작/교체 → 모든 학생에게 새 PC + offer
+      peerConnectionsRef.current.forEach((pc) => pc.close())
+      peerConnectionsRef.current.clear()
+      currentIds.forEach((id) => createOfferForStudent(id, screenStream))
+    } else {
+      // 같은 스트림에서 학생만 변경 → 신규에게만 offer, 떠난 학생 PC 닫기
+      currentIds.forEach((id) => {
+        if (!prevIds.has(id)) createOfferForStudent(id, screenStream)
+      })
+      prevIds.forEach((id) => {
+        if (!currentIds.has(id)) {
+          const pc = peerConnectionsRef.current.get(id)
+          if (pc) {
+            pc.close()
+            peerConnectionsRef.current.delete(id)
+          }
+        }
+      })
+    }
+
+    prevStreamRef.current = screenStream
+    prevStudentIdsRef.current = currentIds
+  }, [screenStream, participants.students, createOfferForStudent])
 
   useEffect(() => {
     connect()
@@ -273,23 +387,30 @@ function Lecturer() {
 
       const containerRect = container.getBoundingClientRect()
 
-      // 컨테이너 내 이미지 요소 찾기 (object-fit: contain 고려)
-      const img = container.querySelector('img') as HTMLImageElement | null
+      // 컨테이너 내 미디어 요소 찾기 (슬라이드 모드 = img, 화면공유 모드 = video)
+      const media = container.querySelector('img, video') as HTMLImageElement | HTMLVideoElement | null
       let imgOffsetX = 0
       let imgOffsetY = 0
       let imgWidth = containerRect.width
       let imgHeight = containerRect.height
 
-      if (img && img.naturalWidth && img.naturalHeight) {
-        const imgRatio = img.naturalWidth / img.naturalHeight
+      const naturalW = media instanceof HTMLImageElement ? media.naturalWidth
+                     : media instanceof HTMLVideoElement ? media.videoWidth
+                     : 0
+      const naturalH = media instanceof HTMLImageElement ? media.naturalHeight
+                     : media instanceof HTMLVideoElement ? media.videoHeight
+                     : 0
+
+      if (naturalW && naturalH) {
+        const ratio = naturalW / naturalH
         const containerRatio = containerRect.width / containerRect.height
 
-        if (imgRatio > containerRatio) {
+        if (ratio > containerRatio) {
           imgWidth = containerRect.width
-          imgHeight = containerRect.width / imgRatio
+          imgHeight = containerRect.width / ratio
         } else {
           imgHeight = containerRect.height
-          imgWidth = containerRect.height * imgRatio
+          imgWidth = containerRect.height * ratio
         }
         imgOffsetX = (containerRect.width - imgWidth) / 2
         imgOffsetY = (containerRect.height - imgHeight) / 2
@@ -1004,20 +1125,22 @@ function Lecturer() {
                   className={`relative h-full ${aspectClass} max-w-full bg-black rounded-xl overflow-hidden group ${theme === 'light' ? 'shadow-[0_4px_20px_rgba(0,0,0,0.08)]' : 'shadow-2xl'} flex items-center justify-center`}
                 >
                   {isScreenSharing ? (
-                    <div className="text-center text-white">
-                      <div className="w-16 h-16 mx-auto mb-4 bg-red-500 rounded-full flex items-center justify-center animate-pulse">
-                        <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
-                          <path d="M21 3H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H3V5h18v14z" />
-                        </svg>
-                      </div>
-                      <p className="text-lg font-medium">화면 공유 중</p>
+                    <>
+                      <video
+                        ref={screenVideoRef}
+                        autoPlay
+                        muted
+                        playsInline
+                        className="w-full h-full object-contain"
+                      />
                       <button
                         onClick={stopScreenCapture}
-                        className="mt-4 px-4 py-2 bg-red-500 hover:bg-red-600 rounded-lg transition-colors"
+                        className="absolute top-3 right-3 z-30 flex items-center gap-2 px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors text-sm font-medium shadow-lg"
                       >
+                        <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
                         공유 중지
                       </button>
-                    </div>
+                    </>
                   ) : (
                     <div className="text-center text-white/70">
                       <svg className="w-16 h-16 mx-auto mb-3 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">

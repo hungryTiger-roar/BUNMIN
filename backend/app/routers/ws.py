@@ -376,13 +376,27 @@ async def handle_lecturer(websocket: WebSocket):
 
             elif msg_type == "audio":
                 audio_size = len(message.get("audio", "")) * 3 // 4 // 1024
-                # print(f"[WS] 오디오 수신 ({audio_size}KB) → 처리 태스크 시작", flush=True)
                 task = asyncio.create_task(process_audio(message))
                 manager.track_task(task)
 
-            elif msg_type == "screen":
-                # print(f"[WS] 화면 데이터 수신, 수강자 수: {len(manager.students)}")
-                await process_screen(message)
+            # WebRTC 시그널링 — 강의자가 특정 수강자에게 offer/ICE 전달
+            elif msg_type == "webrtc_offer" or msg_type == "webrtc_ice":
+                target_id = message.get("target")
+                if not target_id:
+                    continue
+                payload = {"type": msg_type}
+                if msg_type == "webrtc_offer":
+                    payload["sdp"] = message.get("sdp")
+                else:
+                    payload["candidate"] = message.get("candidate")
+                # target student 찾아 forwarding
+                for ws, info in list(manager.student_info.items()):
+                    if info.get("id") == target_id and ws in manager.students:
+                        try:
+                            await ws.send_json(payload)
+                        except Exception:
+                            pass
+                        break
 
             elif msg_type == "slide_select":
                 manager.current_slide_id = message.get("slide_id")
@@ -546,6 +560,21 @@ async def handle_student(websocket: WebSocket, pong_event: asyncio.Event | None 
             elif msg_type == "participants_request":
                 await websocket.send_json(manager.participants_payload())
 
+            # WebRTC 시그널링 — 수강자가 강의자에게 answer/ICE 전달
+            elif msg_type == "webrtc_answer" or msg_type == "webrtc_ice":
+                if manager.lecturer is None:
+                    continue
+                info = manager.student_info.get(websocket, {})
+                payload = {"type": msg_type, "sender": info.get("id")}
+                if msg_type == "webrtc_answer":
+                    payload["sdp"] = message.get("sdp")
+                else:
+                    payload["candidate"] = message.get("candidate")
+                try:
+                    await manager.lecturer.send_json(payload)
+                except Exception:
+                    pass
+
     except WebSocketDisconnect:
         manager.disconnect_student(websocket)
         await manager.broadcast_student_count()
@@ -659,39 +688,3 @@ async def process_audio(message: dict):
         print(f"[WS] 오디오 처리 오류: {e}")
 
 
-async def process_screen(message: dict):
-    """
-    화면 캡처 처리
-    - 화면을 수강자에게 전달
-    - 슬라이드 모드: 사전 처리된 overlay 전송
-    """
-    try:
-        screen_b64 = message.get("data", "")
-        if not screen_b64:
-            return
-
-        # 화면 데이터를 수강자에게 전달
-        await manager.broadcast_to_students({
-            "type": "screen",
-            "image": screen_b64,
-            "slide_id": manager.current_slide_id,
-            "page": manager.current_page,
-        })
-
-        # 슬라이드 모드: 사전 처리된 overlay 사용
-        if manager.current_slide_id:
-            from app.routers.slides import get_page_overlay
-            overlay_items = get_page_overlay(
-                manager.current_slide_id,
-                manager.current_page
-            )
-            if overlay_items:
-                await manager.broadcast_to_students({
-                    "type": "overlay",
-                    "items": overlay_items,
-                })
-            return
-
-
-    except Exception as e:
-        print(f"[WS] 화면 처리 오류: {e}")
