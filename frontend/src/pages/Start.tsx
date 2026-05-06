@@ -99,7 +99,10 @@ export default function Start() {
   }
 
   return (
-    <div className="relative min-h-screen bg-home-gradient [background-size:800%_800%] animate-gradient-shift flex flex-col items-center justify-center px-4">
+    <div
+      className="relative bg-home-gradient [background-size:800%_800%] animate-gradient-shift flex flex-col items-center justify-center px-4 py-8 overflow-auto"
+      style={{ minHeight: 'var(--app-height, 100dvh)' }}
+    >
       <button
         type="button"
         role="switch"
@@ -124,23 +127,23 @@ export default function Start() {
         </span>
       </button>
 
-      <div className="text-center mb-16">
-        <h1 className="text-6xl font-special-gothic text-white mb-3">
+      <div className="text-center mb-6 sm:mb-16">
+        <h1 className="text-7xl sm:text-8xl lg:text-9xl font-special-gothic text-white mb-4 sm:mb-5">
           Aunion AI LECTURE
         </h1>
-        <p className="font-a2z text-white text-lg tracking-wide">
+        <p className="font-a2z text-white text-3xl sm:text-4xl tracking-wide">
           {t.subtitle}
         </p>
       </div>
 
-      <h2 className="font-a2z text-white text-2xl mb-8 leading-snug whitespace-nowrap tracking-wide">
+      <h2 className="font-a2z text-white text-3xl sm:text-4xl lg:text-5xl mb-8 sm:mb-10 leading-snug text-center tracking-wide px-2">
         {t.prompt}
       </h2>
 
-      <div className="w-full max-w-sm">
-        <form onSubmit={handleSubmit} className="space-y-5">
+      <div className="w-full max-w-2xl px-6">
+        <form onSubmit={handleSubmit} className="space-y-6">
           <div>
-            <label className="text-white/80 text-sm mb-1.5 flex items-center gap-1">
+            <label className="text-white/80 text-2xl mb-2 flex items-center gap-1">
               {t.nameLabel}
               <span className="text-error">*</span>
             </label>
@@ -153,7 +156,7 @@ export default function Start() {
                   setError('')
                 }}
                 placeholder={t.namePlaceholder}
-                className="w-full bg-white rounded-full px-4 py-2.5 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-onPrimary pr-10"
+                className="w-full bg-white rounded-full px-6 py-5 text-2xl text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-onPrimary pr-14"
               />
               {name && (
                 <button
@@ -169,15 +172,15 @@ export default function Start() {
           </div>
 
           {/* 음성 / 자막 언어 미리 설정 — 강의중 화면(Audio | Subtitles) 순서와 동일 */}
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="text-white/80 text-sm mb-1.5 block">
+              <label className="text-white/80 text-2xl mb-2 block">
                 {t.audioLangLabel}
               </label>
               <select
                 value={audioLang}
                 onChange={(e) => setAudioLang(e.target.value as TranslationLang)}
-                className="w-full bg-white rounded-full px-4 py-2.5 text-gray-900 focus:outline-none focus:ring-2 focus:ring-onPrimary appearance-none"
+                className="w-full bg-white rounded-full px-6 py-5 text-2xl text-gray-900 focus:outline-none focus:ring-2 focus:ring-onPrimary appearance-none"
               >
                 {AUDIO_LANG_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -185,13 +188,13 @@ export default function Start() {
               </select>
             </div>
             <div>
-              <label className="text-white/80 text-sm mb-1.5 block">
+              <label className="text-white/80 text-2xl mb-2 block">
                 {t.subtitleLangLabel}
               </label>
               <select
                 value={subtitleLang}
                 onChange={(e) => setSubtitleLang(e.target.value as TranslationLang)}
-                className="w-full bg-white rounded-full px-4 py-2.5 text-gray-900 focus:outline-none focus:ring-2 focus:ring-onPrimary appearance-none"
+                className="w-full bg-white rounded-full px-6 py-5 text-2xl text-gray-900 focus:outline-none focus:ring-2 focus:ring-onPrimary appearance-none"
               >
                 {LANG_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -205,19 +208,19 @@ export default function Start() {
             </p>
           )}
 
-          <label className="flex items-center gap-2 cursor-pointer select-none">
+          <label className="flex items-center gap-4 cursor-pointer select-none">
             <input
               type="checkbox"
               checked={saveInfo}
               onChange={(e) => setSaveInfo(e.target.checked)}
-              className="w-4 h-4 accent-primary"
+              className="w-8 h-8 accent-primary"
             />
-            <span className="text-white/80 text-sm">{t.saveInfo}</span>
+            <span className="text-white/80 text-2xl">{t.saveInfo}</span>
           </label>
 
           <button
             type="submit"
-            className="w-full bg-primary hover:opacity-90 text-onPrimary font-medium py-3 rounded-full transition-all shadow-lg shadow-primary/20"
+            className="w-full bg-primary hover:opacity-90 text-onPrimary font-semibold text-3xl py-6 rounded-full transition-all shadow-lg shadow-primary/20"
           >
             {t.joinButton}
           </button>
