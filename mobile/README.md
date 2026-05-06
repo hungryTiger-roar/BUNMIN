@@ -344,9 +344,11 @@ app/build/outputs/apk/debug/app-debug.apk
 | `mixedContentMode` | HTTPS 페이지 안에서 HTTP 리소스를 불러올 때의 정책 |
 
 ### URL 자동 보정
-- 프로토콜이 없는 URL 입력 시 내부망 시연 기준으로 `http://`를 자동 추가합니다
+- 프로토콜이 없는 URL 입력 시 자동으로 프로토콜을 추가합니다
+- **내부망 IP** (192.168.x.x, 10.x.x.x, 172.16-31.x.x, localhost): `http://` 추가
+- **외부 URL**: `https://` 추가 (보안 강화)
 - 예: `192.168.0.10:5173` → `http://192.168.0.10:5173`
-- 외부 배포 시에는 `https://` 기본으로 변경 권장
+- 예: `example.com` → `https://example.com`
 
 ---
 

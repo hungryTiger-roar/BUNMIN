@@ -314,14 +314,23 @@ fun WebViewScreen(
                             return true
                         }
 
-                        // 새 창 처리
+                        /**
+                         * 새 창 처리 (target="_blank" 등)
+                         *
+                         * 설계 의도: 단일 WebView 화면 유지
+                         * - 강의 시청 중 새 탭/창으로 이탈 방지
+                         * - 전체화면 가로 모드 경험 유지
+                         * - 새 창 URL을 현재 WebView에서 로드
+                         *
+                         * 향후 필요시 외부 브라우저 열기 옵션 추가 가능:
+                         * Intent(Intent.ACTION_VIEW, Uri.parse(url)).also { startActivity(it) }
+                         */
                         override fun onCreateWindow(
                             view: WebView?,
                             isDialog: Boolean,
                             isUserGesture: Boolean,
                             resultMsg: Message?
                         ): Boolean {
-                            // 새 창 요청을 현재 WebView에서 처리
                             val newWebView = WebView(view?.context ?: return false)
                             val transport = resultMsg?.obj as? WebView.WebViewTransport
                             transport?.webView = newWebView

@@ -23,15 +23,40 @@ private const val KEY_LAST_URL = "last_url"
 
 /**
  * URL 정규화 - http/https 프로토콜 자동 추가
+ * - 내부망 IP (192.168.x.x, 10.x.x.x, 172.16-31.x.x, localhost): http://
+ * - 외부 URL: https:// (보안 강화)
  */
 private fun normalizeUrl(input: String): String {
     val trimmed = input.trim()
     return when {
         trimmed.isEmpty() -> trimmed
         trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
-        trimmed.startsWith("192.") || trimmed.startsWith("10.") || trimmed.startsWith("172.") -> "http://$trimmed"
-        else -> "http://$trimmed"
+        isPrivateNetworkAddress(trimmed) -> "http://$trimmed"
+        else -> "https://$trimmed"
     }
+}
+
+/**
+ * 내부망 IP 주소 여부 확인
+ * - 192.168.x.x (Class C private)
+ * - 10.x.x.x (Class A private)
+ * - 172.16-31.x.x (Class B private)
+ * - localhost, 127.x.x.x (loopback)
+ */
+private fun isPrivateNetworkAddress(address: String): Boolean {
+    val host = address.substringBefore(":").substringBefore("/")
+    return host.startsWith("192.168.") ||
+            host.startsWith("10.") ||
+            host.startsWith("172.16.") || host.startsWith("172.17.") ||
+            host.startsWith("172.18.") || host.startsWith("172.19.") ||
+            host.startsWith("172.20.") || host.startsWith("172.21.") ||
+            host.startsWith("172.22.") || host.startsWith("172.23.") ||
+            host.startsWith("172.24.") || host.startsWith("172.25.") ||
+            host.startsWith("172.26.") || host.startsWith("172.27.") ||
+            host.startsWith("172.28.") || host.startsWith("172.29.") ||
+            host.startsWith("172.30.") || host.startsWith("172.31.") ||
+            host.startsWith("127.") ||
+            host == "localhost"
 }
 
 /**
