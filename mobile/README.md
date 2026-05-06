@@ -5,7 +5,7 @@ Android WebView 기반 수강자용 모바일 앱
 ## 프로젝트 개요
 
 - **플랫폼**: Android (minSdk 26, targetSdk 34)
-- **아키텍처**: MVVM + Clean Architecture
+- **아키텍처**: MVVM + Clean Architecture (SharedFlow Command 패턴)
 - **UI**: Jetpack Compose
 - **DI**: Hilt
 - **기능**: WebView 래퍼 앱 (React 프론트엔드를 네이티브 앱으로 감싸는 형태)
@@ -21,7 +21,7 @@ Android WebView 기반 수강자용 모바일 앱
 | 가로 모드 고정 | 강의 화면 진입 시 자동으로 가로 모드 전환 |
 | 파일 업로드 | 이미지/파일 선택 지원 (SAF 기반) |
 | 마이크/카메라 권한 | VAD, 음성인식용 (필요 리소스만 허용) |
-| 파일 다운로드 | DownloadManager + 쿠키 세션 유지 |
+| 파일 다운로드 | DownloadManager + 쿠키 세션 유지 (확장자 불명 시 `.bin`) |
 | 뒤로가기 | WebView 히스토리 네비게이션 |
 
 ---
@@ -175,7 +175,47 @@ settings.apply {
 ### 보안 설정
 - **Mixed Content**: DEBUG 빌드에서만 HTTP+HTTPS 혼합 허용 (내부망 테스트용)
 - **파일 접근**: `allowContentAccess`로 SAF의 `content://` URI 허용, 파일 URL 간 접근은 차단
-- **WebView 권한**: 마이크/카메라만 허용, 다른 리소스 요청은 거부
+- **WebView 권한**: 마이크/카메라만 허용, 위치 및 다른 리소스 요청은 거부
+
+### ViewModel-View 분리 (Command 패턴)
+MVVM 원칙에 따라 ViewModel은 WebView 인스턴스를 직접 참조하지 않습니다:
+- ViewModel은 `SharedFlow<WebViewCommand>`로 명령만 발행
+- Composable에서 `LaunchedEffect`로 명령을 수신하여 WebView 제어
+- WebView 인스턴스는 Composable 레벨에서 `remember`로 관리
+- `DisposableEffect`로 화면 종료 시 WebView 리소스 정리
+
+```kotlin
+// ViewModel - 명령 발행만
+private val _commands = MutableSharedFlow<WebViewCommand>(extraBufferCapacity = 1)
+val commands = _commands.asSharedFlow()
+
+sealed class WebViewCommand {
+    data object GoBack : WebViewCommand()
+}
+
+fun goBack() {
+    _commands.tryEmit(WebViewCommand.GoBack)  // suspend 불필요
+}
+
+// Composable - 명령 수신 및 WebView 제어
+LaunchedEffect(Unit) {
+    viewModel.commands.collect { command ->
+        when (command) {
+            is WebViewCommand.GoBack -> webViewInstance?.goBack()
+        }
+    }
+}
+
+// WebView 생명주기 정리
+DisposableEffect(Unit) {
+    onDispose {
+        webViewInstance?.let { webView ->
+            webView.stopLoading()
+            webView.destroy()
+        }
+    }
+}
+```
 
 ### 100vh CSS 수정
 모바일 WebView에서 `100vh`가 제대로 작동하지 않는 문제를 해결하기 위해 CSS 변수 방식을 사용합니다:

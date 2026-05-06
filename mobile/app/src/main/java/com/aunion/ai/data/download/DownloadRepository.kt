@@ -66,8 +66,8 @@ class DownloadRepository @Inject constructor(
             return urlFileName
         }
 
-        // 기본 파일명 + 확장자
-        val extension = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "pdf"
+        // 기본 파일명 + 확장자 (MIME 타입에서 추출, 없으면 bin)
+        val extension = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) ?: "bin"
         return "aunion_download_${System.currentTimeMillis()}.$extension"
     }
 }

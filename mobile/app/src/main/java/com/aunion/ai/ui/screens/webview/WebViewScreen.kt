@@ -5,11 +5,7 @@ import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.net.Uri
-import android.os.Build
 import android.os.Message
-import android.view.View
-import android.view.WindowInsets
-import android.view.WindowInsetsController
 import android.webkit.ConsoleMessage
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
@@ -30,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,6 +52,35 @@ fun WebViewScreen(
 ) {
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsState()
+
+    // WebView 인스턴스를 Composable 레벨에서 관리 (ViewModel에서 분리)
+    var webViewInstance by remember { mutableStateOf<WebView?>(null) }
+
+    // WebView 생명주기 정리
+    DisposableEffect(Unit) {
+        onDispose {
+            webViewInstance?.let { webView ->
+                webView.stopLoading()
+                webView.destroy()
+            }
+            webViewInstance = null
+        }
+    }
+
+    // ViewModel의 명령 관찰 및 WebView 제어
+    LaunchedEffect(Unit) {
+        viewModel.commands.collect { command ->
+            when (command) {
+                is WebViewCommand.GoBack -> {
+                    webViewInstance?.let { webView ->
+                        if (webView.canGoBack()) {
+                            webView.goBack()
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // 가로 모드 고정 + 전체화면 모드
     DisposableEffect(Unit) {
@@ -272,12 +298,12 @@ fun WebViewScreen(
                             }
                         }
 
-                        // 위치 권한
+                        // 위치 권한 - 불필요하므로 거부
                         override fun onGeolocationPermissionsShowPrompt(
                             origin: String?,
                             callback: GeolocationPermissions.Callback?
                         ) {
-                            callback?.invoke(origin, true, false)
+                            callback?.invoke(origin, false, false)
                         }
 
                         // 콘솔 로그 (디버깅용)
@@ -321,7 +347,8 @@ fun WebViewScreen(
                         viewModel.downloadFile(url, userAgent, contentDisposition, mimeType)
                     }
 
-                    viewModel.setWebView(this)
+                    // WebView 인스턴스를 Composable 레벨에서 참조 (ViewModel에서 분리)
+                    webViewInstance = this
                     loadUrl(url)
                 }
             },
