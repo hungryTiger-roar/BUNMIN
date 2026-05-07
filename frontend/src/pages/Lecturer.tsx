@@ -561,18 +561,18 @@ function Lecturer() {
     startLecture()  // slideStatus/slideId/모델모드 검증은 startLecture가 알아서 처리
   }
 
-  // 다른 강의자료 선택 — 라이브러리 페이지로 이동 (강의자 홈)
+  // 다른 강의자료 선택 — Lecturer 초기 화면(자료 선택)으로 이동
   const exitToLibrary = () => {
     setShowTranscriptModal(false)
     reset()
-    navigate('/lecturer/home')
+    navigate('/lecturer')
   }
 
   const handleExit = () => {
     stopAudioCapture()
     stopScreenCapture()
     reset()
-    navigate('/')
+    navigate('/lecturer/home')
   }
 
   const handleChatSubmit = (e: React.FormEvent) => {
