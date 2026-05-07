@@ -1547,7 +1547,7 @@ function Lecturer() {
                         )}
                       </div>
                       <p className="text-sm text-onSurface/90 leading-relaxed break-words">
-                        {msg.text}
+                        {linkifyText(msg.text)}
                       </p>
                     </div>
                   ))
@@ -1617,6 +1617,27 @@ interface LangColumnProps {
   title: string
   value: LecturerLang
   onChange: (v: LecturerLang) => void
+}
+
+function linkifyText(text: string) {
+  const URL_REGEX = /https?:\/\/[^\s]+/g
+  const parts: React.ReactNode[] = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+  URL_REGEX.lastIndex = 0
+  while ((match = URL_REGEX.exec(text)) !== null) {
+    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index))
+    const url = match[0]
+    parts.push(
+      <a key={match.index} href={url} target="_blank" rel="noopener noreferrer"
+        className="underline hover:opacity-70 break-all"
+        onClick={(e) => e.stopPropagation()}
+      >{url}</a>
+    )
+    lastIndex = match.index + url.length
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex))
+  return parts.length === 0 ? text : parts
 }
 
 function LangColumn({ title, value, onChange }: LangColumnProps) {

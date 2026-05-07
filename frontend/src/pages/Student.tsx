@@ -677,7 +677,7 @@ function Student() {
 
             {/* 강의자료 원본/번역 토글 (강의 시작 후 슬라이드 표시 중일 때만) */}
             {isLectureStarted && presentationMode === 'slide' && slideStatus === 'ready' && slideImageUrl && (
-              <MaterialViewToggle className={`absolute top-3 z-30 right-3`} />
+              <MaterialViewToggle className={`absolute top-3 z-40 right-3`} />
             )}
 
             {/* 줌 배율 배지 — 스크롤 직후 잠시 표시 후 fade-out */}
@@ -1256,7 +1256,7 @@ function Student() {
                         : 'text-onSurface/90'
                     }`}
                   >
-                    {msg.text}
+                    {linkifyText(msg.text)}
                   </p>
                 </div>
               ))
@@ -1306,6 +1306,27 @@ interface LangColumnProps {
   value: TranslationLang
   onChange: (v: TranslationLang) => void
   options: { value: TranslationLang; label: string }[]
+}
+
+function linkifyText(text: string) {
+  const URL_REGEX = /https?:\/\/[^\s]+/g
+  const parts: React.ReactNode[] = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+  URL_REGEX.lastIndex = 0
+  while ((match = URL_REGEX.exec(text)) !== null) {
+    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index))
+    const url = match[0]
+    parts.push(
+      <a key={match.index} href={url} target="_blank" rel="noopener noreferrer"
+        className="underline hover:opacity-70 break-all"
+        onClick={(e) => e.stopPropagation()}
+      >{url}</a>
+    )
+    lastIndex = match.index + url.length
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex))
+  return parts.length === 0 ? text : parts
 }
 
 function LangColumn({ title, value, onChange, options }: LangColumnProps) {
