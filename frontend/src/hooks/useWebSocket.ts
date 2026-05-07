@@ -323,6 +323,14 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     }
   }, [])
 
+  const sendStudentRename = useCallback((name: string) => {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ type: 'student_rename', name: trimmed }))
+    }
+  }, [])
+
   const connect = useCallback(() => {
     if (socketRef.current?.readyState === WebSocket.OPEN ||
         socketRef.current?.readyState === WebSocket.CONNECTING) {
@@ -405,6 +413,7 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     sendChat,
     sendLectureTitle,
     sendLecturerName,
+    sendStudentRename,
     getBufferedAmount,
   }
 }

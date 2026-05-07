@@ -580,6 +580,17 @@ async def handle_student(websocket: WebSocket, pong_event: asyncio.Event | None 
             elif msg_type == "participants_request":
                 await websocket.send_json(manager.participants_payload())
 
+            elif msg_type == "student_rename":
+                new_name = (message.get("name") or "").strip()
+                if not new_name:
+                    continue
+                info = manager.student_info.get(websocket)
+                if info is None:
+                    continue
+                info["name"] = new_name
+                print(f"[WS] 수강자 이름 변경: {info.get('id')} → {new_name}")
+                await manager.broadcast_participants()
+
             # WebRTC 시그널링 — 수강자가 강의자에게 answer/ICE 전달
             elif msg_type == "webrtc_answer" or msg_type == "webrtc_ice":
                 if manager.lecturer is None:

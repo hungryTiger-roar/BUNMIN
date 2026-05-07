@@ -16,9 +16,78 @@
     <script src="/ort.all.min.js"></script>
     <script>window.ort.env.wasm.numThreads = 1;</script>
     <script src="/vad-bundle.min.js"></script>
+
+    <style>
+      #initial-loader {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 24px;
+        background: linear-gradient(135deg, #6E63E6 0%, #9D7AE8 50%, #C9A8F0 100%);
+        background-size: 800% 800%;
+        animation: initial-loader-bg 12s ease infinite;
+        color: #ffffff;
+        font-family: 'Special Gothic Expanded One', system-ui, -apple-system, sans-serif;
+        z-index: 9999;
+      }
+      #initial-loader .initial-loader__title {
+        font-size: clamp(2rem, 6vw, 3.5rem);
+        letter-spacing: 0.05em;
+        margin: 0;
+      }
+      #initial-loader .initial-loader__subtitle {
+        font-family: system-ui, -apple-system, sans-serif;
+        font-size: 0.95rem;
+        opacity: 0.85;
+        margin: 0;
+      }
+      #initial-loader .initial-loader__spinner {
+        position: relative;
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+        background: conic-gradient(
+          from 0deg,
+          rgba(255,255,255,0) 0deg,
+          rgba(255,255,255,1) 270deg,
+          transparent 270deg
+        );
+        -webkit-mask: radial-gradient(circle, transparent 20px, black 21px, black 30px, transparent 31px);
+                mask: radial-gradient(circle, transparent 20px, black 21px, black 30px, transparent 31px);
+        animation: initial-loader-spin 1s linear infinite;
+        filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.6));
+      }
+      #initial-loader .initial-loader__spinner-head {
+        position: absolute;
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: #ffffff;
+        top: 35.5px;
+        left: 10px;
+      }
+      @keyframes initial-loader-spin {
+        to { transform: rotate(360deg); }
+      }
+      @keyframes initial-loader-bg {
+        0%   { background-position: 0% 50%; }
+        50%  { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="initial-loader" aria-live="polite" aria-busy="true">
+        <h1 class="initial-loader__title">Aunion AI</h1>
+        <div class="initial-loader__spinner" role="status" aria-label="로딩 중">
+          <div class="initial-loader__spinner-head"></div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
