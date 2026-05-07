@@ -65,15 +65,7 @@ export default {
           fontWeight: '400', // Normal
           letterSpacing: '0.5px'
         }],
-      },
-      screens: {
-        // Wide layout: 900px+ width AND 500px+ height
-        // Must match hooks/useResponsiveLayout.ts WIDE_MEDIA_QUERY
-        'wide': { raw: '(min-width: 900px) and (min-height: 500px)' },
-      },
-      zIndex: {
-        '60': '60',
-      },
+      }
     },
   },
   plugins: [],

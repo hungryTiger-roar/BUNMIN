@@ -13,16 +13,6 @@ import { usePreferencesStore } from './stores/preferencesStore'
 function App() {
   const theme = usePreferencesStore((s) => s.theme)
 
-  // Set --app-height for mobile viewport height (handles browser chrome)
-  useEffect(() => {
-    const updateAppHeight = () => {
-      document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`)
-    }
-    updateAppHeight()
-    window.addEventListener('resize', updateAppHeight)
-    return () => window.removeEventListener('resize', updateAppHeight)
-  }, [])
-
   useEffect(() => {
     const root = document.documentElement
     root.classList.remove('dark', 'theme-gradient')

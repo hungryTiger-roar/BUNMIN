@@ -1,5 +1,5 @@
 ﻿
-import { useEffect, useState, useRef, useCallback, useMemo, type CSSProperties } from 'react'
+import { useEffect, useState, useRef, useCallback, type CSSProperties } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import {
@@ -10,15 +10,9 @@ import {
 } from '@/stores/preferencesStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { useTTS } from '@/hooks/useTTS'
-import { useResponsiveLayout } from '@/hooks/useResponsiveLayout'
+import ParticipantsPanel from '@/components/common/ParticipantsPanel'
 import MaterialViewToggle from '@/components/common/MaterialViewToggle'
 import { StudentCursorOverlay, useCursorOverlay } from '@/components/student/StudentCursorOverlay'
-import DesktopSidebar from '@/components/student/DesktopSidebar'
-import MobileBottomSheet from '@/components/student/MobileBottomSheet'
-import FloatingPanelButton from '@/components/student/FloatingPanelButton'
-import PanelContent from '@/components/student/PanelContent'
-import type { TabType } from '@/components/student/PanelTabs'
-import type { MaterialItem } from '@/components/student/MaterialsPanel'
 import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
 
 const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
@@ -44,6 +38,14 @@ const ASPECT_OPTIONS: { value: AspectRatio; label: string; className: string }[]
   { value: '4/3', label: '4:3', className: 'aspect-[4/3]' },
   { value: '5/3', label: '5:3', className: 'aspect-[5/3]' },
 ]
+
+interface MaterialItem {
+  slide_id: string
+  filename: string
+  status: 'pending' | 'processing' | 'completed' | 'failed'
+  total_pages: number
+  has_translated: boolean
+}
 
 function subtitleStyleToCss(style: SubtitleStyle): CSSProperties {
   switch (style) {
@@ -83,6 +85,8 @@ function Student() {
   const navigate = useNavigate()
   const location = useLocation()
   const slideRef = useRef<HTMLDivElement>(null)
+  const chatScrollRef = useRef<HTMLDivElement>(null)
+  const chatInputRef = useRef<HTMLInputElement>(null)
 
   // focused selectors — 각 필드 변경 시 정확하게 리렌더 트리거 (특히 subtitles 즉시 반영)
   const slideStatus = useLectureStore((s) => s.slideStatus)
@@ -211,15 +215,11 @@ function Student() {
   const [ccEnabled, setCcEnabled] = useState(true)
   const [settingsPanel, setSettingsPanel] = useState<null | 'main' | 'aspect' | 'language' | 'fontSize' | 'style'>(null)
   const [chatInput, setChatInput] = useState('')
+  const [showParticipants, setShowParticipants] = useState(false)
   const [materials, setMaterials] = useState<MaterialItem[]>([])
   const [showTranscriptModal, setShowTranscriptModal] = useState(false)
-
-  // New responsive layout hook
-  const { isWide, isCompact } = useResponsiveLayout()
-  const [panelOpen, setPanelOpen] = useState(false)
-  const [activeTab, setActiveTab] = useState<TabType>('chat')
-  const [lastReadMessageCount, setLastReadMessageCount] = useState(0)
-  const showMaterials = isLectureStarted
+  const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 1000)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
   // 슬라이드 줌/팬
   const [zoom, setZoom] = useState(100)
@@ -310,35 +310,15 @@ function Student() {
   }, [])
 
 
-  // Close panel when layout mode changes
+  // 창 너비에 따라 사이드바 자동 접기/펼치기
   useEffect(() => {
-    setPanelOpen(false)
-  }, [isWide])
-
-  // Reset activeTab to chat if materials tab is hidden
-  useEffect(() => {
-    if (!showMaterials && activeTab === 'materials') {
-      setActiveTab('chat')
+    const onResize = () => {
+      const narrow = window.innerWidth < 1000
+      setIsNarrow(narrow)
+      setSidebarOpen(!narrow)
     }
-  }, [showMaterials, activeTab])
-
-  // Unread message handling
-  const hasUnreadMessages = useMemo(() => {
-    if (panelOpen && activeTab === 'chat') return false
-    const newMessages = chatMessages.slice(lastReadMessageCount)
-    return newMessages.some(msg => msg.sender !== 'student')
-  }, [chatMessages, lastReadMessageCount, panelOpen, activeTab])
-
-  // Mark messages as read when chat tab is open
-  useEffect(() => {
-    if (panelOpen && activeTab === 'chat') {
-      setLastReadMessageCount(chatMessages.length)
-    }
-  }, [panelOpen, activeTab, chatMessages.length])
-
-  // Tab change handler
-  const handleTabChange = useCallback((tab: TabType) => {
-    setActiveTab(tab)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
   }, [])
 
   // 휠 스크롤 줌 (passive: false 필요 → addEventListener 직접)
@@ -423,6 +403,13 @@ function Student() {
     setTTSVolume(volume, isMuted)
   }, [volume, isMuted, setTTSVolume])
 
+  useEffect(() => {
+    chatScrollRef.current?.scrollTo({
+      top: chatScrollRef.current.scrollHeight,
+      behavior: 'smooth',
+    })
+  }, [chatMessages.length])
+
   const toggleFullscreen = () => {
     if (!document.fullscreenElement && slideRef.current) {
       slideRef.current.requestFullscreen().catch(() => {})
@@ -431,11 +418,13 @@ function Student() {
     }
   }
 
-  const handleChatSubmit = () => {
+  const handleChatSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
     const trimmed = chatInput.trim()
     if (!trimmed) return
     sendChat(trimmed)
     setChatInput('')
+    requestAnimationFrame(() => chatInputRef.current?.focus())
   }
 
   const handleExit = () => {
@@ -504,16 +493,16 @@ function Student() {
       {/* 헤더 */}
       <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-primaryContainer bg-surface backdrop-blur-md shadow-sm flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          <h1 className="text-3xl font-special-gothic tracking-wide">Aunion AI</h1>
+          <h1 className="text-xl font-special-gothic tracking-wide">Aunion AI</h1>
           {isLectureStarted && !isPaused && (
-            <span className="flex items-center gap-2 px-3 py-1.5 bg-error text-white text-xl font-semibold rounded-full shadow-lg shadow-error/30">
-              <span className="w-2.5 h-2.5 bg-white rounded-full animate-pulse" />
+            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-error text-white text-xs font-semibold rounded-full shadow-lg shadow-error/30">
+              <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
               LIVE
             </span>
           )}
           {isPaused && (
-            <span className="flex items-center gap-2 px-3 py-1.5 bg-yellow-500 text-white text-xl font-semibold rounded-full shadow-lg shadow-yellow-500/30">
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 6 8" aria-hidden="true">
+            <span className="flex items-center gap-1.5 px-2.5 py-1 bg-yellow-500 text-white text-xs font-semibold rounded-full shadow-lg shadow-yellow-500/30">
+              <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 6 8" aria-hidden="true">
                 <rect x="0" y="0" width="2" height="8" rx="0.5" />
                 <rect x="4" y="0" width="2" height="8" rx="0.5" />
               </svg>
@@ -521,7 +510,7 @@ function Student() {
             </span>
           )}
           {isLectureStarted && slideStatus === 'ready' && totalPages > 0 && (
-            <div className="flex items-center gap-2 px-3 py-1.5 bg-primaryContainer/60 rounded-full text-xl text-onSurface">
+            <div className="flex items-center gap-1.5 px-3 py-1 bg-primaryContainer/60 rounded-full text-sm text-onSurface">
               <span className="font-medium">{currentPage}</span>
               <span className="opacity-60">/</span>
               <span className="opacity-60">{totalPages}</span>
@@ -545,52 +534,45 @@ function Student() {
           <button
             type="button"
             onClick={toggleTheme}
-            className="flex items-center justify-center w-11 h-11 rounded-xl transition-colors bg-primaryContainer/60 hover:bg-primaryContainer text-onSurface"
+            className="flex items-center justify-center w-9 h-9 rounded-lg transition-colors bg-primaryContainer/60 hover:bg-primaryContainer text-onSurface"
             aria-label={`Current: ${theme} mode (click to cycle)`}
             title={`${
               theme === 'light' ? 'Light' : theme === 'dark' ? 'Dark' : 'Gradient'
             } mode — click to cycle`}
           >
             {theme === 'light' ? (
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
               </svg>
             ) : theme === 'dark' ? (
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
               </svg>
             ) : (
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
               </svg>
             )}
           </button>
 
           <button
-            onClick={() => {
-              if (isCompact) {
-                setPanelOpen(true)
-                setActiveTab('participants')
-              } else {
-                setActiveTab(activeTab === 'participants' ? 'chat' : 'participants')
-              }
-            }}
-            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xl transition-colors ${
-              activeTab === 'participants'
+            onClick={() => { setShowParticipants((v) => !v); if (isNarrow) setSidebarOpen(true) }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${
+              showParticipants
                 ? 'bg-primary text-onPrimary'
                 : 'bg-primaryContainer/60 hover:bg-primaryContainer text-onSurface'
             }`}
             title="Participant list"
           >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
             <span>{displayParticipantCount}</span>
           </button>
 
           {studentName && (
-            <div className="hidden sm:flex items-center gap-2 px-3 py-2 bg-primaryContainer/60 rounded-xl text-xl text-onSurface">
-              <svg className="w-6 h-6 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-primaryContainer/60 rounded-lg text-sm text-onSurface">
+              <svg className="w-4 h-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
               </svg>
               {studentName}
@@ -599,7 +581,7 @@ function Student() {
 
           <button
             onClick={handleExit}
-            className="px-4 py-2 bg-primaryContainer/60 hover:bg-primaryContainer text-onSurface rounded-xl text-xl"
+            className="px-3 py-1.5 bg-primaryContainer/60 hover:bg-primaryContainer text-onSurface rounded-lg text-sm"
           >
             Leave
           </button>
@@ -611,7 +593,7 @@ function Student() {
         <div className="flex-1 flex items-center justify-center min-w-0 min-h-0">
           <div
             ref={slideRef}
-            className={`group relative bg-black rounded-xl overflow-hidden ${theme === 'light' ? 'shadow-[0_4px_20px_rgba(0,0,0,0.08)]' : 'shadow-2xl'} ${isCompact ? `w-full ${aspectClass}` : `h-full ${aspectClass} max-w-full`} ${zoom > 100 ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
+            className={`group relative bg-black rounded-xl overflow-hidden ${theme === 'light' ? 'shadow-[0_4px_20px_rgba(0,0,0,0.08)]' : 'shadow-2xl'} h-full ${aspectClass} max-w-full ${zoom > 100 ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
             onMouseDown={(e) => {
               if (zoom <= 100) return
               e.preventDefault()
@@ -1044,47 +1026,206 @@ function Student() {
           </div>
         </div>
 
-        {/* Desktop sidebar - only visible in wide layout */}
-        <DesktopSidebar
-          activeTab={activeTab}
-          onTabChange={handleTabChange}
-          showMaterials={showMaterials}
-          chatMessages={chatMessages}
-          chatInput={chatInput}
-          onChatInputChange={setChatInput}
-          onChatSubmit={handleChatSubmit}
-          isConnected={isConnected}
-          participants={participants}
-          studentCount={studentCount}
-          materials={materials}
-        />
-
-        {/* Mobile floating button - only visible in compact layout when panel is closed */}
-        {isCompact && !panelOpen && (
-          <FloatingPanelButton
-            onClick={() => setPanelOpen(true)}
-            hasUnread={hasUnreadMessages}
-          />
+        {/* 사이드바 토글 탭 — 좁은 화면에서만 표시 */}
+        {isNarrow && (
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(v => !v)}
+            className={`absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-4 h-20 border border-r-0 rounded-l-lg ${theme === 'light' ? 'bg-surface border-primaryContainer shadow-[0_0_14px_rgba(0,0,0,0.18)]' : theme === 'dark' ? 'bg-overlayBorder border-white/20 shadow-md' : 'bg-[#E0DEF7] border-purple-200/50 shadow-md'} transition-all duration-300 ease-in-out ${
+              sidebarOpen ? 'right-80' : 'right-0'
+            }`}
+            aria-label={sidebarOpen ? 'Hide panel' : 'Show panel'}
+          >
+            <svg className="w-3 h-3 text-onSurface" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d={sidebarOpen ? 'M9 5l7 7-7 7' : 'M15 19l-7-7 7-7'} />
+            </svg>
+          </button>
         )}
 
-        {/* Mobile bottom sheet - only visible in compact layout */}
-        {isCompact && (
-          <MobileBottomSheet isOpen={panelOpen} onClose={() => setPanelOpen(false)}>
-            <PanelContent
-              activeTab={activeTab}
-              onTabChange={handleTabChange}
-              showMaterials={showMaterials}
-              chatMessages={chatMessages}
-              chatInput={chatInput}
-              onChatInputChange={setChatInput}
-              onChatSubmit={handleChatSubmit}
-              isConnected={isConnected}
-              participants={participants}
-              studentCount={studentCount}
-              materials={materials}
+        {/* 우측 사이드: 강의자료 + 채팅 */}
+        <aside className={isNarrow
+          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 min-h-0 px-3 py-4 sidebar-panel z-40 transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
+          : 'w-80 flex-shrink-0 flex flex-col gap-3 min-h-0'
+        }>
+          {/* 오늘의 강의 자료 — 강의 시작 후에만 노출 */}
+          {isLectureStarted && (
+          <div
+            className="flex-shrink-0 flex flex-col bg-surface text-onSurface backdrop-blur-md rounded-xl border border-primaryContainer shadow-sm overflow-hidden sidebar-card"
+            style={{ maxHeight: '50%' }}
+          >
+            <div className="px-4 py-3 border-b border-primaryContainer flex items-center gap-2 flex-shrink-0">
+              <svg className="w-5 h-5 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <h3 className="font-medium">Today's lecture material</h3>
+            </div>
+            <div className="flex-1 overflow-y-auto scrollbar-hide p-2 space-y-1 min-h-0">
+              {materials.length === 0 ? (
+                <div className="text-center text-sm text-onSurface/60 py-6">
+                  There is no lecture material uploaded yet.
+                </div>
+              ) : (
+                materials.flatMap((m) => {
+                  const baseTitle = m.filename.replace(/\.pdf$/i, '')
+                  const completed = m.status === 'completed'
+                  const variants: { kind: 'original' | 'translated'; enabled: boolean }[] = [
+                    { kind: 'original', enabled: completed },
+                    { kind: 'translated', enabled: completed && m.has_translated },
+                  ]
+                  return variants.map(({ kind, enabled }) => {
+                    const label = kind === 'original' ? 'Original' : 'Translated'
+                    const displayStatus = completed
+                      ? `${m.total_pages} pages · ${label}`
+                      : m.status === 'processing'
+                        ? 'Processing...'
+                        : m.status === 'pending'
+                          ? 'Pending...'
+                          : m.status === 'failed'
+                            ? 'Failed'
+                            : ''
+                    const fileTitleParam = encodeURIComponent(baseTitle)
+                    return (
+                      <button
+                        key={`${m.slide_id}-${kind}`}
+                        type="button"
+                        disabled={!enabled}
+                        onClick={() =>
+                          window.open(
+                            `${API_BASE}/slides/download/${m.slide_id}?type=${kind}&title=${fileTitleParam}`,
+                            '_blank',
+                          )
+                        }
+                        className={`w-full flex items-center gap-2 px-2 py-2 rounded-lg transition-colors text-left ${
+                          enabled
+                            ? 'hover:bg-primaryContainer/40 cursor-pointer'
+                            : 'opacity-60 cursor-not-allowed'
+                        }`}
+                        title={enabled ? `Download ${baseTitle} (${label})` : 'Not ready yet'}
+                      >
+                        <svg
+                          className="w-4 h-4 flex-shrink-0 text-onSurface/70"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                        </svg>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm truncate">
+                            {baseTitle} <span className="text-onSurface/60">({label})</span>
+                          </div>
+                          <div className="text-[11px] opacity-60">{displayStatus}</div>
+                        </div>
+                        <svg
+                          className="w-4 h-4 flex-shrink-0 text-onSurface/70"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                      </button>
+                    )
+                  })
+                })
+              )}
+            </div>
+          </div>
+          )}
+
+          {/* 채팅 패널 (참여자 패널이 오버레이로 덮음) */}
+          <div className="relative flex-1 flex flex-col bg-surface text-onSurface backdrop-blur-md rounded-xl border border-primaryContainer shadow-sm overflow-hidden min-h-0 sidebar-card">
+            <div className="px-4 py-3 border-b border-primaryContainer flex items-center gap-2 flex-shrink-0">
+              <svg className="w-5 h-5 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+              <h3 className="font-medium">Chat</h3>
+            </div>
+
+          <div
+            ref={chatScrollRef}
+            className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0"
+          >
+            {chatMessages.length === 0 ? (
+              <div className="text-center text-sm text-onSurface/60 mt-8">
+                No messages yet
+              </div>
+            ) : (
+              chatMessages.map((msg) => (
+                <div key={msg.id}>
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    {msg.sender === 'lecturer' && (
+                      <svg
+                        className="w-4 h-4 text-lecturerAccent flex-shrink-0"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={1.7}
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4.26 10.147a60.438 60.438 0 0 0-.491 6.347A48.62 48.62 0 0 1 12 20.904a48.62 48.62 0 0 1 8.232-4.41 60.46 60.46 0 0 0-.491-6.347m-15.482 0a50.636 50.636 0 0 0-2.658-.813A59.906 59.906 0 0 1 12 3.493a59.903 59.903 0 0 1 10.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.717 50.717 0 0 1 12 13.489a50.702 50.702 0 0 1 7.74-3.342M6.75 15a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm0 0v-3.675A55.378 55.378 0 0 1 12 8.443m-7.007 11.55A5.981 5.981 0 0 0 6.75 15.75v-1.5" />
+                      </svg>
+                    )}
+                    <span
+                      className={`text-sm font-semibold ${
+                        msg.sender === 'lecturer' ? 'text-lecturerAccent' : 'text-onSurface'
+                      }`}
+                    >
+                      {msg.name}
+                    </span>
+                    {msg.sender === 'lecturer' && (
+                      <span className="text-xs px-1.5 py-0.5 bg-lecturerAccent/15 text-lecturerAccent rounded font-medium">
+                        Lecturer
+                      </span>
+                    )}
+                  </div>
+                  <p
+                    className={`text-sm leading-relaxed break-words ${
+                      msg.sender === 'lecturer'
+                        ? 'text-lecturerAccent/95'
+                        : 'text-onSurface/90'
+                    }`}
+                  >
+                    {msg.text}
+                  </p>
+                </div>
+              ))
+            )}
+          </div>
+
+          <form
+            onSubmit={handleChatSubmit}
+            className="p-3 border-t border-primaryContainer flex gap-2 flex-shrink-0"
+          >
+            <input
+              ref={chatInputRef}
+              type="text"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              placeholder={isConnected ? 'Type a message...' : 'Connecting...'}
+              disabled={!isConnected}
+              className="flex-1 bg-white text-gray-900 placeholder-gray-400 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-onPrimary disabled:opacity-60"
+              maxLength={200}
             />
-          </MobileBottomSheet>
-        )}
+            <button
+              type="submit"
+              disabled={!chatInput.trim() || !isConnected}
+              className="px-3 py-2 bg-primary hover:opacity-90 disabled:opacity-40 text-onPrimary rounded-lg text-sm font-medium transition-opacity"
+            >
+              Send
+            </button>
+          </form>
+
+            {/* 참여자 패널 — 채팅창 위에 오버레이 */}
+            {showParticipants && (
+              <ParticipantsPanel
+                participants={participants}
+                fallbackStudentCount={studentCount}
+                onClose={() => setShowParticipants(false)}
+              />
+            )}
+          </div>
+        </aside>
       </main>
     </div>
   )
