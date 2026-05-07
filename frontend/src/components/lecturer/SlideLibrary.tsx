@@ -193,8 +193,8 @@ export default function SlideLibrary({ refreshKey = 0 }: Props) {
         <SlideLibrarySearchModal
           items={items}
           onClose={() => setShowSearchModal(false)}
-          onDeleted={(slideId) => {
-            setItems((prev) => prev.filter((it) => it.slide_id !== slideId))
+          onDeleted={(slideIds) => {
+            setItems((prev) => prev.filter((it) => !slideIds.includes(it.slide_id)))
           }}
         />
       )}

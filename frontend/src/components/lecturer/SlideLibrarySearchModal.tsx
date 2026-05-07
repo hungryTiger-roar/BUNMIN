@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { API_BASE, deleteSlide, loadSlide, switchToRealtimeMode } from '@/lib/api'
+import { API_BASE, deleteSlidesBatch, loadSlide, switchToRealtimeMode } from '@/lib/api'
 import { useLectureStore } from '@/stores/lectureStore'
 import type { SlideLibraryItem as Item, SortOrder } from '@/types/slide'
 import DeleteConfirmModal from './DeleteConfirmModal'
@@ -8,7 +8,7 @@ interface Props {
   items: Item[]
   onClose: () => void
   /** 모달 안에서 강의자료를 삭제했을 때 부모 라이브러리 목록도 동기화 */
-  onDeleted?: (slideId: string) => void
+  onDeleted?: (slideIds: string[]) => void
 }
 
 const SORT_LABELS: Record<SortOrder, string> = {
@@ -52,7 +52,9 @@ export default function SlideLibrarySearchModal({ items, onClose, onDeleted }: P
   const [loading, setLoading] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set())
   const inputRef = useRef<HTMLInputElement>(null)
+  const selectAllRef = useRef<HTMLInputElement>(null)
 
   const setSlideId = useLectureStore((s) => s.setSlideId)
   const setSlideStatus = useLectureStore((s) => s.setSlideStatus)
@@ -112,17 +114,28 @@ export default function SlideLibrarySearchModal({ items, onClose, onDeleted }: P
     setPreviewError(false)
   }, [selectedId])
 
+  // 전체선택 체크박스 indeterminate 동기화
+  useEffect(() => {
+    const el = selectAllRef.current
+    if (!el) return
+    const someChecked = checkedIds.size > 0
+    const allChecked = filteredItems.length > 0 && filteredItems.every((it) => checkedIds.has(it.slide_id))
+    el.indeterminate = someChecked && !allChecked
+  }, [checkedIds, filteredItems])
+
   const selected = useMemo(
     () => items.find((it) => it.slide_id === selectedId) ?? null,
     [items, selectedId],
   )
 
-  const handleDelete = async () => {
-    if (!selected || deleting) return
+  const handleBatchDelete = async () => {
+    if (checkedIds.size === 0 || deleting) return
     setDeleting(true)
+    const ids = Array.from(checkedIds)
     try {
-      await deleteSlide(selected.slide_id)
-      onDeleted?.(selected.slide_id)
+      await deleteSlidesBatch(ids)
+      onDeleted?.(ids)
+      setCheckedIds(new Set())
       setShowDeleteConfirm(false)
     } catch (err) {
       console.error('[SlideLibrarySearch] 강의자료 삭제 실패:', err)
@@ -213,9 +226,9 @@ export default function SlideLibrarySearchModal({ items, onClose, onDeleted }: P
             <button
               type="button"
               aria-label="선택한 강의자료 삭제"
-              title="선택한 강의자료 삭제"
+              title={checkedIds.size > 0 ? `${checkedIds.size}개 삭제` : '강의자료를 선택 후 삭제하세요'}
               onClick={() => setShowDeleteConfirm(true)}
-              disabled={!selected}
+              disabled={checkedIds.size === 0}
               className="ml-auto p-1.5 text-onSurface/60 hover:text-error hover:bg-error/10 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-onSurface/60 disabled:hover:bg-transparent"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -234,36 +247,76 @@ export default function SlideLibrarySearchModal({ items, onClose, onDeleted }: P
                 {query ? '검색 결과가 없습니다' : '저장된 강의자료가 없습니다'}
               </p>
             ) : (
-              <ul className="space-y-1">
-                {filteredItems.map((item) => {
-                  const isSelected = item.slide_id === selectedId
-                  const disabled = item.status !== 'completed'
-                  return (
-                    <li key={item.slide_id}>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedId(item.slide_id)}
-                        onDoubleClick={() => loadAndClose(item)}
-                        disabled={disabled}
-                        className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left transition-colors
-                          ${isSelected ? 'bg-primary/10 border border-primary/40' : 'border border-transparent hover:bg-primaryContainer/30'}
-                          ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
-                      >
-                        <svg className="w-4 h-4 flex-shrink-0 text-onSurface/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                        </svg>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{item.filename}</p>
-                          <p className="text-xs text-onSurface/60 mt-0.5">
-                            {item.total_pages}페이지 · {formatFileSize(item.file_size)}
-                            {item.uploaded_at && ` · ${formatDate(item.uploaded_at)}`}
-                          </p>
+              <>
+                {/* 전체선택 행 */}
+                <div className="flex items-center gap-2 px-3 py-2 mb-1 border-b border-primaryContainer">
+                  <input
+                    ref={selectAllRef}
+                    type="checkbox"
+                    checked={filteredItems.every((it) => checkedIds.has(it.slide_id))}
+                    onChange={(e) =>
+                      setCheckedIds(
+                        e.target.checked
+                          ? new Set(filteredItems.map((it) => it.slide_id))
+                          : new Set()
+                      )
+                    }
+                    className="w-4 h-3.5 accent-primary cursor-pointer"
+                  />
+                  <span className="text-xs text-onSurface/60">
+                    {checkedIds.size > 0 ? `${checkedIds.size}개 선택됨` : '전체 선택'}
+                  </span>
+                </div>
+
+                <ul className="space-y-1">
+                  {filteredItems.map((item) => {
+                    const isSelected = item.slide_id === selectedId
+                    const disabled = item.status !== 'completed'
+                    return (
+                      <li key={item.slide_id}>
+                        <div
+                          className={`flex items-center gap-1 px-2 py-1.5 rounded-lg transition-colors
+                            ${isSelected ? 'bg-primary/10 border border-primary/40' : 'border border-transparent hover:bg-primaryContainer/30'}
+                            ${disabled ? 'opacity-50' : ''}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checkedIds.has(item.slide_id)}
+                            onChange={(e) =>
+                              setCheckedIds((prev) => {
+                                const next = new Set(prev)
+                                if (e.target.checked) next.add(item.slide_id)
+                                else next.delete(item.slide_id)
+                                return next
+                              })
+                            }
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-6 h-3.5 flex-shrink-0 accent-primary cursor-pointer"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setSelectedId(item.slide_id)}
+                            onDoubleClick={() => loadAndClose(item)}
+                            disabled={disabled}
+                            className={`flex-1 flex items-center gap-2 px-1.5 py-0.5 text-left min-w-0 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                          >
+                            <svg className="w-4 h-4 flex-shrink-0 text-onSurface/70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium truncate">{item.filename}</p>
+                              <p className="text-xs text-onSurface/60 mt-0.5">
+                                {item.total_pages}페이지 · {formatFileSize(item.file_size)}
+                                {item.uploaded_at && ` · ${formatDate(item.uploaded_at)}`}
+                              </p>
+                            </div>
+                          </button>
                         </div>
-                      </button>
-                    </li>
-                  )
-                })}
-              </ul>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </>
             )}
           </div>
 
@@ -362,10 +415,10 @@ export default function SlideLibrarySearchModal({ items, onClose, onDeleted }: P
         </div>
       </div>
 
-      {showDeleteConfirm && selected && (
+      {showDeleteConfirm && (
         <DeleteConfirmModal
-          count={1}
-          onConfirm={handleDelete}
+          count={checkedIds.size}
+          onConfirm={handleBatchDelete}
           onCancel={() => setShowDeleteConfirm(false)}
         />
       )}
