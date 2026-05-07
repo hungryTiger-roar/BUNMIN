@@ -22,8 +22,8 @@ function MaterialsPanel({ materials }: MaterialsPanelProps) {
   if (materials.length === 0) {
     return (
       <div className="h-full flex items-center justify-center">
-        <div className="text-center text-lg wide:text-sm text-onSurface/60">
-          <DocumentIcon className="w-12 h-12 mx-auto mb-3 opacity-40" />
+        <div className="text-center text-2xl text-onSurface/60">
+          <DocumentIcon className="w-16 h-16 mx-auto mb-4 opacity-40" />
           <p>No materials uploaded yet.</p>
         </div>
       </div>
@@ -62,7 +62,7 @@ function MaterialsPanel({ materials }: MaterialsPanelProps) {
                   '_blank',
                 )
               }
-              className={`w-full flex items-center gap-2 px-2 py-2 rounded-lg transition-colors text-left ${
+              className={`w-full flex items-center gap-4 px-4 py-4 rounded-lg transition-colors text-left ${
                 enabled
                   ? 'hover:bg-primaryContainer/40 cursor-pointer'
                   : 'opacity-60 cursor-not-allowed'
@@ -70,7 +70,7 @@ function MaterialsPanel({ materials }: MaterialsPanelProps) {
               title={enabled ? `Download ${baseTitle} (${label})` : 'Not ready yet'}
             >
               <svg
-                className="w-5 h-5 wide:w-4 wide:h-4 flex-shrink-0 text-onSurface/70"
+                className="w-8 h-8 flex-shrink-0 text-onSurface/70"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -78,13 +78,13 @@ function MaterialsPanel({ materials }: MaterialsPanelProps) {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
               </svg>
               <div className="flex-1 min-w-0">
-                <div className="text-base wide:text-sm truncate">
+                <div className="text-2xl truncate">
                   {baseTitle} <span className="text-onSurface/60">({label})</span>
                 </div>
-                <div className="text-sm wide:text-[11px] opacity-60">{displayStatus}</div>
+                <div className="text-lg opacity-60">{displayStatus}</div>
               </div>
               <svg
-                className="w-5 h-5 wide:w-4 wide:h-4 flex-shrink-0 text-onSurface/70"
+                className="w-8 h-8 flex-shrink-0 text-onSurface/70"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
