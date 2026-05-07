@@ -98,6 +98,7 @@ function Student() {
   const presentationMode = useLectureStore((s) => s.presentationMode)
   const subtitles = useLectureStore((s) => s.subtitles)
   const studentName = useLectureStore((s) => s.studentName)
+  const setStudentName = useLectureStore((s) => s.setStudentName)
   const studentCount = useLectureStore((s) => s.studentCount)
   const chatMessages = useLectureStore((s) => s.chatMessages)
   const participants = useLectureStore((s) => s.participants)
@@ -201,7 +202,7 @@ function Student() {
     pc.addIceCandidate(candidate).catch(() => { /* 핸드셰이크 도중 도착 가능 — 무시 */ })
   }, [])
 
-  const { isConnected, connect, send, sendChat } = useWebSocket(
+  const { isConnected, connect, send, sendChat, sendStudentRename } = useWebSocket(
     WS_PIPELINE_URL,
     'student',
     { onCursor, onTranslation, onWebRtcOffer: handleWebRtcOffer, onWebRtcIce: handleWebRtcIce }
@@ -220,6 +221,42 @@ function Student() {
   const [showTranscriptModal, setShowTranscriptModal] = useState(false)
   const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 1000)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  // 수강자 이름 인라인 편집 — 헤더 뱃지 클릭 시 input으로 전환
+  const [isEditingName, setIsEditingName] = useState(false)
+  const [editingNameValue, setEditingNameValue] = useState('')
+  const editingNameInputRef = useRef<HTMLInputElement>(null)
+
+  const startEditingName = useCallback(() => {
+    setEditingNameValue(studentName)
+    setIsEditingName(true)
+  }, [studentName])
+
+  const cancelEditingName = useCallback(() => {
+    setIsEditingName(false)
+    setEditingNameValue('')
+  }, [])
+
+  const saveEditingName = useCallback(() => {
+    const trimmed = editingNameValue.trim()
+    if (!trimmed || trimmed === studentName) {
+      cancelEditingName()
+      return
+    }
+    setStudentName(trimmed)
+    if (localStorage.getItem('student_name')) {
+      localStorage.setItem('student_name', trimmed)
+    }
+    sendStudentRename(trimmed)
+    setIsEditingName(false)
+  }, [editingNameValue, studentName, setStudentName, sendStudentRename, cancelEditingName])
+
+  useEffect(() => {
+    if (isEditingName) {
+      editingNameInputRef.current?.focus()
+      editingNameInputRef.current?.select()
+    }
+  }, [isEditingName])
 
   // 슬라이드 줌/팬
   const [zoom, setZoom] = useState(100)
@@ -572,10 +609,43 @@ function Student() {
 
           {studentName && (
             <div className="flex items-center gap-1.5 px-3 py-1.5 bg-primaryContainer/60 rounded-lg text-sm text-onSurface">
-              <svg className="w-4 h-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-              </svg>
-              {studentName}
+              {isEditingName ? (
+                <input
+                  ref={editingNameInputRef}
+                  type="text"
+                  value={editingNameValue}
+                  onChange={(e) => setEditingNameValue(e.target.value)}
+                  onBlur={saveEditingName}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      saveEditingName()
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault()
+                      cancelEditingName()
+                    }
+                  }}
+                  maxLength={20}
+                  aria-label="이름 수정"
+                  className="bg-white/95 rounded px-2 py-0.5 text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary w-32 text-sm"
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={startEditingName}
+                  className="flex items-center gap-1.5 hover:opacity-80 transition-opacity"
+                  title="이름 수정"
+                  aria-label={`이름 수정 (현재 이름: ${studentName})`}
+                >
+                  <svg className="w-4 h-4 opacity-70 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                  </svg>
+                  <span className="truncate">{studentName}</span>
+                  <svg className="w-3.5 h-3.5 opacity-60 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                </button>
+              )}
             </div>
           )}
 
