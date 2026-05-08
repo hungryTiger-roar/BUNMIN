@@ -110,14 +110,9 @@ function resolveVoice(lang: TranslationLang): string | null {
   return VOICE_MAP[lang] ?? FALLBACK_VOICE
 }
 
-// 가속+선점 하이브리드 정책 상수
-// 학습 컨텐츠(비원어민 수강자 영어 청취) 기준 — 1.4x 는 빠르게 들려 이해도 저하.
-// 오디오북 가이드라인상 1.2x 가 "이해하면서 들을 수 있는" 일반적 상한.
-const PLAYBACK_RATE_MAX     = 1.2   // pitch/속도 변형이 학습에 거슬리지 않는 가속 상한
-const ACCEL_MULTIPLIER      = 1.2   // 가속 시 곱하는 배수 (PLAYBACK_RATE_MAX 와 일치 유지)
-const FADE_MS               = 8     // 선점 시 fade-out 길이 — abrupt cut 의 click 노이즈 제거
-const NATURAL_END_THRESHOLD = 0.5   // 남은 재생 0.5초 미만이면 굳이 안 끊고 자연 종료
-const ACCEL_TARGET          = 1.5   // 가속 후 1.5초 이내 종료 가능하면 가속, 아니면 선점
+// FIFO 정책 — 모든 발화를 순서대로 직렬 재생.
+// 강의자 → 학생 sync 보장 위해 가속/선점 제거. 큐가 길어지는 backpressure 처리는
+// 단계 4 의 drift 정책 (sync 작업) 에서 timeline scheduler 와 함께 다룸.
 
 // Heap 모니터링 + 자동 엔진 재생성 — Chrome performance.memory 한정.
 // piper-tts-web 의 WASM heap 은 fragmentation 누적되면 GC 로 회복 안 됨 → 1~2시간+ 강의 시
@@ -139,13 +134,10 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
   const gainValueRef     = useRef(0.7)
   const statusRef        = useRef<TTSStatus>('idle')
   const currentTaskRef   = useRef<CurrentTask | null>(null)
-  const seqRef           = useRef(0)  // synthesize 호출마다 ++ — 진행 중 generate 의 stale 결과 drop 시그널
-
-  // 직렬 큐 — generate() 동시 호출 방지
-  const busyRef            = useRef(false)
-  const synthesizeQueueRef = useRef<Array<{ text: string; voice: string }>>([])
-  const preloadQueueRef    = useRef<Array<{ lang: string; voice: string }>>([])
-  const processNextRef     = useRef<() => void>(() => {})
+  // 첫 발화 cold-start 절감 — 엔진 init 후 즉시 더미 발화 1회로 모델 워밍업.
+  // playSentence 가 호출 시 이 promise 를 await 해 warm-up 완료 후 generate.
+  // unit player 가 sequential 처리하므로 별도 큐 없이 await 만으로 충분.
+  const warmupPromiseRef = useRef<Promise<void> | null>(null)
 
   const [status,          setStatus]          = useState<TTSStatus>('idle')
   const [loadingProgress, setLoadingProgress] = useState(0)
@@ -164,127 +156,10 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
 
   // audioLang 이 deps에 포함 → 언어 변경 시 cleanup → 새 엔진 생성 → WASM 메모리 초기화
   useEffect(() => {
-    async function processNext() {
-      if (busyRef.current || !engineRef.current) return
-
-      const synTask = synthesizeQueueRef.current.shift()
-      if (synTask) {
-        busyRef.current = true
-        const taskSeq = seqRef.current  // 이 작업 시작 시점의 seq
-        try {
-          const response = await engineRef.current.generate(synTask.text, synTask.voice, 0)
-
-          // generate 진행 중에 synthesize 가 호출됐으면 결과 drop (선점됨)
-          if (taskSeq !== seqRef.current) {
-            console.log('[TTS] 선점됨 — generate 결과 drop:', synTask.text.slice(0, 30))
-          } else {
-            const arrayBuffer = await response.file.arrayBuffer()
-            const ctx = audioCtxRef.current
-            if (ctx && ctx.state !== 'closed') {
-              if (ctx.state === 'suspended') await ctx.resume()
-              const audioBuffer = await ctx.decodeAudioData(arrayBuffer)
-
-              // === 가속+선점 하이브리드 의사결정 ===
-              const now = ctx.currentTime
-              let startTime = now + 0.05
-              const current = currentTaskRef.current
-
-              if (current && current.endTime > now) {
-                const remaining = current.endTime - now
-                const currentRate = current.source.playbackRate.value
-                const acceleratedRate = Math.min(currentRate * ACCEL_MULTIPLIER, PLAYBACK_RATE_MAX)
-                const acceleratedRemaining = remaining * (currentRate / acceleratedRate)
-
-                if (remaining < NATURAL_END_THRESHOLD) {
-                  // ① 자연 종료 — 거의 끝났으니 그대로 두고 큐잉
-                  startTime = current.endTime
-                } else if (acceleratedRemaining < ACCEL_TARGET && acceleratedRate > currentRate) {
-                  // ② 가속 가능 — 1.2x 로 끝까지 빠르게 + 큐잉
-                  current.source.playbackRate.cancelScheduledValues(now)
-                  current.source.playbackRate.setValueAtTime(currentRate, now)
-                  current.source.playbackRate.linearRampToValueAtTime(acceleratedRate, now + 0.05)
-                  current.endTime = now + acceleratedRemaining
-                  startTime = current.endTime
-                  console.log(`[TTS] 가속: ${currentRate.toFixed(2)}x → ${acceleratedRate.toFixed(2)}x (잔여 ${remaining.toFixed(2)}s → ${acceleratedRemaining.toFixed(2)}s)`)
-                } else {
-                  // ③ 선점 — fade-out 후 즉시 새 발화 시작
-                  const fadeEnd = now + FADE_MS / 1000
-                  current.gain.gain.cancelScheduledValues(now)
-                  current.gain.gain.setValueAtTime(current.gain.gain.value, now)
-                  current.gain.gain.linearRampToValueAtTime(0, fadeEnd)
-                  // 선점 시 stop 만 하면 source 와 gain 노드가 main gain 그래프에 매달려
-                  // reference chain 으로 살아있어 GC 안 됨 → 빈번한 선점 시 누수.
-                  // stop + 두 노드 모두 명시적 disconnect 로 그래프에서 분리.
-                  const sourceToStop = current.source
-                  const gainToStop   = current.gain
-                  setTimeout(() => {
-                    try { sourceToStop.stop() } catch { /* 이미 종료 */ }
-                    try { sourceToStop.disconnect() } catch { /* */ }
-                    try { gainToStop.disconnect() } catch { /* */ }
-                  }, FADE_MS + 2)
-                  currentTaskRef.current = null
-                  startTime = fadeEnd + 0.005
-                  console.log(`[TTS] 선점 — fade-out (잔여 ${remaining.toFixed(2)}s, 가속 후도 ${acceleratedRemaining.toFixed(2)}s)`)
-                }
-              }
-
-              // 새 source + 전용 gain (per-source 페이드 처리용)
-              const source = ctx.createBufferSource()
-              const sourceGain = ctx.createGain()
-              sourceGain.gain.value = 1
-              source.buffer = audioBuffer
-              source.connect(sourceGain)
-              sourceGain.connect(gainRef.current ?? ctx.destination)
-              source.start(startTime)
-
-              const newTask: CurrentTask = {
-                source,
-                gain: sourceGain,
-                endTime: startTime + audioBuffer.duration,
-              }
-              // onended 에서 명시적 disconnect — source.buffer (AudioBuffer) 참조도 함께 해제됨.
-              // 이 호출이 없으면 source/sourceGain 노드가 main gain 그래프에 매달려 GC 지연
-              // (Chrome 은 ~분 단위, Safari 는 더 길어질 수 있음). 빠른 다발 발화 시 누수 ↑.
-              source.onended = () => {
-                try { source.disconnect() } catch { /* */ }
-                try { sourceGain.disconnect() } catch { /* */ }
-                if (currentTaskRef.current === newTask) {
-                  currentTaskRef.current = null
-                }
-              }
-              currentTaskRef.current = newTask
-            }
-          }
-        } catch (err) {
-          console.error('[TTS] synthesize 실패:', err)
-        }
-        busyRef.current = false
-        processNext()
-        return
-      }
-
-      const preTask = preloadQueueRef.current.shift()
-      if (preTask) {
-        busyRef.current = true
-        try {
-          await engineRef.current.generate('Hello.', preTask.voice, 0)
-          console.log(`[TTS] ${preTask.lang} 모델 warm-up 완료`)
-        } catch (err) {
-          console.warn(`[TTS] ${preTask.lang} 모델 warm-up 실패:`, err)
-        }
-        busyRef.current = false
-        processNext()
-      }
-    }
-
-    processNextRef.current = processNext
-
     if (!enabled) return
 
-    // 큐 초기화 (이전 언어 작업 제거)
-    busyRef.current = false
-    synthesizeQueueRef.current = []
-    preloadQueueRef.current = []
+    // 이전 언어 warm-up promise 정리.
+    warmupPromiseRef.current = null
 
     updateStatus('loading')
 
@@ -357,11 +232,22 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
         setLoadingProgress(100)
         setMode('piper')
 
-        // 현재 언어 모델만 warm-up (메모리에 모델 1개만 유지).
-        // 미지원 언어는 영어 음성으로 fallback (off만 스킵).
+        // 현재 언어 모델만 warm-up — promise 로 보관, playSentence 가 await.
+        // 첫 발화 cold-start 절감. 다양한 길이/구조의 dummy 3회로 phoneme + ONNX +
+        // AudioContext 경로 모두 warm 상태 유지.
         if (voice) {
-          preloadQueueRef.current.push({ lang: audioLang, voice })
-          processNext()
+          const warmupTexts = ['Hello.', 'This is a warm-up.', 'Ready for lecture content.']
+          warmupPromiseRef.current = (async () => {
+            for (const t of warmupTexts) {
+              try {
+                await engine.generate(t, voice, 0)
+              } catch (err) {
+                console.warn(`[TTS] warm-up 실패 (${t}):`, err)
+                return
+              }
+            }
+            console.log(`[TTS] ${audioLang} → ${voice} warm-up ${warmupTexts.length}회 완료`)
+          })()
           console.log(`[TTS] piper 초기화 완료, ${audioLang} → ${voice} warm-up 시작`)
         }
       } catch (err) {
@@ -427,13 +313,9 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
         return
       }
 
-      // 발화 중 재생성 = 학생이 듣던 음성 cutoff. busy / current task / 큐 모두 비어있을 때만.
+      // 발화 중 재생성 = 학생이 듣던 음성 cutoff. 재생 중인 task 가 없을 때만.
       // 다음 idle 시점까지 대기 (다음 30s tick 에서 재시도 — heap 계속 높으면 결국 재생성됨).
-      if (
-        busyRef.current ||
-        currentTaskRef.current !== null ||
-        synthesizeQueueRef.current.length > 0
-      ) {
+      if (currentTaskRef.current !== null) {
         console.warn(
           `[TTS] heap 압박 (${(ratio * 100).toFixed(0)}%) but 발화 진행 중 — idle 대기`
         )
@@ -531,30 +413,80 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
     if (gainRef.current) gainRef.current.gain.value = v
   }, [])
 
-  const synthesize = useCallback((text: string, lang: TranslationLang = 'en') => {
-    const voice = resolveVoice(lang)
-    if (!voice) {
-      console.warn('[TTS] 음성 끄기 상태 — lang:', lang)
-      return
-    }
-    if (!engineRef.current || statusRef.current !== 'ready') {
-      console.warn('[TTS] synthesize 스킵 — status:', statusRef.current)
-      return
-    }
-    if (!audioCtxRef.current) {
-      console.warn('[TTS] synthesize 스킵 — AudioContext 없음 (unlockAudio 먼저 호출 필요)')
-      return
-    }
-
-    // seq 증가 → 진행 중인 generate 의 결과는 도착해도 drop 됨 (processNext 안에서 비교)
-    seqRef.current++
-    // 이전 큐에 쌓인 미처리 작업 drop — 가장 최신 발화만 의미 있음
-    synthesizeQueueRef.current = []
-
-    synthesizeQueueRef.current.push({ text, voice })
-    processNextRef.current()
-    console.log('[TTS] synthesize 요청:', lang, text.slice(0, 40))
+  // TTS 시작 시점 콜백 등록 — Student.tsx 가 subtitle store 의 ttsMs 패치에 사용.
+  // ref 로 보관해 useTTS deps 가 흔들려도 안정.
+  const onTtsStartRef = useRef<((subtitleId: string, ttsMs: number) => void) | null>(null)
+  const setOnTtsStart = useCallback((cb: ((subtitleId: string, ttsMs: number) => void) | null) => {
+    onTtsStartRef.current = cb
   }, [])
 
-  return { status, loadingProgress, error, mode, synthesize, unlockAudio, setVolume }
+  /** Unit player 가 호출하는 Promise 기반 재생 — sentence 1개를 합성 + 재생.
+   *  resolve 시점: source.start 호출 직후 (audio 재생 시작).
+   *  반환값:
+   *    audioStartedAt: 학생 wall clock 기준 audio 가 실제 재생 시작될 시점 (Date.now() ms)
+   *    durationMs:     audio 길이
+   *    ended:          audio 재생 끝나면 resolve 되는 Promise (다음 unit 진행 트리거)
+   *  unit player 가 await 로 sequencing 하므로 useTTS 자체 큐 우회. */
+  const playSentence = useCallback(async (
+    text: string,
+    lang: TranslationLang = 'en',
+    subtitleId?: string,
+  ): Promise<{ audioStartedAt: number; durationMs: number; ended: Promise<void> }> => {
+    const voice = resolveVoice(lang)
+    if (!voice) throw new Error('TTS 음성 끄기 상태')
+    if (!engineRef.current || statusRef.current !== 'ready') {
+      throw new Error(`TTS 미준비 — status: ${statusRef.current}`)
+    }
+    const ctx = audioCtxRef.current
+    if (!ctx || ctx.state === 'closed') throw new Error('AudioContext 없음')
+    if (ctx.state === 'suspended') await ctx.resume()
+
+    // 첫 발화 — warm-up 끝날 때까지 대기 (concurrent generate 방지).
+    if (warmupPromiseRef.current) {
+      try { await warmupPromiseRef.current } catch { /* ignore */ }
+    }
+
+    const requestedAt = performance.now()
+    const response = await engineRef.current.generate(text, voice, 0)
+    const arrayBuffer = await response.file.arrayBuffer()
+    const audioBuffer = await ctx.decodeAudioData(arrayBuffer)
+
+    // 이전 발화가 아직 재생 중이면 그 endTime 직후 (FIFO). 보통은 unit player 가
+    // ended Promise 까지 await 해서 currentTask 가 비어 있음.
+    const now = ctx.currentTime
+    const current = currentTaskRef.current
+    const startCtxTime = (current && current.endTime > now) ? current.endTime : now + 0.05
+    const audioStartedAt = Date.now() + (startCtxTime - now) * 1000
+
+    const source = ctx.createBufferSource()
+    const sourceGain = ctx.createGain()
+    sourceGain.gain.value = 1
+    source.buffer = audioBuffer
+    source.connect(sourceGain)
+    sourceGain.connect(gainRef.current ?? ctx.destination)
+    source.start(startCtxTime)
+
+    if (subtitleId && onTtsStartRef.current) {
+      const ttsMs = Math.max(0, Math.round(performance.now() - requestedAt))
+      try { onTtsStartRef.current(subtitleId, ttsMs) } catch (err) {
+        console.warn('[TTS] onTtsStart 콜백 오류:', err)
+      }
+    }
+
+    const newTask: CurrentTask = { source, gain: sourceGain, endTime: startCtxTime + audioBuffer.duration }
+    currentTaskRef.current = newTask
+
+    const ended = new Promise<void>((resolve) => {
+      source.onended = () => {
+        try { source.disconnect() } catch { /* */ }
+        try { sourceGain.disconnect() } catch { /* */ }
+        if (currentTaskRef.current === newTask) currentTaskRef.current = null
+        resolve()
+      }
+    })
+
+    return { audioStartedAt, durationMs: audioBuffer.duration * 1000, ended }
+  }, [])
+
+  return { status, loadingProgress, error, mode, playSentence, unlockAudio, setVolume, setOnTtsStart }
 }
