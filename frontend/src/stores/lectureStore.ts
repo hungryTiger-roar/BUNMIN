@@ -6,6 +6,11 @@ interface Subtitle {
   translated: string
   timestamp: number
   inputTime?: number  // 오디오 전송 시각 (ms)
+  // 단계별 latency — backend 가 server 단일 시계로 측정한 duration (ms).
+  // 시계 동기화 무관하게 각 단계 처리 시간을 정확히 표시.
+  asrMs?: number
+  nmtMs?: number
+  ttsMs?: number      // 학생 브라우저에서 TTS 시작 시 useTTS 가 update
 }
 
 interface SlidePage {
@@ -96,7 +101,8 @@ interface LectureState {
   // 실시간 데이터
   subtitles: Subtitle[]
 
-  addSubtitle: (subtitle: Omit<Subtitle, 'id'>) => void
+  addSubtitle: (subtitle: Omit<Subtitle, 'id'>) => string  // 새 subtitle id 반환 (TTS 매칭용)
+  updateSubtitleTts: (id: string, ttsMs: number) => void
   clearSubtitles: () => void
 
   // 채팅
@@ -117,6 +123,11 @@ interface LectureState {
   // 자막 다운로드용 세션 ID
   sessionId: string | null
   setSessionId: (id: string | null) => void
+
+  // streaming ASR 모드 — backend 의 register ack 로 수신. true 면 강의자측이
+  // 200ms PCM frame 을 연속 송신하는 모드로 동작.
+  asrStreaming: boolean
+  setAsrStreaming: (enabled: boolean) => void
 
   // 전체 초기화
   reset: () => void
@@ -147,6 +158,7 @@ const initialState = {
   lectureTitle: '',
   slideFilename: '',
   sessionId: null,
+  asrStreaming: false,
 }
 
 export const useLectureStore = create<LectureState>((set, get) => ({
@@ -198,16 +210,26 @@ export const useLectureStore = create<LectureState>((set, get) => ({
   setAudioOn: (on) => set({ isAudioOn: on }),
   setSubtitleOn: (on) => set({ isSubtitleOn: on }),
 
-  // 실시간 데이터
-  addSubtitle: (subtitle) => set((state) => ({
-    subtitles: [
-      ...state.subtitles.slice(-50), // 최근 50개만 유지
-      // crypto.randomUUID는 secure context(HTTPS/localhost/file://) 전용 →
-      // LAN HTTP로 접속한 수강자에서는 throw되어 자막이 누락됨
-      { ...subtitle, id: typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}` }
-    ]
+  // 실시간 데이터 — id 발급은 set 외부에서 한 번만 (closure 안에서 호출 시마다 다시 만들면 set 안에서 못 빼냄)
+  addSubtitle: (subtitle) => {
+    // crypto.randomUUID는 secure context(HTTPS/localhost/file://) 전용 →
+    // LAN HTTP로 접속한 수강자에서는 throw되어 자막이 누락됨
+    const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+    set((state) => ({
+      subtitles: [
+        ...state.subtitles.slice(-50), // 최근 50개만 유지
+        { ...subtitle, id }
+      ]
+    }))
+    return id
+  },
+  // TTS 시작 시점에 호출 — 해당 subtitle 의 ttsMs 만 patch.
+  updateSubtitleTts: (id, ttsMs) => set((state) => ({
+    subtitles: state.subtitles.map((s) =>
+      s.id === id ? { ...s, ttsMs } : s
+    )
   })),
   clearSubtitles: () => set({ subtitles: [] }),
 
@@ -226,6 +248,9 @@ export const useLectureStore = create<LectureState>((set, get) => ({
 
   // 자막 세션 ID
   setSessionId: (id) => set({ sessionId: id }),
+
+  // streaming ASR 모드
+  setAsrStreaming: (enabled) => set({ asrStreaming: enabled }),
 
   // 전체 초기화
   reset: () => set(initialState),
