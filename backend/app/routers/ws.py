@@ -71,6 +71,35 @@ def _validate_asr_text(text: str) -> tuple[bool, str]:
 
     return True, ""
 
+
+try:
+    import kss as _kss  # 한국어 문장 분리 (마침표 + 종결어미 기반)
+    _kss_available = True
+except Exception as _e:
+    _kss_available = False
+    print(f"[Split] kss 미설치 — 정규식 fallback 사용: {_e}", flush=True)
+
+
+def _split_korean_sentences(text: str) -> list[str]:
+    """ASR 한 덩어리 결과를 문장 단위로 쪼개 NMT/broadcast를 병렬화하기 위한 분할.
+    1차: kss (한국어 종결어미 패턴까지 인식 — 마침표 누락 발화도 분할)
+    2차: 정규식 fallback (마침표·물음표·느낌표 + 공백)
+    분할 결과가 1개면 기존과 동일하게 처리됨 (손해 없음).
+    호흡 짧은 화자가 만든 5초+ 한 덩어리에서 첫 자막 latency를 줄이는 게 목적."""
+    text = text.strip()
+    if not text:
+        return []
+    if _kss_available:
+        try:
+            parts = [p.strip() for p in _kss.split_sentences(text) if p.strip()]
+            if parts:
+                return parts
+        except Exception as e:
+            print(f"[Split] kss 분할 실패 → fallback: {e}", flush=True)
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", text) if p.strip()]
+    return parts or [text]
+
+
 router = APIRouter(prefix="/ws", tags=["WebSocket"])
 
 # 서비스 인스턴스 (main.py에서 주입)
@@ -683,42 +712,59 @@ async def process_audio(message: dict):
             print(f"[ASR  seq={seq}] {korean_text}", flush=True)
 
         # _asr_semaphore 해제 → 다음 발화 ASR이 즉시 시작 가능 (pipeline parallelism)
-        # Phase 2: NMT — 모델 인스턴스 보호 (GPU 직렬화)
+        # Phase 2: NMT — 문장 단위 분할 처리. ASR이 한 덩어리(5초+)로 보내도 NMT/broadcast는
+        # 문장별로 순차 송출 → 첫 자막이 빨리 뜸. 분할 결과 1개면 기존과 동일.
+        sentences = _split_korean_sentences(korean_text)
+
         t_nmt = time.perf_counter()
-        async with _nmt_semaphore:
-            english_text = await asyncio.to_thread(
-                _nmt_service.translate, korean_text, "ko", "en", 512
-            )
+
+        async def _process_sentence(sub_seq: int, sentence: str) -> None:
+            """한 문장을 NMT → broadcast. NMT 완료 즉시 송출되어 첫 자막 latency 단축."""
+            async with _nmt_semaphore:
+                english = await asyncio.to_thread(
+                    _nmt_service.translate, sentence, "ko", "en", 512
+                )
+            if not english.strip():
+                return
+            print(f"[NMT  seq={seq}.{sub_seq}] {english}", flush=True)
+            # 첫 자막 latency — 분할 효과 측정용 (마지막 자막은 LATENCY 로그의 '전체')
+            if sub_seq == 0:
+                print(
+                    f"[FIRST seq={seq}] 첫 자막 {time.perf_counter() - t_start:.2f}s",
+                    flush=True,
+                )
+
+            if manager.current_session_id:
+                transcripts.append_segment(
+                    manager.current_session_id, sentence, english
+                )
+
+            # TTS는 수강자 브라우저(WASM)에서 처리 — audio 필드 없이 텍스트만 전송
+            payload = {
+                "type": "transcription",
+                "seq": seq,
+                "sub_seq": sub_seq,           # 같은 seq 안 문장 순서 (frontend 정렬용)
+                "total_sub": len(sentences),  # 한 발화의 총 문장 수
+                "original": sentence,
+                "translated": english,
+                "sentAt": sent_at,
+            }
+            await manager.broadcast_to_students(payload)
+            if manager.lecturer:
+                try:
+                    await manager.lecturer.send_json(payload)
+                except Exception:
+                    pass
+
+        # gather로 launch — _nmt_semaphore(=1)가 직렬화하지만, 각 task는 NMT 완료되는 즉시
+        # broadcast → 첫 문장이 가장 먼저 뜸. NMT 시간 합은 단일 호출과 거의 동일.
+        await asyncio.gather(*[
+            _process_sentence(i, s) for i, s in enumerate(sentences)
+        ])
         t_nmt_done = time.perf_counter()
-        print(f"[NMT  seq={seq}] {english_text}", flush=True)
-
-        if not english_text.strip():
-            return
-
-        if manager.current_session_id:
-            transcripts.append_segment(
-                manager.current_session_id, korean_text, english_text
-            )
-
-        # TTS는 수강자 브라우저(WASM)에서 처리 — audio 필드 없이 텍스트만 전송
-        payload = {
-            "type": "transcription",
-            "seq": seq,
-            "original": korean_text,
-            "translated": english_text,
-            "sentAt": sent_at,
-        }
-        await manager.broadcast_to_students(payload)
-
-        # 강의자에게도 자막 전송
-        if manager.lecturer:
-            try:
-                await manager.lecturer.send_json(payload)
-            except Exception:
-                pass
 
         print(
-            f"[LATENCY] seq={seq} | 대기={t_asr - t_start:.2f}s | "
+            f"[LATENCY] seq={seq} ({len(sentences)}문장) | 대기={t_asr - t_start:.2f}s | "
             f"ASR={t_asr_done - t_asr:.2f}s | "
             f"NMT={t_nmt_done - t_nmt:.2f}s | "
             f"전체={t_nmt_done - t_start:.2f}s",
