@@ -14,23 +14,40 @@ import numpy as np
 
 # 모델이 학습 데이터에서 본 정치 뉴스/방송/YouTube 정형구 — 강의에서 등장 확률 ~0
 # 실제 production 로그에서 관측된 패턴 + 알려진 Whisper 환각 정형구
-_HALLUCINATION_PATTERNS = re.compile("|".join([
-    r"국감장",                  # 국정감사장 (정치 뉴스 빈출)
-    r"조정식",                  # 특정 정치인 (관측됨)
-    r"홍\s*사장",               # 특정 인물 (관측됨)
-    r"용재진",                  # 환각으로 등장한 이름 (관측됨)
-    r"국토교[통토]위원",        # "국토교토위원회/장" — Whisper 오타 포함 (관측됨)
-    r"기관\s*증인",             # 국감 전용 용어 (관측됨)
-    r"발언에\s*국감",           # "발언에 국감장이 술렁이자" (관측됨)
-    r"술렁이자",                # 뉴스 정형 동사 (관측됨, 강의 등장 거의 없음)
-    r"시청해\s*주셔서",         # YouTube outro
-    r"구독과\s*좋아요",         # YouTube outro
-    r"MBC\s*뉴스",              # 방송 intro
-    r"SBS\s*뉴스",
-    r"KBS\s*뉴스",
-    r"특파원\s*입니다",         # 방송 outro
-    r"기자입니다",              # 방송 outro
-]))
+_HALLUCINATION_PATTERNS = re.compile(
+    "|".join([
+        r"국감장",                  # 국정감사장 (정치 뉴스 빈출)
+        r"조정식",                  # 특정 정치인 (관측됨)
+        r"홍\s*사장",               # 특정 인물 (관측됨)
+        r"용재진",                  # 환각으로 등장한 이름 (관측됨)
+        r"국토교[통토]위원",        # "국토교토위원회/장" — Whisper 오타 포함 (관측됨)
+        r"기관\s*증인",             # 국감 전용 용어 (관측됨)
+        r"발언에\s*국감",           # "발언에 국감장이 술렁이자" (관측됨)
+        r"술렁이자",                # 뉴스 정형 동사 (관측됨, 강의 등장 거의 없음)
+        r"시청해\s*주셔서",         # YouTube outro
+        r"구독과\s*좋아요",         # YouTube outro
+        r"영상\s*편집",             # "영상편집 및 자막 제공..." (streaming 에서 관측됨)
+        r"자막\s*제공",             # "자막 제공" — YouTube/방송 정형구
+        r"광고\s*를?\s*포함",       # "광고를 포함하고 있습니다" — YouTube 정형구
+        # "다음 영상에서 만나요" 류 — 작별 동사 (만나/뵙/봐) 붙은 형태만 매칭해
+        # 강사의 정상 예고 ("다음 시간에는 미적분") 는 보존.
+        r"다음\s*(?:화|편|영상|시간)\s*에\s*(?:서)?\s*(?:만나|뵙|봐|봬)",
+        # 영어 YouTube outro — Whisper 가 language=ko 에서도 토하는 학습 잔재.
+        # 한국어 강의에 진짜 영어 인사가 등장할 가능성 거의 없어 false positive 위험 작음.
+        r"\bthank\s*you\b",
+        r"\bthanks?\s*for\s*watching\b",
+        r"\bsee\s*you\s*(?:next|in|soon|later)?\b",
+        r"\bsubscribe\b",
+        r"\blike\s*and\s*subscribe\b",
+        r"MBC\s*뉴스",              # 방송 intro
+        r"SBS\s*뉴스",
+        r"KBS\s*뉴스",
+        r"특파원\s*입니다",         # 방송 outro
+        r"기자입니다",              # 방송 outro
+    ]),
+    # 영어 패턴은 대소문자 구분 안 함. 한국어 패턴엔 영향 없음.
+    re.IGNORECASE,
+)
 
 # Whisper 가 침묵/노이즈에서 자주 토하는 짧은 한국어 정형 인사구 — YouTube 영상 끝마다
 # 등장하는 표현들이 학습 데이터에 누적된 결과. 단독으로 등장하면 환각일 가능성 높음.

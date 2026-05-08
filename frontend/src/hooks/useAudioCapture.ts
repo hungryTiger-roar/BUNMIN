@@ -9,9 +9,21 @@ declare global {
 
 interface UseAudioCaptureOptions {
   onAudioData: (audioBlob: Blob) => void
+  /** streaming 모드 — backend ASR_STREAMING=true 시 register ack 로 ON.
+   *  활성 시 발화 중 200ms 단위 PCM int16 frame 을 onAudioFrame 으로 흘려보내고,
+   *  VAD onSpeechEnd 시 onSpeechEndFlush 1회 호출. 비활성 시 기존 onSpeechEnd → onAudioData 동작.
+   */
+  streamingMode?: boolean
+  onAudioFrame?: (pcm: Int16Array, sentAt: number) => void
+  onSpeechEndFlush?: () => void
 }
 
-export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
+export function useAudioCapture({
+  onAudioData,
+  streamingMode = false,
+  onAudioFrame,
+  onSpeechEndFlush,
+}: UseAudioCaptureOptions) {
   const [isCapturing, setIsCapturing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const vadRef = useRef<any>(null)
@@ -21,9 +33,20 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
   const gainValueRef = useRef<number>(1)  // 0 = mute, 1 = unity, 2 = +6dB
   const keepAliveRef = useRef<NodeJS.Timeout | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
+  // streaming 모드 전용 — AudioWorklet 으로 PCM frame 을 추출.
+  // streamingMode=false 면 worklet 자체를 만들지 않아 비활성과 동일 비용.
+  const workletNodeRef = useRef<AudioWorkletNode | null>(null)
+  const muteSinkRef = useRef<GainNode | null>(null)
+  const isSpeakingRef = useRef(false)
 
   const onAudioDataRef = useRef(onAudioData)
   onAudioDataRef.current = onAudioData
+  const onAudioFrameRef = useRef(onAudioFrame)
+  onAudioFrameRef.current = onAudioFrame
+  const onSpeechEndFlushRef = useRef(onSpeechEndFlush)
+  onSpeechEndFlushRef.current = onSpeechEndFlush
+  const streamingModeRef = useRef(streamingMode)
+  streamingModeRef.current = streamingMode
 
   // AudioContext가 suspend되면 자동 resume (Chrome 무음 정책 대응)
   const startKeepAlive = (vad: any) => {
@@ -55,6 +78,15 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
       vadRef.current?.destroy()
       vadRef.current = null
       stopStream()
+      if (workletNodeRef.current) {
+        workletNodeRef.current.disconnect()
+        workletNodeRef.current.port.onmessage = null
+        workletNodeRef.current = null
+      }
+      if (muteSinkRef.current) {
+        muteSinkRef.current.disconnect()
+        muteSinkRef.current = null
+      }
       if (analyserRef.current) {
         analyserRef.current.disconnect()
         analyserRef.current = null
@@ -97,8 +129,17 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
         submitUserSpeechOnPause: false,
         onSpeechStart: () => {
           console.log('[VAD] 발화 시작')
+          isSpeakingRef.current = true
         },
         onSpeechEnd: (audio: Float32Array) => {
+          isSpeakingRef.current = false
+          // streaming 모드: blob 합성 안 하고, frame 송신은 worklet 이 isSpeakingRef
+          // false 시 자동 중단되므로 여기선 flush 신호만 보내면 됨.
+          if (streamingModeRef.current) {
+            console.log('[VAD] 발화 끝 (streaming) → flush 신호')
+            onSpeechEndFlushRef.current?.()
+            return
+          }
 
           // 최소 발화 길이: 0.3초 미만은 노이즈 버스트 (16000Hz * 0.3s = 4800)
           if (audio.length < 4800) {
@@ -118,6 +159,7 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
         },
         onVADMisfire: () => {
           console.log('[VAD] 오발화 감지 — 무시')
+          isSpeakingRef.current = false
         },
       })
 
@@ -142,11 +184,25 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
       analyserRef.current = analyser
       gainNode.connect(analyser)
 
+      // Streaming 모드: 200ms PCM int16 frame 추출용 AudioWorklet.
+      // chunk 모드에서는 worklet 자체를 만들지 않아 기존 동작과 비용 동일.
+      if (streamingMode) {
+        try {
+          await setupStreamingWorklet(audioContext, gainNode)
+          console.log('[AudioCapture] streaming worklet 초기화 완료')
+        } catch (err) {
+          // worklet 미지원/실패 시 streaming flag 를 즉시 끔.
+          // 안 그러면 onSpeechEnd 가 flush 신호만 보내고 chunk blob 송신 안 해서 자막 0건.
+          console.error('[AudioCapture] streaming worklet 실패 → chunk 모드로 폴백:', err)
+          streamingModeRef.current = false
+        }
+      }
+
       vadRef.current = vad
       vad.start()
       startKeepAlive(vad)
       setIsCapturing(true)
-      console.log('[AudioCapture] Silero VAD 캡처 시작')
+      console.log(`[AudioCapture] Silero VAD 캡처 시작 (mode=${streamingMode ? 'streaming' : 'chunk'})`)
       return true
     } catch (err) {
       console.error('[AudioCapture] 시작 실패:', err)
@@ -155,7 +211,93 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
     }
   }, [])
 
+  // streaming 모드 전용 — AudioWorklet 으로 200ms PCM int16 frame 추출 후
+  // isSpeakingRef true 일 때만 onAudioFrame 콜백 호출 (silence 시 GPU/네트워크 절약).
+  // useCallback 으로 빼서 외부 useEffect 에서도 호출 가능 — register ack 가 마이크 시작
+  // 후 늦게 도착하는 race 케이스 fix 용. ref 만 캡처하므로 deps 빈 배열로 stable.
+  const setupStreamingWorklet = useCallback(async (audioContext: AudioContext, gainNode: GainNode) => {
+    // worklet processor 인라인 정의 — 별도 파일/Vite 설정 없이 동작.
+    // 16kHz mono 입력, 3200 sample(200ms) 마다 Int16 변환 후 main thread 로 postMessage.
+    const workletSource = `
+class StreamProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super()
+    this.frameSize = 3200  // 200ms @ 16kHz
+    this.buffer = new Float32Array(this.frameSize)
+    this.idx = 0
+  }
+  process(inputs) {
+    const input = inputs[0] && inputs[0][0]
+    if (!input) return true
+    for (let i = 0; i < input.length; i++) {
+      this.buffer[this.idx++] = input[i]
+      if (this.idx >= this.frameSize) {
+        const pcm = new Int16Array(this.frameSize)
+        for (let j = 0; j < this.frameSize; j++) {
+          const s = Math.max(-1, Math.min(1, this.buffer[j]))
+          pcm[j] = s < 0 ? s * 0x8000 : s * 0x7fff
+        }
+        this.port.postMessage(pcm.buffer, [pcm.buffer])
+        this.idx = 0
+      }
+    }
+    return true
+  }
+}
+registerProcessor('aunion-stream-processor', StreamProcessor)
+    `
+    const blob = new Blob([workletSource], { type: 'application/javascript' })
+    const url = URL.createObjectURL(blob)
+    try {
+      await audioContext.audioWorklet.addModule(url)
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+    const workletNode = new AudioWorkletNode(audioContext, 'aunion-stream-processor')
+    workletNode.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
+      // VAD 가 'speaking' 으로 표시한 동안만 backend 로 송신 — silence 절약.
+      if (!isSpeakingRef.current) return
+      if (!streamingModeRef.current) return
+      const pcm = new Int16Array(e.data)
+      onAudioFrameRef.current?.(pcm, Date.now())
+    }
+    // worklet 의 process() 가 audio engine 에 의해 pull 되도록 destination 까지 연결.
+    // 단, audio echo 방지를 위해 muted gain sink 경유.
+    const muteSink = audioContext.createGain()
+    muteSink.gain.value = 0
+    gainNode.connect(workletNode)
+    workletNode.connect(muteSink)
+    muteSink.connect(audioContext.destination)
+    workletNodeRef.current = workletNode
+    muteSinkRef.current = muteSink
+  }, [])
+
+  // race condition fix — startCapture 시점에 streamingMode=false 였다가 register ack
+  // 으로 true 로 바뀌는 케이스. capture 가 이미 도는 상태에서 streamingMode 가 true 가
+  // 되면 worklet 만 동적으로 add. 첫 mount 에 register ack 늦게 도착해 mode=chunk 로
+  // 시작했어도 이 useEffect 가 메꿔줌.
+  useEffect(() => {
+    if (!isCapturing || !streamingMode) return
+    if (workletNodeRef.current) return  // 이미 add 됨
+    if (!audioContextRef.current || !gainNodeRef.current) return
+    setupStreamingWorklet(audioContextRef.current, gainNodeRef.current)
+      .then(() => console.log('[AudioCapture] streaming worklet 동적 add (race fix)'))
+      .catch((err) => {
+        console.error('[AudioCapture] streaming worklet 동적 add 실패 → chunk 모드 유지:', err)
+        streamingModeRef.current = false
+      })
+  }, [streamingMode, isCapturing, setupStreamingWorklet])
+
   const stopCapture = useCallback(() => {
+    if (workletNodeRef.current) {
+      workletNodeRef.current.disconnect()
+      workletNodeRef.current.port.onmessage = null
+      workletNodeRef.current = null
+    }
+    if (muteSinkRef.current) {
+      muteSinkRef.current.disconnect()
+      muteSinkRef.current = null
+    }
     if (analyserRef.current) {
       analyserRef.current.disconnect()
       analyserRef.current = null
@@ -180,6 +322,7 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
     // pause가 아닌 destroy로 완전 정리 — 발화 중에도 즉시 마이크 OFF 보장
     vadRef.current?.destroy()
     vadRef.current = null
+    isSpeakingRef.current = false
     setIsCapturing(false)
     console.log('[AudioCapture] 캡처 중지')
   }, [])

@@ -489,6 +489,12 @@ def _load_models_sync():
             dtype=ModelConfig.ASR_DTYPE,
         )
         ws.set_asr_service(asr_service)
+        # ASR_STREAMING=true 일 때만 streaming wrapper 도 함께 주입.
+        # WhisperModel + chunk path 의 GPU semaphore 둘 다 공유 — 추가 VRAM 부담 없고
+        # 두 path 가 동일 GPU 로 동시 transcribe 들어가지 않게 직렬화.
+        if ws.ASR_STREAMING_ENABLED:
+            ws.init_streaming_asr_service(asr_service.model)
+            print("[ASR] streaming layer 활성 (ASR_STREAMING=true)", flush=True)
         _model_status["models"]["asr"]["status"] = "done"
         _model_status["models"]["asr"]["progress"] = 100
         _set_status("ASR 완료 ✓ (1/3)", progress=40)
