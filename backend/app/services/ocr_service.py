@@ -33,8 +33,10 @@ class OCRService:
             from surya.detection import DetectionPredictor
             from surya.recognition import RecognitionPredictor
 
+            # surya 0.17+: DetectionPredictor 는 foundation_predictor 를 받지 않음
+            # (첫 인자가 checkpoint:Optional[str] 로 변경됨). RecognitionPredictor 만 공유.
             self.foundation_predictor = FoundationPredictor()
-            self.det_predictor = DetectionPredictor(self.foundation_predictor)
+            self.det_predictor = DetectionPredictor()
             self.rec_predictor = RecognitionPredictor(self.foundation_predictor)
             self.mode = "surya"
             print("[OCR] Surya OCR (Transformer) 초기화 완료")
