@@ -115,6 +115,7 @@ function Lecturer() {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 1000)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [panelOnTop, setPanelOnTop] = useState<'library' | 'sidebar'>('library')
   const [slideBoxWidth, setSlideBoxWidth] = useState<number | undefined>(undefined)
   const [pendingStart, setPendingStart] = useState(false)
   // 강의 시작 전 화면공유 시도 시 잠깐 보여줄 안내 문구
@@ -604,6 +605,7 @@ function Lecturer() {
       setLibraryItems([])
     }
     setShowMaterialChangeModal(true)
+    setPanelOnTop('library')
   }
 
   const handleChatSubmit = (e: React.FormEvent) => {
@@ -1426,7 +1428,7 @@ function Lecturer() {
         {isNarrow && (
           <button
             type="button"
-            onClick={() => setSidebarOpen(v => !v)}
+            onClick={() => { setSidebarOpen(v => { if (!v) setPanelOnTop('sidebar'); return !v }) }}
             className={`absolute top-1/2 -translate-y-1/2 z-[55] flex items-center justify-center w-4 h-20 border border-r-0 rounded-l-lg ${theme === 'light' ? 'bg-surface border-primaryContainer shadow-[0_0_14px_rgba(0,0,0,0.18)]' : theme === 'dark' ? 'bg-overlayBorder border-white/20 shadow-md' : 'bg-[#E0DEF7] border-purple-200/50 shadow-md'} transition-all duration-300 ease-in-out ${
               sidebarOpen ? 'right-80' : 'right-0'
             }`}
@@ -1440,7 +1442,7 @@ function Lecturer() {
 
         {/* 사이드바 */}
         <aside className={isNarrow
-          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 overflow-hidden min-h-0 px-3 py-4 sidebar-panel z-[55] transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
+          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 overflow-hidden min-h-0 px-3 py-4 sidebar-panel ${panelOnTop === 'sidebar' ? 'z-[65]' : 'z-[55]'} transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
           : 'relative z-[55] w-80 flex-shrink-0 flex flex-col gap-3 overflow-hidden min-h-0'
         }>
           <div className="flex-1 overflow-y-auto scrollbar-hide space-y-3 min-h-0">
