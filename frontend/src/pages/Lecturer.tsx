@@ -15,6 +15,8 @@ import ParticipantsPanel from '@/components/common/ParticipantsPanel'
 import AudioLevelMeter from '@/components/lecturer/AudioLevelMeter'
 import MicButton from '@/components/lecturer/MicButton'
 import CursorSpotlight from '@/components/lecturer/CursorSpotlight'
+import DrawingToolbar from '@/components/lecturer/DrawingToolbar'
+import { DrawingCanvas, type DrawingTool, type DrawingCanvasHandle } from '@/components/common/DrawingCanvas'
 import ScreenPickerModal from '@/components/lecturer/ScreenPickerModal'
 import { WS_PIPELINE_URL, API_BASE, getSlideLibrary } from '@/lib/api'
 import SlideLibrarySearchModal from '@/components/lecturer/SlideLibrarySearchModal'
@@ -104,6 +106,12 @@ function Lecturer() {
   const [showEndConfirm, setShowEndConfirm] = useState(false)
   const [spotlightEnabled, setSpotlightEnabled] = useState(false)
   const [spotlightColor, setSpotlightColor] = useState(SPOTLIGHT_PRESETS[0])
+  // 필기 도구 상태 — 마우스 포인터와 동일한 6색 팔레트 공유
+  const [drawingEnabled, setDrawingEnabled] = useState(false)
+  const [drawingTool, setDrawingTool] = useState<DrawingTool>('pencil')
+  const [drawingColor, setDrawingColor] = useState(SPOTLIGHT_PRESETS[0])
+  // 강의자 캔버스 imperative 핸들 — "전체 지우기" 버튼 등 외부 트리거용
+  const drawingCanvasRef = useRef<DrawingCanvasHandle>(null)
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 1000)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -940,6 +948,17 @@ function Lecturer() {
           </h2>
         </div>
       )}
+      {/* 필기 캔버스 — pointerEvents는 canvas 내부에서 active일 때만 활성화 */}
+      <DrawingCanvas
+        ref={drawingCanvasRef}
+        mode="lecturer"
+        containerRef={slideBoxRef}
+        page={currentPage}
+        active={drawingEnabled && isLectureStarted}
+        tool={drawingTool}
+        color={drawingColor}
+        send={send}
+      />
       {subtitleOverlay}
       {bottomControlBar}
       {settingsPanelPopover}
@@ -1525,17 +1544,24 @@ function Lecturer() {
                   />
                 ))}
               </div>
-              <input
-                type="color"
-                value={spotlightColor}
-                onChange={(e) => {
-                  setSpotlightColor(e.target.value)
-                  if (!spotlightEnabled) setSpotlightEnabled(true)
-                }}
-                className="w-full h-8 rounded cursor-pointer border border-primaryContainer"
-                aria-label="Custom spotlight color"
-              />
             </div>
+
+            {/* 필기 카드 */}
+            <DrawingToolbar
+              enabled={drawingEnabled}
+              setEnabled={setDrawingEnabled}
+              tool={drawingTool}
+              setTool={setDrawingTool}
+              color={drawingColor}
+              setColor={setDrawingColor}
+              palette={SPOTLIGHT_PRESETS}
+              onClearAll={() => {
+                drawingCanvasRef.current?.clearPage(currentPage)
+                if (isConnected && isLectureStarted) {
+                  send({ type: 'draw_clear', page: currentPage })
+                }
+              }}
+            />
 
             {/* 자료 다운로드 */}
             {slideStatus === 'ready' && slideId && (

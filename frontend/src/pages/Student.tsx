@@ -13,6 +13,7 @@ import { useTTS } from '@/hooks/useTTS'
 import ParticipantsPanel from '@/components/common/ParticipantsPanel'
 import MaterialViewToggle from '@/components/common/MaterialViewToggle'
 import { StudentCursorOverlay, useCursorOverlay } from '@/components/student/StudentCursorOverlay'
+import { DrawingCanvas, type DrawingCanvasHandle } from '@/components/common/DrawingCanvas'
 import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
 
 const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
@@ -146,11 +147,19 @@ function Student() {
 
   const [isAudioUnlocked, setIsAudioUnlocked] = useState(false)
   const isAudioUnlockedRef = useRef(false)
+  // 자동 unlock 시도 완료 여부 — 시도 중에는 모달 안 보이게 해 UX 깜빡임 방지.
+  // (autoEnter / sessionStorage 경로는 비동기라 첫 렌더 시점엔 결과 모름)
+  const [autoUnlockSettled, setAutoUnlockSettled] = useState(false)
 
   const originalAudioRef = useRef<HTMLAudioElement>(null)
 
-  const unlockAudio = useCallback(() => {
-    unlockTTS()
+  const unlockAudio = useCallback(async () => {
+    const ok = await unlockTTS()
+    if (!ok) {
+      // 자동 시도 (autoEnter 경유) 가 브라우저 정책에 막힌 경우.
+      // isAudioUnlocked 는 false 유지 → 모달 그대로 → 사용자 클릭 유도.
+      return
+    }
     isAudioUnlockedRef.current = true
     setIsAudioUnlocked(true)
     originalAudioRef.current?.play().catch(() => {})
@@ -166,6 +175,12 @@ function Student() {
   // ref 기반 커서 오버레이 (React 상태 없이 DOM 직접 조작)
   // slideRef를 전달해서 컨테이너 크기 기준으로 px 변환
   const { spotlightRef, onCursor } = useCursorOverlay(slideRef)
+
+  // 강의자 필기 수신 — imperative 캔버스, React 리렌더 없이 DOM 직접 조작
+  const drawingCanvasRef = useRef<DrawingCanvasHandle>(null)
+  const onDraw = useCallback((msg: import('@/hooks/useWebSocket').DrawMessage) => {
+    drawingCanvasRef.current?.receiveDraw(msg)
+  }, [])
 
   // 화면 공유 = WebRTC peer-to-peer (Zoom과 동일 방식)
   // 강의자가 보낸 offer를 받아 answer 회신 → ontrack으로 MediaStream 수신 → <video srcObject>
@@ -224,7 +239,7 @@ function Student() {
   const { isConnected, connect, send, sendChat, sendStudentRename } = useWebSocket(
     WS_PIPELINE_URL,
     'student',
-    { onCursor, onTranslation, onWebRtcOffer: handleWebRtcOffer, onWebRtcIce: handleWebRtcIce }
+    { onCursor, onDraw, onTranslation, onWebRtcOffer: handleWebRtcOffer, onWebRtcIce: handleWebRtcIce }
   )
 
   useEffect(() => { sendRef.current = send }, [send])
@@ -337,10 +352,21 @@ function Student() {
     if (video) video.srcObject = null
   }, [isLectureStarted, presentationMode])
 
-  // Start 페이지 "강의 참여" 클릭 경유 시 transient activation 살아있을 때 즉시 언락
+  // 자동 unlock 은 autoEnter 경로 한정 — /start "강의 참여" 클릭의 transient
+  // activation 이 SPA 라우팅으로 보존되는 케이스에만 신뢰성 있게 동작.
+  //
+  // 주의: F5 / Ctrl+R 새로고침 시 브라우저 history.state 가 보존되어
+  // location.state.autoEnter 가 false 가 되지 않음 → reload 감지로 명시적 차단.
+  // performance.getEntriesByType('navigation')[0].type 이 'reload' 면 자동 unlock
+  // 안 시도하고 모달 노출. (직접 URL 진입은 'navigate' 라 fromStart 자체가 false)
   useEffect(() => {
-    if ((location.state as { autoEnter?: boolean } | null)?.autoEnter) {
-      unlockAudio()
+    const fromStart = (location.state as { autoEnter?: boolean } | null)?.autoEnter
+    const navEntry = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined
+    const isReload = navEntry?.type === 'reload'
+    if (fromStart && !isReload) {
+      unlockAudio().finally(() => setAutoUnlockSettled(true))
+    } else {
+      setAutoUnlockSettled(true)  // 새로고침 / 직접 진입 → 모달 즉시 노출
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -523,7 +549,34 @@ function Student() {
       {/* 원본 오디오 — audioLang=original 일 때만 언뮤트, 평소엔 muted */}
       <audio ref={originalAudioRef} autoPlay muted playsInline style={{ display: 'none' }} />
 
-      {/* 입장 오버레이 — connect + unlockAudio 동시 처리 (브라우저 오디오 정책 대응) */}
+      {/* 음성 활성화 오버레이 — 새로고침 / 직접 URL 진입 시 user gesture 확보 용도.
+          브라우저 autoplay 정책상 사용자 클릭 없이 AudioContext.resume() 통과 불가 →
+          명확한 버튼으로 학생이 의식적으로 음성을 켜게 함. /start 경유 시 autoEnter
+          로 자동 unlock 되어 이 오버레이는 안 뜸. */}
+      {!isAudioUnlocked && autoUnlockSettled && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-surface rounded-2xl shadow-2xl p-8 w-[min(90%,420px)] flex flex-col items-center gap-5">
+            <div className="text-5xl">🔊</div>
+            <div className="text-center">
+              <h2 className="text-xl font-semibold text-onSurface mb-1">Start Lecture Audio</h2>
+              <p className="text-sm text-onSurface/70">
+                Click below to play the live voice.
+              </p>
+              <p className="text-xs text-onSurface/50 mt-1">
+                강의 음성을 시작하려면 클릭하세요.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={unlockAudio}
+              className="w-full py-3 rounded-xl bg-primary text-onPrimary font-medium hover:opacity-90 transition-opacity shadow-lg shadow-primary/20"
+            >
+              Start Audio
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* 자막 다운로드 모달 */}
       {showTranscriptModal && sessionId && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -704,6 +757,15 @@ function Student() {
           >
             {/* 강의자 커서 오버레이 (ref 기반, 리렌더링 없음) */}
             {!isPaused && <StudentCursorOverlay spotlightRef={spotlightRef} />}
+
+            {/* 강의자 필기 오버레이 (ref 기반 imperative 캔버스, 리렌더링 없음) */}
+            <DrawingCanvas
+              ref={drawingCanvasRef}
+              mode="student"
+              containerRef={slideRef}
+              page={currentPage}
+            />
+
 
             {/* 강의자료 원본/번역 토글 (강의 시작 후 슬라이드 표시 중일 때만) */}
             {isLectureStarted && presentationMode === 'slide' && slideStatus === 'ready' && slideImageUrl && (

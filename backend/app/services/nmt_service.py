@@ -23,6 +23,98 @@ _NLLB_SRC_LANG = "kor_Hang"   # 한국어 한글 표기
 _NLLB_TGT_LANG = "eng_Latn"   # 영어 라틴 표기
 
 
+# ── NLLB 환각 필터 ─────────────────────────────────────────────────────────────
+# NLLB-200 distilled 600M 은 학습 데이터 (commoncrawl 의 K-드라마 팬자막 / Amara.org /
+# YouTube 자막) 에서 "한글자막 by [이름]", "Subtitles by Amara.org", "Thanks for watching"
+# 같은 정형 텍스트를 학습. ASR 잔재 ("어어", "음") / 짧은 입력 / 반복 음절 등이 들어오면
+# 이 텍스트를 그대로 토해내는 환각 발생. 두 단계로 차단:
+#   1) 입력 게이트: 환각 트리거 입력은 NMT 호출 자체 skip (성능 절감 + 환각 차단)
+#   2) 출력 필터: 정상 입력에서도 가끔 새는 환각을 패턴 매치로 차단 → 빈 문자열 반환
+#
+# 참고: "감사합니다" / "Thank you" 단독 출현은 대부분 ASR 단의 silence-환각이 NMT 를
+# 정상 통과한 캐스케이드 결과 (asr_service.py 의 ⑤·⑦ 필터에서 차단). MT 단 한국어
+# passthrough 환각은 이론상 가능하지만 실제 관측 거의 없음 → target_lang 미스매치 +
+# 한국어 정형 패턴 (시청해주셔서, 구독과 좋아요) 만 backup 으로 유지.
+
+# 정확히 "정형 환각 텍스트" 만 잡도록 좁게 작성 (false positive 최소화 — 강의 본문에서
+# "자막", "MBC" 같은 단어 단독 등장은 통과시킴)
+_HALLUCINATION_PATTERNS = [
+    # A. 한국 자막 크레딧 — "한글자막 by 한효정" 등
+    re.compile(r'한[국글]\s*(어\s*)?자막\s*(by|제작|번역|제공|:)', re.IGNORECASE),
+    re.compile(r'자막\s*(제작|번역)\s*[:by]', re.IGNORECASE),
+    re.compile(r'(번역|자막)\s*by\s+\S+', re.IGNORECASE),
+
+    # B. 영어 자막 / 전사 크레딧
+    re.compile(r'\b(subtitles?|translation|transcribed)\s+by\b', re.IGNORECASE),
+    re.compile(r'\b(amara\.org|otter\.ai|castingwords)\b', re.IGNORECASE),
+
+    # C. YouTube 시청 권유 (한국어 / 영어)
+    re.compile(r'시청해\s*주(셔서|시는)'),
+    re.compile(r'구독과?\s*좋아요'),
+    re.compile(r'\bthanks?\s+(for|to)\s+watching\b', re.IGNORECASE),
+    re.compile(r'\bplease\s+subscribe\b', re.IGNORECASE),
+    re.compile(r'\blike\s+and\s+subscribe\b', re.IGNORECASE),
+
+    # D. 자막 메타 / 포맷 누설
+    re.compile(r'^\s*WEBVTT\b'),
+    re.compile(r'^\s*\d{2}:\d{2}:\d{2}[,\.]?\d*'),
+    re.compile(r'^\s*[\(\[]\s*(음악|박수|웃음|효과음|BGM|MUSIC|APPLAUSE|LAUGHTER)\s*[\)\]]\s*$',
+               re.IGNORECASE),
+
+    # E. URL 워터마크
+    re.compile(r'www\.\w+\.(org|com|co\.kr)\b'),
+]
+
+
+def _is_hallucination_trigger(text: str) -> bool:
+    """입력 게이트 — 환각 유발 가능성이 높은 ASR 결과를 사전 차단.
+    True 반환 시 NMT 호출 skip → 빈 문자열 반환.
+    """
+    s = text.strip()
+    if len(s) < 3:
+        return True                                     # 너무 짧음 ("어", "음")
+    if re.fullmatch(r'[\d\s\.\,\?\!\-…]+', s):
+        return True                                     # 숫자/기호만 ("1.", "...")
+    if re.search(r'(.)\1{3,}', s):
+        return True                                     # 같은 문자 4회+ 연속 ("그그그그")
+    korean_chars = sum(1 for c in s if '가' <= c <= '힯')
+    if korean_chars < 2:
+        return True                                     # 한글 의미 토큰 부족
+    return False
+
+
+def _is_hallucination_output(
+    text: str,
+    target_lang: str = "en",
+    glossary_terms: set[str] | None = None,
+) -> bool:
+    """출력 필터 — NMT 결과가 알려진 환각 패턴인지 검사.
+
+    glossary_terms: NMT 가 보호해야 하는 도메인 용어 (예: 'BERT', 'GIST').
+    출력에 이 용어가 포함된 한국어-우세 문장은 환각이 아니라 NMT 의 부분 미번역으로
+    간주하고 통과시킴 (예: "BERT는 양방향 인코더" — 정상 의미 있음).
+    """
+    if not text:
+        return False
+    # 반복 루핑 — 같은 단어 4회+ 연속 ("yes yes yes yes" / "네 네 네 네")
+    tokens = text.split()
+    if len(tokens) >= 4:
+        for i in range(len(tokens) - 3):
+            if tokens[i] == tokens[i+1] == tokens[i+2] == tokens[i+3]:
+                return True
+    # 타겟 언어 미스매치 — eng_Latn 강제했는데 한국어가 영어보다 많으면 환각.
+    # "감사합니다" / "한글자막 by 한효정" 같이 source 가 그대로 새는 케이스 직격.
+    # 단, glossary 보호 단어가 출력에 있으면 NMT 부분 미번역으로 보고 면제.
+    if target_lang == "en":
+        korean = sum(1 for c in text if '가' <= c <= '힯')
+        latin = sum(1 for c in text if c.isascii() and c.isalpha())
+        if korean > 0 and korean >= latin:
+            if glossary_terms and any(t in text for t in glossary_terms):
+                return False
+            return True
+    return any(p.search(text) for p in _HALLUCINATION_PATTERNS)
+
+
 def _ct2_model_dir(model_name: str) -> Path:
     """CT2 변환된 모델 디렉토리.
     "facebook/nllb-200-distilled-600M" → "{name}-ct2" 형태로 매핑.
@@ -177,16 +269,31 @@ class NMTService:
         normalized = text.strip()
         if not normalized:
             return ""
+
+        # 입력 게이트 — 환각 유발 입력은 NMT 호출 자체 skip (자막 안 뜨고 음성도 안 나옴)
+        if _is_hallucination_trigger(normalized):
+            print(f"[NMT] 환각 트리거 입력 차단: {normalized!r}")
+            return ""
+
         # 도메인 용어 inline 치환 (활성화된 경우만) — NLLB 가 영어 부분을 통과시킴
         normalized = self._apply_glossary_inline(normalized)
         try:
             if self._mode == "ct2":
-                return self._translate_ct2(normalized).strip()
+                result = self._translate_ct2(normalized).strip()
             else:
-                return self._translate_hf(normalized, max_length).strip()
+                result = self._translate_hf(normalized, max_length).strip()
         except Exception as e:
             print(f"[NMT] 번역 오류: {e}")
             return ""
+
+        # 출력 필터 — 정형 환각 패턴이면 빈 문자열 반환 (다음 발화는 정상 처리됨).
+        # glossary 보호 단어 (영어 측) 를 필터에 넘겨 NMT 부분 미번역이 환각으로 오인되지
+        # 않게 함 (예: "BERT는 양방향 인코더" — Korean-우세지만 BERT 보호어 있어 통과).
+        glossary_en = {en for _, en in self._glossary_pairs} if self._glossary_pairs else None
+        if _is_hallucination_output(result, target_lang, glossary_en):
+            print(f"[NMT] 환각 출력 차단: {result!r}")
+            return ""
+        return result
 
     def _translate_ct2(self, text: str) -> str:
         # NLLB 토크나이저 → 토큰 ID → 토큰 문자열 (CT2 입력 형식)

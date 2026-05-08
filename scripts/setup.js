@@ -215,6 +215,13 @@ run('npm install --prefix frontend')
   const publicDir = path.join(ROOT, 'frontend', 'public')
   const piperDirs = ['onnx', 'piper', 'worker']
 
+  // node_modules 가 stale 한 경우 (lock 에는 있는데 디렉토리 누락) 자동 복구.
+  // 발생 시나리오: 브랜치 전환 직후, npm install 이 중간에 끊긴 경우 등.
+  if (!fs.existsSync(piperDist)) {
+    console.log(`  ${C.yellow}piper-tts-web 패키지 누락 감지 → 재설치 시도${C.reset}`)
+    run('npm install piper-tts-web --prefix frontend')
+  }
+
   if (!fs.existsSync(piperDist)) {
     console.warn(`  ${C.yellow}⚠️  piper-tts-web 소스 디렉토리 없음 (npm install 누락? frontend/node_modules 확인)${C.reset}`)
   } else {
@@ -237,6 +244,34 @@ run('npm install --prefix frontend')
       console.log(`  ${C.green}✓${C.reset} ${d}/ 복사 완료`)
     }
     if (!anyMissing) console.log(`  ${C.green}piper-tts-web WASM 파일 준비 완료 (수강자 TTS)${C.reset}`)
+  }
+
+  // 2-b-2. onnxruntime-web 의 asyncify/mjs 등을 frontend/public/ 루트로 복사.
+  //        ORT 의 threaded WASM worker 가 wasmPaths 미설정 시 페이지 root 기준 절대경로로
+  //        ort-wasm-simd-threaded.* 를 fetch 하기 때문 (vite.config 미들웨어가
+  //        url.startsWith('ort-wasm-simd-threaded') 매칭). public/onnx/ 에 넣지 말 것 —
+  //        그 폴더는 piper-tts-web 의 자체 wasm 전용이라 버전이 섞이면 LinkError 발생.
+  {
+    const ortDist = path.join(ROOT, 'frontend', 'node_modules', 'onnxruntime-web', 'dist')
+    if (!fs.existsSync(ortDist)) {
+      console.warn(`  ${C.yellow}⚠️  onnxruntime-web 미설치 — npm install 확인 필요${C.reset}`)
+    } else {
+      const required = fs.readdirSync(ortDist).filter(
+        f => f.startsWith('ort-wasm-simd-threaded.')
+      )
+      let copied = 0
+      for (const f of required) {
+        const dst = path.join(publicDir, f)
+        if (fs.existsSync(dst)) continue
+        fs.copyFileSync(path.join(ortDist, f), dst)
+        copied++
+      }
+      if (copied > 0) {
+        console.log(`  ${C.green}✓${C.reset} onnxruntime-web 런타임 ${copied}개 public/ 에 복사`)
+      } else {
+        console.log(`  onnxruntime-web 런타임 이미 존재 → 스킵`)
+      }
+    }
   }
 }
 
@@ -342,6 +377,14 @@ step(7, TOTAL, '설치 검증...')
       console.error(`  ${C.red}✗ 누락:${C.reset} frontend/public/${f}`)
       ok = false
     }
+  }
+
+  // piper-tts-web 패키지 자체 존재 확인 (Vite import 해결에 필요)
+  const piperPkg = path.join(ROOT, 'frontend', 'node_modules', 'piper-tts-web', 'package.json')
+  if (!fs.existsSync(piperPkg)) {
+    console.error(`  ${C.red}✗ 누락:${C.reset} frontend/node_modules/piper-tts-web/ (Vite 가 import 못 함)`)
+    console.error('     해결: npm install --prefix frontend')
+    ok = false
   }
 
   // piper-tts-web WASM 파일 확인 (수강자 TTS 동작 필수)
