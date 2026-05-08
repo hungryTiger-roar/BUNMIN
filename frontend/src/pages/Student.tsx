@@ -13,6 +13,7 @@ import { useTTS } from '@/hooks/useTTS'
 import ParticipantsPanel from '@/components/common/ParticipantsPanel'
 import MaterialViewToggle from '@/components/common/MaterialViewToggle'
 import { StudentCursorOverlay, useCursorOverlay } from '@/components/student/StudentCursorOverlay'
+import { DrawingCanvas, type DrawingCanvasHandle } from '@/components/common/DrawingCanvas'
 import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
 
 const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
@@ -164,6 +165,12 @@ function Student() {
   // slideRef를 전달해서 컨테이너 크기 기준으로 px 변환
   const { spotlightRef, onCursor } = useCursorOverlay(slideRef)
 
+  // 강의자 필기 수신 — imperative 캔버스, React 리렌더 없이 DOM 직접 조작
+  const drawingCanvasRef = useRef<DrawingCanvasHandle>(null)
+  const onDraw = useCallback((msg: import('@/hooks/useWebSocket').DrawMessage) => {
+    drawingCanvasRef.current?.receiveDraw(msg)
+  }, [])
+
   // 화면 공유 = WebRTC peer-to-peer (Zoom과 동일 방식)
   // 강의자가 보낸 offer를 받아 answer 회신 → ontrack으로 MediaStream 수신 → <video srcObject>
   const screenVideoRef = useRef<HTMLVideoElement>(null)
@@ -213,7 +220,7 @@ function Student() {
   const { isConnected, connect, send, sendChat, sendStudentRename } = useWebSocket(
     WS_PIPELINE_URL,
     'student',
-    { onCursor, onTranslation, onWebRtcOffer: handleWebRtcOffer, onWebRtcIce: handleWebRtcIce }
+    { onCursor, onDraw, onTranslation, onWebRtcOffer: handleWebRtcOffer, onWebRtcIce: handleWebRtcIce }
   )
 
   useEffect(() => { sendRef.current = send }, [send])
@@ -720,6 +727,15 @@ function Student() {
           >
             {/* 강의자 커서 오버레이 (ref 기반, 리렌더링 없음) */}
             {!isPaused && <StudentCursorOverlay spotlightRef={spotlightRef} />}
+
+            {/* 강의자 필기 오버레이 (ref 기반 imperative 캔버스, 리렌더링 없음) */}
+            <DrawingCanvas
+              ref={drawingCanvasRef}
+              mode="student"
+              containerRef={slideRef}
+              page={currentPage}
+            />
+
 
             {/* 강의자료 원본/번역 토글 (강의 시작 후 슬라이드 표시 중일 때만) */}
             {isLectureStarted && presentationMode === 'slide' && slideStatus === 'ready' && slideImageUrl && (
