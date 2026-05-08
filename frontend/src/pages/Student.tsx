@@ -138,9 +138,17 @@ function Student() {
 
   const [isAudioUnlocked, setIsAudioUnlocked] = useState(false)
   const isAudioUnlockedRef = useRef(false)
+  // 자동 unlock 시도 완료 여부 — 시도 중에는 모달 안 보이게 해 UX 깜빡임 방지.
+  // (autoEnter / sessionStorage 경로는 비동기라 첫 렌더 시점엔 결과 모름)
+  const [autoUnlockSettled, setAutoUnlockSettled] = useState(false)
 
-  const unlockAudio = useCallback(() => {
-    unlockTTS()
+  const unlockAudio = useCallback(async () => {
+    const ok = await unlockTTS()
+    if (!ok) {
+      // 자동 시도 (autoEnter 경유) 가 브라우저 정책에 막힌 경우.
+      // isAudioUnlocked 는 false 유지 → 모달 그대로 → 사용자 클릭 유도.
+      return
+    }
     isAudioUnlockedRef.current = true
     setIsAudioUnlocked(true)
     console.log('[Audio] 재생 잠금 해제됨 (WASM TTS)')
@@ -318,10 +326,21 @@ function Student() {
     if (video) video.srcObject = null
   }, [isLectureStarted, presentationMode])
 
-  // Start 페이지 "강의 참여" 클릭 경유 시 transient activation 살아있을 때 즉시 언락
+  // 자동 unlock 은 autoEnter 경로 한정 — /start "강의 참여" 클릭의 transient
+  // activation 이 SPA 라우팅으로 보존되는 케이스에만 신뢰성 있게 동작.
+  //
+  // 주의: F5 / Ctrl+R 새로고침 시 브라우저 history.state 가 보존되어
+  // location.state.autoEnter 가 false 가 되지 않음 → reload 감지로 명시적 차단.
+  // performance.getEntriesByType('navigation')[0].type 이 'reload' 면 자동 unlock
+  // 안 시도하고 모달 노출. (직접 URL 진입은 'navigate' 라 fromStart 자체가 false)
   useEffect(() => {
-    if ((location.state as { autoEnter?: boolean } | null)?.autoEnter) {
-      unlockAudio()
+    const fromStart = (location.state as { autoEnter?: boolean } | null)?.autoEnter
+    const navEntry = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined
+    const isReload = navEntry?.type === 'reload'
+    if (fromStart && !isReload) {
+      unlockAudio().finally(() => setAutoUnlockSettled(true))
+    } else {
+      setAutoUnlockSettled(true)  // 새로고침 / 직접 진입 → 모달 즉시 노출
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -493,7 +512,34 @@ function Student() {
     <div
       className="h-screen overflow-hidden flex flex-col bg-background text-onBackground"
     >
-      {/* 입장 오버레이 — connect + unlockAudio 동시 처리 (브라우저 오디오 정책 대응) */}
+      {/* 음성 활성화 오버레이 — 새로고침 / 직접 URL 진입 시 user gesture 확보 용도.
+          브라우저 autoplay 정책상 사용자 클릭 없이 AudioContext.resume() 통과 불가 →
+          명확한 버튼으로 학생이 의식적으로 음성을 켜게 함. /start 경유 시 autoEnter
+          로 자동 unlock 되어 이 오버레이는 안 뜸. */}
+      {!isAudioUnlocked && autoUnlockSettled && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-surface rounded-2xl shadow-2xl p-8 w-[min(90%,420px)] flex flex-col items-center gap-5">
+            <div className="text-5xl">🔊</div>
+            <div className="text-center">
+              <h2 className="text-xl font-semibold text-onSurface mb-1">Start Lecture Audio</h2>
+              <p className="text-sm text-onSurface/70">
+                Click below to play the live voice.
+              </p>
+              <p className="text-xs text-onSurface/50 mt-1">
+                강의 음성을 시작하려면 클릭하세요.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={unlockAudio}
+              className="w-full py-3 rounded-xl bg-primary text-onPrimary font-medium hover:opacity-90 transition-opacity shadow-lg shadow-primary/20"
+            >
+              Start Audio
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* 자막 다운로드 모달 */}
       {showTranscriptModal && sessionId && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm">

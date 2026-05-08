@@ -28,6 +28,9 @@ export default defineConfig({
             if (fs.existsSync(filePath)) {
               const contentType = url.endsWith('.wasm') ? 'application/wasm' : 'text/javascript'
               res.setHeader('Content-Type', contentType)
+              // 같은 출처에서 Worker 가 이 자원을 import 할 때 cross-origin isolation
+              // 위반으로 막히지 않도록 CORP 명시. (COEP 는 document-level 이라 여기 X)
+              res.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
               fs.createReadStream(filePath).pipe(res as any)
               return
             }
@@ -51,6 +54,10 @@ export default defineConfig({
     port: 3000,
     host: '0.0.0.0',
     headers: {
+      // SharedArrayBuffer 활성화 — threaded onnxruntime-web 동작 필수.
+      // `credentialless`: cross-origin 자원(HuggingFace voice 등)을 CORP 없이 받을 수 있음.
+      //                   대신 Chromium 계열만 지원. (HF voice 프리페치 정상 동작 확인됨)
+      // 미들웨어에서 정적 자원에는 CORP: same-origin 명시 → 워커 내부 fetch 도 통과.
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'credentialless',
     },

@@ -10,17 +10,25 @@ RULE_NAME = "Aunion AI Backend"
 
 
 def _run_netsh(args: list[str]) -> tuple[int, str]:
-    """netsh 호출 — CREATE_NO_WINDOW로 콘솔 창 깜빡임 방지."""
+    """netsh 호출 — CREATE_NO_WINDOW로 콘솔 창 깜빡임 방지.
+
+    인코딩: netsh 는 활성 콘솔 codepage 로 출력. Electron/PowerShell 이 chcp 65001 한
+    상태면 UTF-8, 그 외 한국어 Windows 면 cp949. 둘 다 시도하는 식으로 처리한다.
+    (text=True + encoding 하드코딩하면 mojibake 발생)
+    """
     try:
         proc = subprocess.run(
             ["netsh", *args],
             capture_output=True,
-            text=True,
-            encoding="cp949",
-            errors="replace",
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+        raw = (proc.stdout or b"") + (proc.stderr or b"")
+        for enc in ("utf-8", "cp949", "cp437"):
+            try:
+                return proc.returncode, raw.decode(enc)
+            except UnicodeDecodeError:
+                continue
+        return proc.returncode, raw.decode("utf-8", errors="replace")
     except FileNotFoundError:
         return -1, "netsh not found"
 
