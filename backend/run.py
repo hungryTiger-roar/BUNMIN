@@ -7,6 +7,16 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 
+# ── HuggingFace Hub symlink 차단 (Windows WinError 448 회피) ──────────
+# HF Hub 가 cache/snapshots/ 에 symlink 을 만들면, 새 Windows 보안 정책이 그 reparse
+# point 를 "untrusted mount point" 로 판정해 per-user (asInvoker) 프로세스에서
+# traverse 거부 (WinError 448) → 모델 로딩 실패. os.symlink 을 OSError 던지도록
+# 가로채면 HF Hub 가 자동으로 shutil.copyfile 로 폴백.
+if sys.platform == "win32":
+    def _disabled_symlink(*_args, **_kwargs):
+        raise OSError(1314, "symlinks disabled to avoid WinError 448 (untrusted mount point)")
+    os.symlink = _disabled_symlink
+
 # ── 상위 디렉토리를 Python 경로에 추가 (translate_slide_v3 import용) ─────
 _backend_dir = Path(__file__).parent
 _project_root = _backend_dir.parent

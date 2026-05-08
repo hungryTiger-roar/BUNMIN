@@ -43,6 +43,6 @@
     "target": [
       { "target": "dir", "arch": ["x64"] }
     ],
-    "requestedExecutionLevel": "requireAdministrator"
+    "requestedExecutionLevel": "asInvoker"
   }
 }
