@@ -26,6 +26,8 @@ interface Props {
 
 export default function UploadDropzone({ onUploadComplete }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
+  const abortControllerRef = useRef<AbortController | null>(null)
+  const cancelledRef = useRef(false)
   const [stage, setStage] = useState<Stage>('pending')
   const [stageCurrent, setStageCurrent] = useState(0)
   const [stageTotal, setStageTotal] = useState(0)
@@ -85,6 +87,10 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
 
     setError(null)
     setSlideStatus('uploading')
+    cancelledRef.current = false
+
+    const controller = new AbortController()
+    abortControllerRef.current = controller
 
     try {
       const formData = new FormData()
@@ -93,7 +99,9 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
       const response = await fetch(`${API_BASE}/slides/upload`, {
         method: 'POST',
         body: formData,
+        signal: controller.signal,
       })
+      abortControllerRef.current = null
 
       if (!response.ok) {
         throw new Error('업로드에 실패했습니다.')
@@ -104,6 +112,7 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
       setSlideStatus('processing')
       pollStatus(data.slide_id)
     } catch (err) {
+      if ((err as Error).name === 'AbortError') return
       console.error('[UploadDropzone] 에러:', err)
       setError('업로드에 실패했습니다. 다시 시도해주세요.')
       setSlideStatus('none')
@@ -112,6 +121,7 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
 
   const pollStatus = async (slideId: string) => {
     const checkStatus = async () => {
+      if (cancelledRef.current) return
       try {
         const response = await fetch(`${API_BASE}/slides/status/${slideId}`)
         const data = await response.json()
@@ -156,14 +166,21 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
           setEtaAnchor(null)
         }
 
-        setTimeout(checkStatus, 2000)
+        if (!cancelledRef.current) setTimeout(checkStatus, 2000)
       } catch (err) {
-        console.error('[UploadDropzone] 상태 확인 실패:', err)
+        if (!cancelledRef.current) console.error('[UploadDropzone] 상태 확인 실패:', err)
       }
     }
 
     checkStatus()
   }
+
+  const handleCancel = useCallback(() => {
+    cancelledRef.current = true
+    abortControllerRef.current?.abort()
+    abortControllerRef.current = null
+    setSlideStatus('none')
+  }, [setSlideStatus])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -263,6 +280,14 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
                 ? formatEta(displayEta)
                 : '남은 시간 계산 중...'}
           </p>
+
+          <button
+            type="button"
+            onClick={handleCancel}
+            className="mt-4 w-full py-2 text-sm text-error border border-error/30 rounded-lg hover:bg-error/10 transition-colors"
+          >
+            업로드 중단
+          </button>
         </div>
       ) : null}
 
