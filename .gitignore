@@ -14,6 +14,7 @@ error_log.txt
 setup/
 node_modules/
 *.tsbuildinfo
+build_tmp/
 
 # AI 모델 가중치 (어느 위치에 있어도 차단)
 *.bin
