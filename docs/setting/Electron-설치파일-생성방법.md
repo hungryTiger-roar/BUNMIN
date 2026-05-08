@@ -45,6 +45,7 @@ Aunion-AI-Setup-{버전}.exe              아래 3단계 빌드 → setup/Aunion
 | AI 모델 (NMT/ASR/OCR/VLM-LoRA) | ❌ | 설치본에 동봉 |
 | **NVIDIA GPU + CUDA 12.x 드라이버** | ✅ | PyTorch CUDA가 OS의 NVIDIA 드라이버에 의존. RTX 3060 이상 권장 (VRAM ~6GB+) |
 | 인터넷 (첫 실행만) | ✅ | VLM Base 16GB HF에서 자동 다운로드 (~30~60분) |
+| **관리자 권한** | ❌ | per-user 설치 (`%LOCALAPPDATA%\Programs\Aunion AI`) — 설치/실행 모두 UAC 안 뜸 |
 
 CPU만 있는 PC에선 VLM 슬라이드 번역이 사실상 불가 (분 단위 소요). NVIDIA GPU 미보유 사용자는 미지원으로 안내.
 
@@ -204,6 +205,59 @@ VLM 동봉본 만들려면 electron:build 뒤에 `cp -r models/qwen2.5-vl-7b-ins
 
 ---
 
+## 설치 위치 및 권한 (per-user install)
+
+`Aunion AI`는 **관리자 권한 없이** 설치/실행되도록 구성. 설치 마법사도, 앱 실행도, 매번 UAC 프롬프트가 뜨지 않음.
+
+### 핵심 설정 3개
+
+| 위치 | 값 | 효과 |
+|---|---|---|
+| [electron-builder.json](../../electron-builder.json) `requestedExecutionLevel` | `asInvoker` | 앱 실행 시 부모 프로세스(탐색기)와 같은 권한 — UAC 없음 |
+| [installer.iss](../../installer.iss) `PrivilegesRequired` | `lowest` | Inno Setup 마법사 자체가 admin 안 요구 |
+| [installer.iss](../../installer.iss) `DefaultDirName` | `{autopf}\Aunion AI` | `PrivilegesRequired=lowest`이면 `{autopf}` 가 `%LOCALAPPDATA%\Programs\` 로 자동 풀림 |
+
+추가:
+- `[Icons]`: `{autodesktop}` 사용 → 본인 바탕화면(`%USERPROFILE%\Desktop\`)에만 단축키 (다른 사용자 영향 X)
+- `[Run]`: `runascurrentuser` 플래그 제거 (admin 매니페스트 없으니 권한 우회 불필요)
+
+### 설치 위치
+
+```
+%LOCALAPPDATA%\Programs\Aunion AI\          # 앱 본체 (Aunion AI.exe 등)
+%LOCALAPPDATA%\Aunion AI\                   # 사용자 데이터 (로그, HF 캐시, 모델)
+└─ cache\huggingface\hub\models--*\         # HF Hub 다운로드
+└─ models\qwen2.5-vl-7b-instruct\           # 사전 다운로드된 VLM (선택)
+└─ error_log.txt                            # 백엔드 로그
+```
+
+### 기존 admin 설치본 사용자 마이그레이션
+
+이전 버전(admin manifest, `C:\Program Files\Aunion AI`)을 깐 사용자가 새 per-user 빌드로 올라갈 때:
+
+1. **Inno Setup이 기존 HKLM admin 설치를 못 알아봄** (HKCU만 보므로) → 그냥 깔면 두 곳에 이중 설치
+2. 따라서 **기존 설치를 먼저 제거**해야 함:
+   - 설정 → 앱 → 설치된 앱 → "Aunion AI" 제거 (UAC 한 번 — 마지막)
+   - `C:\Program Files\Aunion AI\` 폴더 잔여 시 수동 삭제
+3. **HF cache 정리 권장**: admin 프로세스로 받은 cache 안에 symlink이 박혀 있어 새 per-user(asInvoker) 프로세스가 traverse 거부 → WinError 448. `%LOCALAPPDATA%\Aunion AI\cache\` 통째로 삭제 후 새 설치본 첫 실행 시 재다운로드.
+
+### HF Hub symlink 차단 ([backend/run.py](../../backend/run.py))
+
+Windows에서는 HF Hub이 cache `snapshots/<commit>/file` 위치에 **symlink** 을 만들어 `blobs/<hash>` 를 가리키게 함 (디스크 절약 목적). 그러나 새 Windows 보안 정책이 사용자 프로세스가 만든 symlink을 "untrusted mount point"로 판정해 다른 프로세스가 traverse 하려 하면 **WinError 448** 로 막힘.
+
+해결: `backend/run.py` 최상단에서 `os.symlink` 을 OSError 던지게 가로챔 → HF Hub이 `shutil.copyfile` 로 자동 폴백.
+
+```python
+if sys.platform == "win32":
+    def _disabled_symlink(*_args, **_kwargs):
+        raise OSError(1314, "symlinks disabled to avoid WinError 448 (untrusted mount point)")
+    os.symlink = _disabled_symlink
+```
+
+> **트레이드오프**: snapshots/ 가 blobs/ 의 *복사본*이 되므로 디스크 사용량 ~2배 (VLM 14GB → 28GB). per-user 설치 안정성을 위한 비용.
+
+---
+
 ## 단일 인스턴스 락 (Single Instance Lock)
 
 설치된 `Aunion AI.exe`는 **한 번에 하나만** 실행되도록 [main.cjs](../../frontend/electron/main.cjs)가 강제. 사용자가 시작메뉴/바탕화면에서 두 번 더블클릭하거나 이미 켜져 있는 상태에서 다시 실행하면 두 번째 시도는 즉시 종료되고 첫 인스턴스 창이 포커스됨.
@@ -322,19 +376,29 @@ declare module 'piper-tts-web' {
 
 `declare module 'piper-tts-web'` 단순 선언은 `PiperWebEngine`을 type으로 못 쓰므로(TS2709 에러) `class`로 선언해야 함.
 
-### 설치 끝에 자동 실행 시 "CreateProcess 실패; 코드 740" (권한 상승 필요)
+### 설치 끝에 자동 실행 시 "CreateProcess 실패; 코드 740" (구버전 admin 빌드 잔재)
 
-`Aunion AI.exe`가 [electron-builder.json](../../electron-builder.json)의 `requestedExecutionLevel: requireAdministrator`로 admin manifest를 가짐. Inno Setup 마법사 종료 시 일반 권한으로 실행 시도하면 Windows가 차단.
+> **현재 버전엔 발생 안 함** — `requestedExecutionLevel`을 `asInvoker`로 바꾸고 per-user 설치로 전환한 뒤 admin manifest 가 사라져 코드 740 시나리오 자체가 없어졌음. 아래는 이전 admin 빌드(`requireAdministrator`)에서 발생한 문제 기록용.
 
-[installer.iss](../../installer.iss)의 `[Run]` 섹션에 `runascurrentuser` 플래그가 있어야 함:
+이전 admin manifest 빌드에서: `Aunion AI.exe`가 admin manifest를 가지므로 Inno Setup 마법사 종료 후 일반 권한으로 실행 시도하면 Windows가 차단. `[Run]` 섹션에 `runascurrentuser` 플래그가 있어야 했음.
 
-```ini
-[Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "..."; \
-  Flags: nowait postinstall skipifsilent runascurrentuser
+### `[WinError 448] 경로에 신뢰할 수 없는 탑재 지점이 포함되어 있기 때문에` (모델 로딩 실패)
+
+per-user(asInvoker) 프로세스가 cache 안 symlink을 traverse 하려 하면 새 Windows 보안 정책이 "untrusted mount point"로 판정해 차단. 보통 다음 두 케이스에서 발생:
+
+1. **이전 admin 빌드의 cache 잔재**: admin 프로세스가 만든 symlink을 새 per-user 앱이 못 읽음
+2. **Dev Mode 등으로 symlink 생성이 가능한 환경**: 매 다운로드마다 재현
+
+영구 fix: [backend/run.py](../../backend/run.py) 최상단에서 `os.symlink` 차단 → HF Hub이 `shutil.copyfile` 폴백 (위 "설치 위치 및 권한 → HF Hub symlink 차단" 섹션 참고).
+
+이미 손상된 cache를 가진 사용자는 `%LOCALAPPDATA%\Aunion AI\cache\` 통째로 삭제 후 앱 재실행 → 자동 재다운로드.
+
+진단 (PowerShell):
+```powershell
+$f = "$env:LOCALAPPDATA\Aunion AI\cache\huggingface\hub\models--Qwen--Qwen2.5-VL-7B-Instruct\snapshots\<commit>\.gitattributes"
+Get-Item $f | Select-Object Name, LinkType, Target
+# LinkType=SymbolicLink 이면 위 fix 필요
 ```
-
-플래그가 빠진 이전 빌드를 사용 중이면 시작 메뉴/바탕화면에서 직접 실행 (UAC 한 번 뜨고 정상 동작).
 
 ### Install 마법사가 안 뜨고 옛 Loading 화면이 나옴
 
