@@ -16,7 +16,9 @@ import AudioLevelMeter from '@/components/lecturer/AudioLevelMeter'
 import MicButton from '@/components/lecturer/MicButton'
 import CursorSpotlight from '@/components/lecturer/CursorSpotlight'
 import ScreenPickerModal from '@/components/lecturer/ScreenPickerModal'
-import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
+import { WS_PIPELINE_URL, API_BASE, getSlideLibrary } from '@/lib/api'
+import SlideLibrarySearchModal from '@/components/lecturer/SlideLibrarySearchModal'
+import type { SlideLibraryItem } from '@/types/slide'
 
 const ASPECT_OPTIONS: { value: AspectRatio; label: string; className: string }[] = [
   { value: '16/9', label: '16:9', className: 'aspect-[16/9]' },
@@ -96,6 +98,9 @@ function Lecturer() {
   const [primaryLang, setPrimaryLang] = useState<LecturerLang>('en')
   const [secondaryLang, setSecondaryLang] = useState<LecturerLang>('ko')
   const [showTranscriptModal, setShowTranscriptModal] = useState(false)
+  const [showMaterialChangeModal, setShowMaterialChangeModal] = useState(false)
+  const [libraryItems, setLibraryItems] = useState<SlideLibraryItem[]>([])
+  const [showEndConfirm, setShowEndConfirm] = useState(false)
   const [spotlightEnabled, setSpotlightEnabled] = useState(false)
   const [spotlightColor, setSpotlightColor] = useState(SPOTLIGHT_PRESETS[0])
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -555,24 +560,22 @@ function Lecturer() {
     setShowTranscriptModal(true)
   }
 
-  // 같은 슬라이드로 강의 다시 시작 — 새 자막 세션이 발급되어 별도 자막 파일로 저장됨
-  const restartLecture = () => {
-    setShowTranscriptModal(false)
-    startLecture()  // slideStatus/slideId/모델모드 검증은 startLecture가 알아서 처리
-  }
-
-  // 다른 강의자료 선택 — Lecturer 초기 화면(자료 선택)으로 이동
-  const exitToLibrary = () => {
-    setShowTranscriptModal(false)
-    reset()
-    navigate('/lecturer')
-  }
-
   const handleExit = () => {
     stopAudioCapture()
     stopScreenCapture()
     reset()
     navigate('/lecturer/home')
+  }
+
+  const openMaterialChangeModal = async () => {
+    try {
+      const data = await getSlideLibrary('recent')
+      setLibraryItems(data.items)
+    } catch (err) {
+      console.error('[Lecturer] 라이브러리 로드 실패:', err)
+      setLibraryItems([])
+    }
+    setShowMaterialChangeModal(true)
   }
 
   const handleChatSubmit = (e: React.FormEvent) => {
@@ -919,11 +922,7 @@ function Lecturer() {
               <h2 className="text-lg font-semibold text-onSurface">강의 자막 저장</h2>
               <button
                 type="button"
-                onClick={() => {
-                  setShowTranscriptModal(false)
-                  reset()
-                  navigate('/lecturer/home')
-                }}
+                onClick={() => { setShowTranscriptModal(false); reset(); navigate('/lecturer') }}
                 className="w-7 h-7 rounded-full flex items-center justify-center text-onSurface/60 hover:bg-black/10 transition-colors"
               >✕</button>
             </div>
@@ -944,31 +943,16 @@ function Lecturer() {
                 <span>🎬</span> SRT 다운로드
               </a>
             </div>
-            {/* 강의 종료 후 다음 동작 선택 */}
-            <div className="border-t border-onSurface/10 pt-3 flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={restartLecture}
-                className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-secondaryContainer text-onSecondaryContainer font-medium hover:opacity-90 transition-opacity"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-                같은 슬라이드로 다시 시작
-              </button>
-              <button
-                type="button"
-                onClick={exitToLibrary}
-                className="flex items-center justify-center gap-2 w-full py-3 rounded-xl border border-onSurface/20 text-onSurface font-medium hover:bg-onSurface/5 transition-colors"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                </svg>
-                다른 강의자료 선택
-              </button>
-            </div>
           </div>
         </div>
+      )}
+
+      {showMaterialChangeModal && (
+        <SlideLibrarySearchModal
+          items={libraryItems}
+          onClose={() => setShowMaterialChangeModal(false)}
+          onDeleted={(ids) => setLibraryItems((prev) => prev.filter((it) => !ids.includes(it.slide_id)))}
+        />
       )}
 
       {/* 헤더 */}
@@ -1299,15 +1283,33 @@ function Lecturer() {
 
               <div className="flex items-center gap-2">
                 {!isLectureStarted ? (
-                  <button
-                    onClick={startLecture}
-                    disabled={!canStartLecture || pendingStart}
-                    className="px-6 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold shadow-sm"
-                  >
-                    {pendingStart ? '준비 중...' : '강의 시작'}
-                  </button>
+                  <>
+                    {canStartLecture && (
+                      <button
+                        type="button"
+                        onClick={openMaterialChangeModal}
+                        className="px-4 py-2.5 bg-primaryContainer hover:bg-primaryContainer/70 text-onSurface rounded-lg transition-colors text-sm font-medium shadow-sm"
+                      >
+                        강의자료 변경
+                      </button>
+                    )}
+                    <button
+                      onClick={startLecture}
+                      disabled={!canStartLecture || pendingStart}
+                      className="px-6 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold shadow-sm"
+                    >
+                      {pendingStart ? '준비 중...' : '강의 시작'}
+                    </button>
+                  </>
                 ) : (
                   <>
+                    <button
+                      type="button"
+                      onClick={openMaterialChangeModal}
+                      className="px-4 py-2.5 bg-primaryContainer hover:bg-primaryContainer/70 text-onSurface rounded-lg transition-colors text-sm font-medium shadow-sm"
+                    >
+                      강의자료 변경
+                    </button>
                     <button
                       onClick={togglePause}
                       className={`px-4 py-2.5 rounded-lg transition-colors text-sm font-medium shadow-sm ${
@@ -1318,12 +1320,34 @@ function Lecturer() {
                     >
                       {isPaused ? '다시 시작' : '일시정지'}
                     </button>
-                    <button
-                      onClick={endLecture}
-                      className="px-4 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors text-sm font-medium shadow-sm"
-                    >
-                      강의 종료
-                    </button>
+                    <div className="relative">
+                      {showEndConfirm && (
+                        <div className="absolute bottom-full mb-2 right-0 z-50 bg-surface sidebar-card text-onSurface border border-primaryContainer/60 rounded-xl shadow-2xl p-3 w-60">
+                          <div className="flex justify-end mb-1">
+                            <button
+                              type="button"
+                              onClick={() => setShowEndConfirm(false)}
+                              className="w-5 h-5 flex items-center justify-center text-onSurface/50 hover:text-onSurface transition-colors text-xs"
+                            >✕</button>
+                          </div>
+                          <p className="text-sm font-bold mb-2.5">강의를 종료하시겠습니까?</p>
+                          <button
+                            type="button"
+                            onClick={() => { setShowEndConfirm(false); endLecture() }}
+                            className="w-full py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors"
+                          >
+                            강의 종료
+                          </button>
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setShowEndConfirm((v) => !v)}
+                        className={`px-4 py-2.5 rounded-lg transition-colors text-sm font-medium shadow-sm ${showEndConfirm ? 'bg-red-600 text-white' : 'bg-red-500 hover:bg-red-600 text-white'}`}
+                      >
+                        강의 종료
+                      </button>
+                    </div>
                   </>
                 )}
               </div>
