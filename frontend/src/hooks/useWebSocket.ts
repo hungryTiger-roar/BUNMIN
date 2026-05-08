@@ -18,11 +18,23 @@ export interface CursorMessage {
   color: string
 }
 
+export type DrawTool = 'pencil' | 'highlighter' | 'rect'
+
+/** 강의자 필기 이벤트 (수강자 측에서 캔버스에 즉시 반영) */
+export type DrawMessage =
+  | { type: 'draw_begin'; id: string; tool: DrawTool; color: string; page: number }
+  | { type: 'draw_point'; id: string; x: number; y: number }
+  | { type: 'draw_end'; id: string }
+  | { type: 'draw_erase'; x: number; y: number; radius: number; page: number }
+  | { type: 'draw_clear'; page: number }
+
 interface UseWebSocketOptions {
   /** 커서 메시지 수신 시 콜백 (React 상태 대신 DOM 직접 업데이트용) */
   onCursor?: (cursor: CursorMessage) => void
   /** 번역 텍스트 수신 시 콜백 (TTS 합성 등) */
   onTranslation?: (text: string) => void
+  /** 강의자 필기 이벤트 수신 (수강자 전용) — DOM 직접 업데이트용, 리렌더 없음 */
+  onDraw?: (draw: DrawMessage) => void
   /** WebRTC offer 수신 (수강자 전용) */
   onWebRtcOffer?: (sdp: RTCSessionDescriptionInit) => void
   /** WebRTC answer 수신 (강의자 전용) — sender = student id */
@@ -32,7 +44,7 @@ interface UseWebSocketOptions {
 }
 
 export function useWebSocket(url: string, role: Role = 'student', options: UseWebSocketOptions = {}) {
-  const { onCursor, onTranslation, onWebRtcOffer, onWebRtcAnswer, onWebRtcIce } = options
+  const { onCursor, onTranslation, onDraw, onWebRtcOffer, onWebRtcAnswer, onWebRtcIce } = options
   const socketRef = useRef<WebSocket | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
@@ -75,6 +87,9 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
 
   const onTranslationRef = useRef(onTranslation)
   useEffect(() => { onTranslationRef.current = onTranslation }, [onTranslation])
+
+  const onDrawRef = useRef(onDraw)
+  useEffect(() => { onDrawRef.current = onDraw }, [onDraw])
 
   const onWebRtcOfferRef = useRef(onWebRtcOffer)
   useEffect(() => { onWebRtcOfferRef.current = onWebRtcOffer }, [onWebRtcOffer])
@@ -278,6 +293,17 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
             visible: data.visible as boolean,
             color: data.color as string,
           })
+        }
+        break
+
+      case 'draw_begin':
+      case 'draw_point':
+      case 'draw_end':
+      case 'draw_erase':
+      case 'draw_clear':
+        // 강의자 필기 이벤트 수신 (수강자 전용, callback으로 캔버스 직접 업데이트)
+        if (role === 'student' && onDrawRef.current) {
+          onDrawRef.current(data as unknown as DrawMessage)
         }
         break
 
