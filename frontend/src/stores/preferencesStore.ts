@@ -7,6 +7,7 @@ export type SubtitleStyle = 'plain' | 'outline' | 'glow' | 'background'
 
 export type TranslationLang =
   | 'off'
+  | 'original'
   | 'ko'
   | 'en'
   | 'both'

@@ -24,7 +24,14 @@ const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
   { value: 'ru', label: '러시아어 (Русский)' },
 ]
 
-const AUDIO_LANG_OPTIONS = LANG_OPTIONS.filter((o) => o.value !== 'ko')
+const AUDIO_LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
+  { value: 'off', label: 'Off' },
+  { value: 'original', label: '원본 (Original)' },
+  { value: 'en', label: '영어 (English)' },
+  { value: 'de', label: '독일어 (Deutsch)' },
+  { value: 'es', label: '스페인어 (Español)' },
+  { value: 'ru', label: '러시아어 (Русский)' },
+]
 const SUBTITLE_LANG_OPTIONS = LANG_OPTIONS
 
 const STYLE_LABEL: Record<SubtitleStyle, string> = {
@@ -78,7 +85,7 @@ function subtitleStyleToCss(style: SubtitleStyle): CSSProperties {
         ].join(', '),
       }
     default:
-      return {}
+      return { color: 'black' }
   }
 }
 
@@ -128,8 +135,8 @@ function Student() {
     toggleTheme,
   } = usePreferencesStore()
 
-  // TTS — Student 전용, audioLang 변경 시 엔진 재생성
-  const { synthesize, unlockAudio: unlockTTS, status: ttsStatus, setVolume: setTTSVolume } = useTTS(true, audioLang)
+  // TTS — Student 전용, audioLang 변경 시 엔진 재생성 (original 선택 시 off로 대체해 엔진 초기화 생략)
+  const { synthesize, unlockAudio: unlockTTS, status: ttsStatus, setVolume: setTTSVolume } = useTTS(true, audioLang === 'original' ? 'off' : audioLang)
 
   const synthesizeRef = useRef(synthesize)
   synthesizeRef.current = synthesize
@@ -140,15 +147,18 @@ function Student() {
   const [isAudioUnlocked, setIsAudioUnlocked] = useState(false)
   const isAudioUnlockedRef = useRef(false)
 
+  const originalAudioRef = useRef<HTMLAudioElement>(null)
+
   const unlockAudio = useCallback(() => {
     unlockTTS()
     isAudioUnlockedRef.current = true
     setIsAudioUnlocked(true)
-    console.log('[Audio] 재생 잠금 해제됨 (WASM TTS)')
+    originalAudioRef.current?.play().catch(() => {})
+    console.log('[Audio] 재생 잠금 해제됨')
   }, [unlockTTS])
 
   const onTranslation = useCallback((text: string) => {
-    if (isAudioUnlockedRef.current) {
+    if (isAudioUnlockedRef.current && audioLangRef.current !== 'original') {
       synthesizeRef.current(text, audioLangRef.current)
     }
   }, [])
@@ -174,10 +184,18 @@ function Student() {
     })
     peerConnectionRef.current = pc
     pc.ontrack = (e) => {
-      const stream = e.streams[0]
-      pendingStreamRef.current = stream
-      if (screenVideoRef.current) {
-        screenVideoRef.current.srcObject = stream
+      if (e.track.kind === 'video') {
+        const stream = e.streams[0]
+        pendingStreamRef.current = stream
+        if (screenVideoRef.current) {
+          screenVideoRef.current.srcObject = stream
+        }
+      } else if (e.track.kind === 'audio') {
+        const audioStream = new MediaStream([e.track])
+        if (originalAudioRef.current) {
+          originalAudioRef.current.srcObject = audioStream
+          originalAudioRef.current.muted = audioLangRef.current !== 'original'
+        }
       }
     }
     pc.onicecandidate = (e) => {
@@ -441,6 +459,14 @@ function Student() {
     setTTSVolume(volume, isMuted)
   }, [volume, isMuted, setTTSVolume])
 
+  // audioLang/volume/muted → 원본 오디오 엘리먼트 동기화
+  useEffect(() => {
+    const audio = originalAudioRef.current
+    if (!audio) return
+    audio.muted = audioLang !== 'original' || isMuted
+    audio.volume = volume / 100
+  }, [audioLang, volume, isMuted])
+
   useEffect(() => {
     chatScrollRef.current?.scrollTo({
       top: chatScrollRef.current.scrollHeight,
@@ -494,6 +520,9 @@ function Student() {
     <div
       className="h-screen overflow-hidden flex flex-col bg-background text-onBackground"
     >
+      {/* 원본 오디오 — audioLang=original 일 때만 언뮤트, 평소엔 muted */}
+      <audio ref={originalAudioRef} autoPlay muted playsInline style={{ display: 'none' }} />
+
       {/* 입장 오버레이 — connect + unlockAudio 동시 처리 (브라우저 오디오 정책 대응) */}
       {/* 자막 다운로드 모달 */}
       {showTranscriptModal && sessionId && (
@@ -768,27 +797,27 @@ function Student() {
             {/* 자막 오버레이 */}
             {ccEnabled && (primaryText || secondaryText) && (() => {
               const isBg = subtitleSettings.style === 'background'
-              const bgSpan = isBg ? {
-                backgroundColor: `rgba(0,0,0,${subtitleSettings.subtitleBgOpacity ?? 0.8})`,
-                padding: '3px 10px',
-                borderRadius: '3px',
-                boxDecorationBreak: 'clone',
+              const textShadowIfNotBg = isBg ? {} : subtitleStyleToCss(subtitleSettings.style)
+              const bgSpanStyle = isBg ? {
+                backgroundColor: `rgba(8,8,8,${subtitleSettings.subtitleBgOpacity ?? 0.75})`,
+                padding: '0 8px',
                 WebkitBoxDecorationBreak: 'clone',
+                boxDecorationBreak: 'clone',
               } as CSSProperties : {} as CSSProperties
               return (
                 <div
-                  className={`absolute left-1/2 -translate-x-1/2 max-w-[90%] ${isBg ? '' : 'px-4'} text-center text-white pointer-events-none z-10 ${
+                  className={`absolute left-1/2 -translate-x-1/2 max-w-[90%] text-center text-white pointer-events-none z-10 ${
                     subtitleSettings.position === 'top' ? 'top-6' : 'bottom-20'
-                  }`}
+                  } px-4`}
                   style={{
                     fontSize: `${subtitleSettings.fontSize}px`,
                     opacity: subtitleSettings.opacity,
-                    ...(isBg ? {} : subtitleStyleToCss(subtitleSettings.style)),
+                    ...textShadowIfNotBg,
                   }}
                 >
                   {primaryText && (
                     <p className="font-medium leading-snug">
-                      <span style={bgSpan}>{primaryText}</span>
+                      <span style={bgSpanStyle}>{primaryText}</span>
                     </p>
                   )}
                   {secondaryText && (
@@ -796,7 +825,7 @@ function Student() {
                       className="mt-1 leading-snug"
                       style={{ fontSize: `${Math.max(12, subtitleSettings.fontSize - 4)}px`, ...(isBg ? {} : { opacity: 0.8 }) }}
                     >
-                      <span style={bgSpan}>{secondaryText}</span>
+                      <span style={bgSpanStyle}>{secondaryText}</span>
                     </p>
                   )}
                 </div>
@@ -1133,7 +1162,7 @@ function Student() {
           <button
             type="button"
             onClick={() => setSidebarOpen(v => !v)}
-            className={`absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-4 h-20 border border-r-0 rounded-l-lg ${theme === 'light' ? 'bg-surface border-primaryContainer shadow-[0_0_14px_rgba(0,0,0,0.18)]' : theme === 'dark' ? 'bg-overlayBorder border-white/20 shadow-md' : 'bg-[#E0DEF7] border-purple-200/50 shadow-md'} transition-all duration-300 ease-in-out ${
+            className={`absolute top-1/2 -translate-y-1/2 z-[55] flex items-center justify-center w-4 h-20 border border-r-0 rounded-l-lg ${theme === 'light' ? 'bg-surface border-primaryContainer shadow-[0_0_14px_rgba(0,0,0,0.18)]' : theme === 'dark' ? 'bg-overlayBorder border-white/20 shadow-md' : 'bg-[#E0DEF7] border-purple-200/50 shadow-md'} transition-all duration-300 ease-in-out ${
               sidebarOpen ? 'right-80' : 'right-0'
             }`}
             aria-label={sidebarOpen ? 'Hide panel' : 'Show panel'}
@@ -1146,8 +1175,8 @@ function Student() {
 
         {/* 우측 사이드: 강의자료 + 채팅 */}
         <aside className={isNarrow
-          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 min-h-0 px-3 py-4 sidebar-panel z-40 transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
-          : 'w-80 flex-shrink-0 flex flex-col gap-3 min-h-0'
+          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 min-h-0 px-3 py-4 sidebar-panel z-[55] transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
+          : 'relative z-[55] w-80 flex-shrink-0 flex flex-col gap-3 min-h-0'
         }>
           {/* 오늘의 강의 자료 — 강의 시작 후에만 노출 */}
           {isLectureStarted && (

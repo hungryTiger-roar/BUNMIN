@@ -72,14 +72,14 @@ function subtitleStyleToCss(style: SubtitleStyle): CSSProperties {
       return {
         textShadow: [
           '0 0 8px rgba(0,0,0,0.8)',
-          '0 0 8px rgba(255, 255, 255, 0.95)',
-          '0 0 16px rgba(255, 255, 255, 0.75)',
-          '0 0 28px rgba(255, 255, 255, 0.5)',
-          '0 0 40px rgba(255, 255, 255, 0.35)',
+          '0 0 8px rgba(255,255,255,0.95)',
+          '0 0 16px rgba(255,255,255,0.75)',
+          '0 0 28px rgba(255,255,255,0.5)',
+          '0 0 40px rgba(255,255,255,0.35)',
         ].join(', '),
       }
     default:
-      return { color: 'black'}
+      return { color: 'black' }
   }
 }
 
@@ -202,7 +202,11 @@ function Lecturer() {
     stopCapture: stopAudioCapture,
     analyserRef,
     setGain,
+    micStream,
   } = useAudioCapture({ onAudioData: handleAudioData })
+
+  const micStreamRef = useRef<MediaStream | null>(null)
+  useEffect(() => { micStreamRef.current = micStream }, [micStream])
 
   const [micGainPct, setMicGainPct] = useState(100)
 
@@ -231,6 +235,9 @@ function Lecturer() {
     onCaptureEnd: handleScreenCaptureEnd,
   })
 
+  const screenStreamRef = useRef<MediaStream | null>(null)
+  useEffect(() => { screenStreamRef.current = screenStream }, [screenStream])
+
   // 강의자 본인 화면용 — srcObject + autoPlay 조합은 일부 브라우저에서 자동재생 X → 명시적 play()
   useEffect(() => {
     const v = screenVideoRef.current
@@ -240,9 +247,13 @@ function Lecturer() {
     }
   }, [screenStream])
 
-  // WebRTC: 학생당 1개 PC 생성 → 화면 트랙 add → offer 송신
-  const createOfferForStudent = useCallback(async (studentId: string, stream: MediaStream) => {
-    // 기존 PC 있으면 닫고 새로 생성 (재협상 단순화)
+  // WebRTC: 학생당 1개 PC 생성 → 스크린/마이크 트랙 add → offer 송신
+  // 화면공유 없이도 마이크 트랙만으로 연결 가능 (원본 오디오 전용)
+  const createOfferForStudent = useCallback(async (studentId: string) => {
+    const screenS = screenStreamRef.current
+    const micS = micStreamRef.current
+    if (!screenS && !micS) return
+
     const existing = peerConnectionsRef.current.get(studentId)
     if (existing) {
       existing.close()
@@ -262,7 +273,12 @@ function Lecturer() {
         peerConnectionsRef.current.delete(studentId)
       }
     }
-    stream.getTracks().forEach((t) => pc.addTrack(t, stream))
+    if (screenS) {
+      screenS.getTracks().forEach((t) => pc.addTrack(t, screenS))
+    }
+    if (micS) {
+      micS.getAudioTracks().forEach((t) => pc.addTrack(t, micS))
+    }
     try {
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
@@ -274,28 +290,30 @@ function Lecturer() {
     }
   }, [send])
 
-  // 화면 공유 시작/종료 + 학생 입출에 따라 PC 동기화
-  // 트래킹용 prev refs — 변화 종류별로 다르게 처리 (스트림 교체 vs 학생 변경)
+  // 화면 공유 시작/종료 + 학생 입출 + 마이크 스트림 변경에 따라 PC 동기화
   const prevStreamRef = useRef<MediaStream | null>(null)
   const prevStudentIdsRef = useRef<Set<string>>(new Set())
+  const prevMicStreamRef = useRef<MediaStream | null>(null)
   useEffect(() => {
     const prevStream = prevStreamRef.current
     const prevIds = prevStudentIdsRef.current
+    const prevMicStream = prevMicStreamRef.current
     const currentIds = new Set(participants.students.map((s) => s.id))
 
-    if (!screenStream) {
-      // 스트림 종료 → 모든 PC 닫기
+    const hasAnyStream = !!screenStream || !!micStream
+    if (!hasAnyStream) {
+      // 스트림 없음 → 모든 PC 닫기
       peerConnectionsRef.current.forEach((pc) => pc.close())
       peerConnectionsRef.current.clear()
-    } else if (screenStream !== prevStream) {
-      // 스트림 새로 시작/교체 → 모든 학생에게 새 PC + offer
+    } else if (screenStream !== prevStream || micStream !== prevMicStream) {
+      // 스트림 교체 또는 마이크 on/off → 모든 학생에게 새 PC + offer
       peerConnectionsRef.current.forEach((pc) => pc.close())
       peerConnectionsRef.current.clear()
-      currentIds.forEach((id) => createOfferForStudent(id, screenStream))
+      currentIds.forEach((id) => createOfferForStudent(id))
     } else {
       // 같은 스트림에서 학생만 변경 → 신규에게만 offer, 떠난 학생 PC 닫기
       currentIds.forEach((id) => {
-        if (!prevIds.has(id)) createOfferForStudent(id, screenStream)
+        if (!prevIds.has(id)) createOfferForStudent(id)
       })
       prevIds.forEach((id) => {
         if (!currentIds.has(id)) {
@@ -310,7 +328,8 @@ function Lecturer() {
 
     prevStreamRef.current = screenStream
     prevStudentIdsRef.current = currentIds
-  }, [screenStream, participants.students, createOfferForStudent])
+    prevMicStreamRef.current = micStream
+  }, [screenStream, micStream, participants.students, createOfferForStudent])
 
   useEffect(() => {
     connect()
@@ -631,26 +650,29 @@ function Lecturer() {
     : latestSubtitle.translated
 
   const isBgStyle = subtitleSettings.style === 'background'
-  const bgSpanStyle: React.CSSProperties = isBgStyle ? {
-    backgroundColor: `rgba(0,0,0,${subtitleSettings.subtitleBgOpacity ?? 0.8})`,
-    padding: '3px 10px',
-    borderRadius: '3px',
-    boxDecorationBreak: 'clone' as React.CSSProperties['boxDecorationBreak'],
+  const bgSpanStyle = isBgStyle ? {
+    backgroundColor: `rgba(8,8,8,${subtitleSettings.subtitleBgOpacity ?? 0.75})`,
+    padding: '0 8px',
     WebkitBoxDecorationBreak: 'clone',
-  } as React.CSSProperties : {}
+    boxDecorationBreak: 'clone',
+  } as React.CSSProperties : {} as React.CSSProperties
 
   const subtitleOverlay = ccEnabled && (primaryText || secondaryText) ? (
     <div
       className={`absolute left-1/2 -translate-x-1/2 max-w-[85%] text-center text-white pointer-events-none z-10 ${
         subtitleSettings.position === 'top' ? 'top-6' : 'bottom-20'
-      } ${isBgStyle ? '' : 'px-4'}`}
+      } px-4`}
       style={{
         fontSize: `${subtitleSettings.fontSize}px`,
         opacity: subtitleSettings.opacity,
         ...(isBgStyle ? {} : subtitleStyleToCss(subtitleSettings.style)),
       }}
     >
-      {primaryText && <p className="font-medium leading-snug"><span style={bgSpanStyle}>{primaryText}</span></p>}
+      {primaryText && (
+        <p className="font-medium leading-snug">
+          <span style={bgSpanStyle}>{primaryText}</span>
+        </p>
+      )}
       {secondaryText && (
         <p
           className="mt-1 leading-snug"
@@ -1386,7 +1408,7 @@ function Lecturer() {
           <button
             type="button"
             onClick={() => setSidebarOpen(v => !v)}
-            className={`absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-4 h-20 border border-r-0 rounded-l-lg ${theme === 'light' ? 'bg-surface border-primaryContainer shadow-[0_0_14px_rgba(0,0,0,0.18)]' : theme === 'dark' ? 'bg-overlayBorder border-white/20 shadow-md' : 'bg-[#E0DEF7] border-purple-200/50 shadow-md'} transition-all duration-300 ease-in-out ${
+            className={`absolute top-1/2 -translate-y-1/2 z-[55] flex items-center justify-center w-4 h-20 border border-r-0 rounded-l-lg ${theme === 'light' ? 'bg-surface border-primaryContainer shadow-[0_0_14px_rgba(0,0,0,0.18)]' : theme === 'dark' ? 'bg-overlayBorder border-white/20 shadow-md' : 'bg-[#E0DEF7] border-purple-200/50 shadow-md'} transition-all duration-300 ease-in-out ${
               sidebarOpen ? 'right-80' : 'right-0'
             }`}
             aria-label={sidebarOpen ? '패널 숨기기' : '패널 보기'}
@@ -1399,8 +1421,8 @@ function Lecturer() {
 
         {/* 사이드바 */}
         <aside className={isNarrow
-          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 overflow-hidden min-h-0 px-3 py-4 sidebar-panel z-40 transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
-          : 'w-80 flex-shrink-0 flex flex-col gap-3 overflow-hidden min-h-0'
+          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 overflow-hidden min-h-0 px-3 py-4 sidebar-panel z-[55] transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
+          : 'relative z-[55] w-80 flex-shrink-0 flex flex-col gap-3 overflow-hidden min-h-0'
         }>
           <div className="flex-1 overflow-y-auto scrollbar-hide space-y-3 min-h-0">
             
