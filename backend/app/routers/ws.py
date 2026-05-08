@@ -540,6 +540,15 @@ async def handle_lecturer(websocket: WebSocket):
                     "color": message.get("color", "#60A5FA"),
                 })
 
+            elif msg_type in ("draw_begin", "draw_point", "draw_end", "draw_erase", "draw_clear"):
+                # 강의자 필기 이벤트 → 수강자에게만 forward (서버는 단순 릴레이, 상태 보존 X)
+                # 좌표는 슬라이드 이미지 영역 기준 0~1 정규화 (커서와 동일 좌표계)
+                payload = {"type": msg_type}
+                for key in ("id", "tool", "color", "page", "x", "y", "radius"):
+                    if key in message:
+                        payload[key] = message[key]
+                await manager.broadcast_to_students(payload)
+
             elif msg_type == "participants_request":
                 await websocket.send_json(manager.participants_payload())
 
