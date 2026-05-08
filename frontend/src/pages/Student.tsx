@@ -98,6 +98,7 @@ function Student() {
   const presentationMode = useLectureStore((s) => s.presentationMode)
   const subtitles = useLectureStore((s) => s.subtitles)
   const studentName = useLectureStore((s) => s.studentName)
+  const setStudentName = useLectureStore((s) => s.setStudentName)
   const studentCount = useLectureStore((s) => s.studentCount)
   const chatMessages = useLectureStore((s) => s.chatMessages)
   const participants = useLectureStore((s) => s.participants)
@@ -201,7 +202,7 @@ function Student() {
     pc.addIceCandidate(candidate).catch(() => { /* 핸드셰이크 도중 도착 가능 — 무시 */ })
   }, [])
 
-  const { isConnected, connect, send, sendChat } = useWebSocket(
+  const { isConnected, connect, send, sendChat, sendStudentRename } = useWebSocket(
     WS_PIPELINE_URL,
     'student',
     { onCursor, onTranslation, onWebRtcOffer: handleWebRtcOffer, onWebRtcIce: handleWebRtcIce }
@@ -220,6 +221,52 @@ function Student() {
   const [showTranscriptModal, setShowTranscriptModal] = useState(false)
   const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 1000)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  // 수강자 이름 인라인 편집 — 헤더 뱃지 클릭 시 input으로 전환
+  const [isEditingName, setIsEditingName] = useState(false)
+  const [editingNameValue, setEditingNameValue] = useState('')
+  const editingNameInputRef = useRef<HTMLInputElement>(null)
+
+  const startEditingName = useCallback(() => {
+    setEditingNameValue(studentName)
+    setIsEditingName(true)
+  }, [studentName])
+
+  const cancelEditingName = useCallback(() => {
+    setIsEditingName(false)
+    setEditingNameValue('')
+  }, [])
+
+  const saveEditingName = useCallback(() => {
+    const trimmed = editingNameValue.trim()
+    if (!trimmed || trimmed === studentName) {
+      cancelEditingName()
+      return
+    }
+    setStudentName(trimmed)
+    if (localStorage.getItem('student_name')) {
+      localStorage.setItem('student_name', trimmed)
+    }
+    sendStudentRename(trimmed)
+    setIsEditingName(false)
+  }, [editingNameValue, studentName, setStudentName, sendStudentRename, cancelEditingName])
+
+  useEffect(() => {
+    if (isEditingName) {
+      editingNameInputRef.current?.focus()
+      editingNameInputRef.current?.select()
+    }
+  }, [isEditingName])
+
+  // 슬라이드 줌/팬
+  const [zoom, setZoom] = useState(100)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [zoomBadgeVisible, setZoomBadgeVisible] = useState(false)
+  const [isDragging, setIsDragging] = useState(false)
+  const zoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isDraggingRef = useRef(false)
+  const dragStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
+  const zoomRef = useRef(zoom)
 
   useEffect(() => {
     if (sessionId) setShowTranscriptModal(true)
@@ -310,6 +357,83 @@ function Student() {
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
+
+  // 휠 스크롤 줌 (passive: false 필요 → addEventListener 직접)
+  useEffect(() => {
+    const el = slideRef.current
+    if (!el) return
+    const handleWheel = (e: WheelEvent) => {
+      if (!isLectureStarted || presentationMode !== 'slide') return
+      e.preventDefault()
+      const step = e.deltaY < 0 ? 10 : -10
+      setZoom(prev => Math.max(100, Math.min(500, prev + step)))
+      setZoomBadgeVisible(true)
+      if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current)
+      zoomTimerRef.current = setTimeout(() => setZoomBadgeVisible(false), 1500)
+    }
+    el.addEventListener('wheel', handleWheel, { passive: false })
+    return () => el.removeEventListener('wheel', handleWheel)
+  }, [isLectureStarted, presentationMode])
+
+  // zoomRef 동기화 (드래그 핸들러 클로저에서 최신 zoom 참조용)
+  useEffect(() => { zoomRef.current = zoom }, [zoom])
+
+  // 줌 변경 시 pan을 이미지 경계 내로 clamp (축소 시 범위 벗어난 pan 보정)
+  useEffect(() => {
+    if (zoom === 100) { setPan({ x: 0, y: 0 }); return }
+    const el = slideRef.current
+    if (!el) return
+    const f = zoom / 100
+    const maxX = (f - 1) * el.clientWidth / 2
+    const maxY = (f - 1) * el.clientHeight / 2
+    setPan(prev => ({
+      x: Math.max(-maxX, Math.min(maxX, prev.x)),
+      y: Math.max(-maxY, Math.min(maxY, prev.y)),
+    }))
+  }, [zoom])
+
+  // 모드 전환(슬라이드↔화면공유) 시 줌/팬 리셋
+  useEffect(() => {
+    setZoom(100)
+    setPan({ x: 0, y: 0 })
+  }, [presentationMode])
+
+  // 드래그 팬 — window 기준으로 추적해 컨테이너 밖으로 빠져도 동작
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isDraggingRef.current) return
+      const dx = e.clientX - dragStartRef.current.x
+      const dy = e.clientY - dragStartRef.current.y
+      const rawX = dragStartRef.current.panX + dx
+      const rawY = dragStartRef.current.panY + dy
+      const f = zoomRef.current / 100
+      const el = slideRef.current
+      if (el) {
+        const maxX = (f - 1) * el.clientWidth / 2
+        const maxY = (f - 1) * el.clientHeight / 2
+        setPan({
+          x: Math.max(-maxX, Math.min(maxX, rawX)),
+          y: Math.max(-maxY, Math.min(maxY, rawY)),
+        })
+      } else {
+        setPan({ x: rawX, y: rawY })
+      }
+    }
+    const handleMouseUp = () => {
+      if (!isDraggingRef.current) return
+      isDraggingRef.current = false
+      setIsDragging(false)
+    }
+    window.addEventListener('mousemove', handleMouseMove)
+    window.addEventListener('mouseup', handleMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove)
+      window.removeEventListener('mouseup', handleMouseUp)
+    }
+  }, [])
+
+  // 줌 배지 타이머 정리
+  useEffect(() => () => { if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current) }, [])
 
   // volume/muted → TTS GainNode 실시간 동기화
   useEffect(() => {
@@ -485,10 +609,43 @@ function Student() {
 
           {studentName && (
             <div className="flex items-center gap-1.5 px-3 py-1.5 bg-primaryContainer/60 rounded-lg text-sm text-onSurface">
-              <svg className="w-4 h-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-              </svg>
-              {studentName}
+              {isEditingName ? (
+                <input
+                  ref={editingNameInputRef}
+                  type="text"
+                  value={editingNameValue}
+                  onChange={(e) => setEditingNameValue(e.target.value)}
+                  onBlur={saveEditingName}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      saveEditingName()
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault()
+                      cancelEditingName()
+                    }
+                  }}
+                  maxLength={20}
+                  aria-label="이름 수정"
+                  className="bg-white/95 rounded px-2 py-0.5 text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary w-32 text-sm"
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={startEditingName}
+                  className="flex items-center gap-1.5 hover:opacity-80 transition-opacity"
+                  title="이름 수정"
+                  aria-label={`이름 수정 (현재 이름: ${studentName})`}
+                >
+                  <svg className="w-4 h-4 opacity-70 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                  </svg>
+                  <span className="truncate">{studentName}</span>
+                  <svg className="w-3.5 h-3.5 opacity-60 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                </button>
+              )}
             </div>
           )}
 
@@ -506,14 +663,32 @@ function Student() {
         <div className="flex-1 flex items-center justify-center min-w-0 min-h-0">
           <div
             ref={slideRef}
-            className={`group relative bg-black rounded-xl overflow-hidden ${theme === 'light' ? 'shadow-[0_4px_20px_rgba(0,0,0,0.08)]' : 'shadow-2xl'} h-full ${aspectClass} max-w-full`}
+            className={`group relative bg-black rounded-xl overflow-hidden ${theme === 'light' ? 'shadow-[0_4px_20px_rgba(0,0,0,0.08)]' : 'shadow-2xl'} h-full ${aspectClass} max-w-full ${zoom > 100 ? (isDragging ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
+            onMouseDown={(e) => {
+              if (zoom <= 100) return
+              e.preventDefault()
+              isDraggingRef.current = true
+              setIsDragging(true)
+              dragStartRef.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y }
+            }}
           >
             {/* 강의자 커서 오버레이 (ref 기반, 리렌더링 없음) */}
             {!isPaused && <StudentCursorOverlay spotlightRef={spotlightRef} />}
 
             {/* 강의자료 원본/번역 토글 (강의 시작 후 슬라이드 표시 중일 때만) */}
             {isLectureStarted && presentationMode === 'slide' && slideStatus === 'ready' && slideImageUrl && (
-              <MaterialViewToggle className={`absolute top-3 z-30 right-3`} />
+              <MaterialViewToggle className={`absolute top-3 z-40 right-3`} />
+            )}
+
+            {/* 줌 배율 배지 — 스크롤 직후 잠시 표시 후 fade-out */}
+            {isLectureStarted && presentationMode === 'slide' && slideStatus === 'ready' && slideImageUrl && (
+              <div
+                className={`absolute top-14 right-3 z-30 px-3 py-1 bg-black/60 backdrop-blur-sm text-white text-sm font-semibold rounded-lg shadow-lg pointer-events-none transition-opacity duration-500 ${
+                  zoomBadgeVisible ? 'opacity-100' : 'opacity-0'
+                }`}
+              >
+                {zoom}%
+              </div>
             )}
 
             {/* 상단 강의 제목 바 — 마우스 올렸을 때만 표시 */}
@@ -552,7 +727,13 @@ function Student() {
                 key={`${currentPage}`}
                 src={slideImageUrl}
                 alt={`슬라이드 ${currentPage}`}
-                className="w-full h-full object-contain"
+                className="w-full h-full object-contain select-none"
+                draggable={false}
+                style={{
+                  transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom / 100})`,
+                  transformOrigin: 'center center',
+                  transition: isDragging ? 'none' : 'transform 0.1s ease-out',
+                }}
               />
             ) : (
               <div className="absolute inset-0 flex items-center justify-center text-white/50">
@@ -1042,16 +1223,28 @@ function Student() {
             ) : (
               chatMessages.map((msg) => (
                 <div key={msg.id}>
-                  <div className="flex items-baseline gap-1.5 mb-0.5">
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    {msg.sender === 'lecturer' && (
+                      <svg
+                        className="w-4 h-4 text-lecturerAccent flex-shrink-0"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={1.7}
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4.26 10.147a60.438 60.438 0 0 0-.491 6.347A48.62 48.62 0 0 1 12 20.904a48.62 48.62 0 0 1 8.232-4.41 60.46 60.46 0 0 0-.491-6.347m-15.482 0a50.636 50.636 0 0 0-2.658-.813A59.906 59.906 0 0 1 12 3.493a59.903 59.903 0 0 1 10.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.717 50.717 0 0 1 12 13.489a50.702 50.702 0 0 1 7.74-3.342M6.75 15a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm0 0v-3.675A55.378 55.378 0 0 1 12 8.443m-7.007 11.55A5.981 5.981 0 0 0 6.75 15.75v-1.5" />
+                      </svg>
+                    )}
                     <span
                       className={`text-sm font-semibold ${
-                        msg.sender === 'lecturer' ? 'text-gradientPurple' : 'text-onSurface'
+                        msg.sender === 'lecturer' ? 'text-lecturerAccent' : 'text-onSurface'
                       }`}
                     >
                       {msg.name}
                     </span>
                     {msg.sender === 'lecturer' && (
-                      <span className="text-[10px] px-1.5 py-0.5 bg-gradientPurple/40 text-white rounded font-medium">
+                      <span className="text-xs px-1.5 py-0.5 bg-lecturerAccent/15 text-lecturerAccent rounded font-medium">
                         Lecturer
                       </span>
                     )}
@@ -1059,11 +1252,11 @@ function Student() {
                   <p
                     className={`text-sm leading-relaxed break-words ${
                       msg.sender === 'lecturer'
-                        ? 'text-gradientPurple/95'
+                        ? 'text-lecturerAccent/95'
                         : 'text-onSurface/90'
                     }`}
                   >
-                    {msg.text}
+                    {linkifyText(msg.text)}
                   </p>
                 </div>
               ))
@@ -1113,6 +1306,27 @@ interface LangColumnProps {
   value: TranslationLang
   onChange: (v: TranslationLang) => void
   options: { value: TranslationLang; label: string }[]
+}
+
+function linkifyText(text: string) {
+  const URL_REGEX = /https?:\/\/[^\s]+/g
+  const parts: React.ReactNode[] = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+  URL_REGEX.lastIndex = 0
+  while ((match = URL_REGEX.exec(text)) !== null) {
+    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index))
+    const url = match[0]
+    parts.push(
+      <a key={match.index} href={url} target="_blank" rel="noopener noreferrer"
+        className="underline hover:opacity-70 break-all"
+        onClick={(e) => e.stopPropagation()}
+      >{url}</a>
+    )
+    lastIndex = match.index + url.length
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex))
+  return parts.length === 0 ? text : parts
 }
 
 function LangColumn({ title, value, onChange, options }: LangColumnProps) {

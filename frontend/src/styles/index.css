@@ -45,6 +45,10 @@
     --color-overlay-border: #454A78;
 
     --color-find-id: #2E2E2E;
+
+    /* 채팅 강사 강조색 — 모드별로 살짝 보라톤이 섞인 색.
+       일반 텍스트와 너무 같지도(다크 #FFFFFF), 너무 강하지도(#6650a4) 않게 톤 다운. */
+    --color-lecturer-accent: #7858B0;
   }
 
   .dark {
@@ -67,6 +71,9 @@
     --color-overlay-surface: #252A52;
     --color-on-overlay-surface: #E8E9F5;
     --color-overlay-border: #3E4475;
+
+    /* 다크 배경에서도 일반 텍스트(#E8E9F5)와 구별되도록 라벤더 톤 */
+    --color-lecturer-accent: #D8C5F0;
   }
 
   /* ---- Gradient Mode ---- 움직이는 하늘-보라 배경 + 글래스 서피스
@@ -161,4 +168,24 @@ body {
 .scrollbar-hide {
   -ms-overflow-style: none;  /* IE/Edge */
   scrollbar-width: none;     /* Firefox */
+}
+
+/* 항상 보이는 스크롤바 (라이브러리 카드 영역 등 — 호버 안 해도 "더 있음" 인식되게) */
+.scrollbar-always::-webkit-scrollbar {
+  width: 6px;
+}
+.scrollbar-always::-webkit-scrollbar-track {
+  background: var(--color-primary-container);
+  border-radius: 3px;
+}
+.scrollbar-always::-webkit-scrollbar-thumb {
+  background: var(--color-tertiary);
+  border-radius: 3px;
+}
+.scrollbar-always::-webkit-scrollbar-thumb:hover {
+  background: var(--color-primary);
+}
+.scrollbar-always {
+  scrollbar-width: thin;                                            /* Firefox */
+  scrollbar-color: var(--color-tertiary) var(--color-primary-container);
 }

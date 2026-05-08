@@ -42,6 +42,9 @@ export default {
         gradientBlue: "var(--color-gradient-blue)",
         gradientPurple: "var(--color-gradient-purple)",
 
+        // 채팅 강사 강조색 (라이트/그라데이션=진한 보라, 다크=흰색)
+        lecturerAccent: "var(--color-lecturer-accent)",
+
         // Color.kt에 정의된 기타 정적 색상 (다크모드 영향 안 받는 색상들)
         findId: "var(--color-find-id)",
         purple80: "#D0BCFF",

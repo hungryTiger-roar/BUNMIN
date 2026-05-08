@@ -32,6 +32,17 @@ appendLog(`[${new Date().toISOString()}] Electron main 시작`)
 appendLog(`Log: ${LOG_FILE}`)
 appendLog('='.repeat(60))
 
+// ─── 단일 인스턴스 락 ────────────────────────────────────────────
+// 두 번째 인스턴스가 startBackend()로 가면 8000포트 충돌 + 모듈 상단의
+// taskkill /F /IM aunion_backend.exe 가 첫 인스턴스의 백엔드까지 죽임.
+// 따라서 이벤트 핸들러 등록 *이전* 시점에 락 실패 → 즉시 종료.
+if (!app.requestSingleInstanceLock()) {
+  appendLog(`[${new Date().toISOString()}] 이미 실행 중인 인스턴스가 있어 종료합니다`)
+  // app.quit() 은 비동기라 module 평가가 계속됨 → before-quit/window-all-closed
+  // 핸들러가 위험한 taskkill 을 부를 수 있어 process.exit(0) 으로 즉시 종료.
+  process.exit(0)
+}
+
 function getLanIp() {
   const interfaces = os.networkInterfaces()
   for (const name of Object.keys(interfaces)) {
@@ -364,6 +375,18 @@ function createWindow() {
     mainWindow.show()
   })
 }
+
+// ─── 두 번째 인스턴스 실행 시도 → 기존 창 활성화 ───────────────────
+// 첫 인스턴스에서만 발화. 두 번째 인스턴스는 위쪽 락 체크에서 이미 종료됨.
+app.on('second-instance', (_event, commandLine) => {
+  devLog(`두 번째 인스턴스 차단 — argv=${JSON.stringify(commandLine)}`)
+  appendLog(`[${new Date().toISOString()}] 두 번째 인스턴스 차단 — 기존 창 활성화`)
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    if (!mainWindow.isVisible()) mainWindow.show()
+    mainWindow.focus()
+  }
+})
 
 app.whenReady().then(() => {
   devLog('app.whenReady → createWindow + startBackend')
