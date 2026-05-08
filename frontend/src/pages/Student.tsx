@@ -31,6 +31,7 @@ const STYLE_LABEL: Record<SubtitleStyle, string> = {
   plain: 'Plain',
   outline: 'Outline',
   glow: 'Glow',
+  background: 'Background',
 }
 
 const ASPECT_OPTIONS: { value: AspectRatio; label: string; className: string }[] = [
@@ -765,28 +766,42 @@ function Student() {
             )}
 
             {/* 자막 오버레이 */}
-            {ccEnabled && (primaryText || secondaryText) && (
-              <div
-                className={`absolute left-1/2 -translate-x-1/2 max-w-[90%] px-4 text-center text-white pointer-events-none z-10 ${
-                  subtitleSettings.position === 'top' ? 'top-6' : 'bottom-20'
-                }`}
-                style={{
-                  fontSize: `${subtitleSettings.fontSize}px`,
-                  opacity: subtitleSettings.opacity,
-                  ...subtitleStyleToCss(subtitleSettings.style),
-                }}
-              >
-                {primaryText && <p className="font-medium leading-snug">{primaryText}</p>}
-                {secondaryText && (
-                  <p
-                    className="mt-1 leading-snug opacity-80"
-                    style={{ fontSize: `${Math.max(12, subtitleSettings.fontSize - 4)}px` }}
-                  >
-                    {secondaryText}
-                  </p>
-                )}
-              </div>
-            )}
+            {ccEnabled && (primaryText || secondaryText) && (() => {
+              const isBg = subtitleSettings.style === 'background'
+              const bgSpan = isBg ? {
+                backgroundColor: `rgba(0,0,0,${subtitleSettings.subtitleBgOpacity ?? 0.8})`,
+                padding: '3px 10px',
+                borderRadius: '3px',
+                boxDecorationBreak: 'clone',
+                WebkitBoxDecorationBreak: 'clone',
+              } as CSSProperties : {} as CSSProperties
+              return (
+                <div
+                  className={`absolute left-1/2 -translate-x-1/2 max-w-[90%] ${isBg ? '' : 'px-4'} text-center text-white pointer-events-none z-10 ${
+                    subtitleSettings.position === 'top' ? 'top-6' : 'bottom-20'
+                  }`}
+                  style={{
+                    fontSize: `${subtitleSettings.fontSize}px`,
+                    opacity: subtitleSettings.opacity,
+                    ...(isBg ? {} : subtitleStyleToCss(subtitleSettings.style)),
+                  }}
+                >
+                  {primaryText && (
+                    <p className="font-medium leading-snug">
+                      <span style={bgSpan}>{primaryText}</span>
+                    </p>
+                  )}
+                  {secondaryText && (
+                    <p
+                      className="mt-1 leading-snug"
+                      style={{ fontSize: `${Math.max(12, subtitleSettings.fontSize - 4)}px`, ...(isBg ? {} : { opacity: 0.8 }) }}
+                    >
+                      <span style={bgSpan}>{secondaryText}</span>
+                    </p>
+                  )}
+                </div>
+              )
+            })()}
 
             {/* 화면 내부 하단 컨트롤 바 — 마우스 올렸을 때만 표시 (설정 열려있으면 항상 표시) */}
             <div className={`absolute left-3 right-3 bottom-3 z-30 flex items-center gap-2 transition-opacity duration-200 ${
@@ -927,13 +942,13 @@ function Student() {
 
                       <div className="h-px bg-white/10" />
 
-                      {/* 글자 크기 */}
+                      {/* 자막 크기 */}
                       <button
                         type="button"
                         onClick={() => setSettingsPanel('fontSize')}
                         className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/10 transition-colors"
                       >
-                        <span>Font Size</span>
+                        <span>Subtitle Font Size</span>
                         <div className="flex items-center gap-2 text-white/60">
                           <span className="text-sm">{subtitleSettings.fontSize}px</span>
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -950,7 +965,7 @@ function Student() {
                         onClick={() => setSettingsPanel('style')}
                         className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/10 transition-colors"
                       >
-                        <span>Style</span>
+                        <span>Subtitle Style</span>
                         <div className="flex items-center gap-2 text-white/60">
                           <span className="text-sm">{STYLE_LABEL[subtitleSettings.style]}</span>
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1042,7 +1057,7 @@ function Student() {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                           </svg>
                         </button>
-                        <span className="font-medium">Font Size</span>
+                        <span className="font-medium">Subtitle Font Size</span>
                       </div>
                       <div className="px-4 py-4">
                         <div className="flex justify-end items-center mb-3">
@@ -1075,19 +1090,36 @@ function Student() {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                           </svg>
                         </button>
-                        <span className="font-medium">Style</span>
+                        <span className="font-medium">Subtitle Style</span>
                       </div>
                       {(Object.keys(STYLE_LABEL) as SubtitleStyle[]).map((s) => (
                         <button
                           key={s}
                           type="button"
-                          onClick={() => { setSubtitleSettings({ style: s }); setSettingsPanel('main') }}
+                          onClick={() => setSubtitleSettings({ style: s })}
                           className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/10 transition-colors"
                         >
                           <span className={`w-4 text-sm ${subtitleSettings.style === s ? 'opacity-100' : 'opacity-0'}`}>✓</span>
                           <span className={subtitleSettings.style === s ? 'font-medium' : ''}>{STYLE_LABEL[s]}</span>
                         </button>
                       ))}
+                      {subtitleSettings.style === 'background' && (
+                        <div className="px-4 py-3 border-t border-white/10">
+                          <div className="flex justify-between text-xs text-white/70 mb-1">
+                            <span>Background opacity</span>
+                            <span>{Math.round((subtitleSettings.subtitleBgOpacity ?? 0.8) * 100)}%</span>
+                          </div>
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            step={5}
+                            value={Math.round((subtitleSettings.subtitleBgOpacity ?? 0.8) * 100)}
+                            onChange={(e) => setSubtitleSettings({ subtitleBgOpacity: Number(e.target.value) / 100 })}
+                            className="w-full accent-white"
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

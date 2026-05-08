@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware'
 
 export type Lang = 'ko' | 'en'
 
-export type SubtitleStyle = 'plain' | 'outline' | 'glow'
+export type SubtitleStyle = 'plain' | 'outline' | 'glow' | 'background'
 
 export type TranslationLang =
   | 'off'
@@ -23,6 +23,7 @@ export interface SubtitleSettings {
   position: 'top' | 'bottom'
   opacity: number
   style: SubtitleStyle
+  subtitleBgOpacity: number
 }
 
 interface PreferencesState {
@@ -56,6 +57,7 @@ const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
   position: 'bottom',
   opacity: 0.9,
   style: 'plain',
+  subtitleBgOpacity: 0.8,
 }
 
 export const usePreferencesStore = create<PreferencesState>()(
@@ -100,7 +102,7 @@ export const usePreferencesStore = create<PreferencesState>()(
     }),
     {
       name: 'aunion-preferences',
-      version: 7,
+      version: 8,
     }
   )
 )
