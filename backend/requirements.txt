@@ -26,6 +26,9 @@ python-dotenv>=1.0.0
 faster-whisper>=1.0.3
 soundfile>=0.12.0
 librosa>=0.10.0
+# 한국어 문장 분할 — ASR 한 덩어리 결과를 종결어미(~다/요/죠/까) 기준으로 쪼개
+# NMT/broadcast 병렬화. 마침표 누락된 발화에서도 분할 가능.
+kss>=6.0.0
 
 # OCR (텍스트 추출)
 surya-ocr>=0.17.0  # Transformer 기반 OCR (한글 정확도 향상), torch>=2.7.0 필요 (cu126 사용)
