@@ -10,6 +10,7 @@ import {
 } from '@/stores/preferencesStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { useTTS } from '@/hooks/useTTS'
+import { useUnitPlayer } from '@/hooks/useUnitPlayer'
 import ParticipantsPanel from '@/components/common/ParticipantsPanel'
 import MaterialViewToggle from '@/components/common/MaterialViewToggle'
 import { StudentCursorOverlay, useCursorOverlay } from '@/components/student/StudentCursorOverlay'
@@ -129,37 +130,48 @@ function Student() {
   } = usePreferencesStore()
 
   // TTS — Student 전용, audioLang 변경 시 엔진 재생성
-  const { synthesize, unlockAudio: unlockTTS, status: ttsStatus, setVolume: setTTSVolume } = useTTS(true, audioLang)
+  const {
+    playSentence,
+    unlockAudio: unlockTTS,
+    status: ttsStatus,
+    setVolume: setTTSVolume,
+    setOnTtsStart,
+  } = useTTS(true, audioLang)
 
-  const synthesizeRef = useRef(synthesize)
-  synthesizeRef.current = synthesize
+  // TTS 시작 시점 콜백 — useTTS 가 audio schedule 끝낸 후 호출.
+  // subtitle store 의 ttsMs 를 patch 해 SubtitleDisplay 가 단계별 latency 표시.
+  const updateSubtitleTts = useLectureStore((s) => s.updateSubtitleTts)
+  useEffect(() => {
+    setOnTtsStart((subtitleId, ttsMs) => {
+      updateSubtitleTts(subtitleId, ttsMs)
+    })
+    return () => setOnTtsStart(null)
+  }, [setOnTtsStart, updateSubtitleTts])
 
   const audioLangRef = useRef(audioLang)
   useEffect(() => { audioLangRef.current = audioLang }, [audioLang])
 
   const [isAudioUnlocked, setIsAudioUnlocked] = useState(false)
   const isAudioUnlockedRef = useRef(false)
-  // 자동 unlock 시도 완료 여부 — 시도 중에는 모달 안 보이게 해 UX 깜빡임 방지.
-  // (autoEnter / sessionStorage 경로는 비동기라 첫 렌더 시점엔 결과 모름)
   const [autoUnlockSettled, setAutoUnlockSettled] = useState(false)
 
   const unlockAudio = useCallback(async () => {
     const ok = await unlockTTS()
-    if (!ok) {
-      // 자동 시도 (autoEnter 경유) 가 브라우저 정책에 막힌 경우.
-      // isAudioUnlocked 는 false 유지 → 모달 그대로 → 사용자 클릭 유도.
-      return
-    }
+    if (!ok) return
     isAudioUnlockedRef.current = true
     setIsAudioUnlocked(true)
     console.log('[Audio] 재생 잠금 해제됨 (WASM TTS)')
   }, [unlockTTS])
 
-  const onTranslation = useCallback((text: string) => {
-    if (isAudioUnlockedRef.current) {
-      synthesizeRef.current(text, audioLangRef.current)
-    }
-  }, [])
+  // 학생측 unit player — Fixed-delay mirror + page-anchor.
+  // 강사 행동들이 lecturerTimestamp + offset + BASE_DELAY 시점에 setTimeout 으로
+  // schedule. 그림 / 커서 / 페이지 / 자막 / 오디오 모두 동일 offset 위에서 재생.
+  // 각 apply 콜백 안에서 setCurrentPage(page) 가 먼저 호출되므로 발화 / 그림 /
+  // 커서가 강사 발생 페이지 위에서 mirror 되는 강한 보장.
+  const playSentenceRef = useRef(playSentence)
+  useEffect(() => { playSentenceRef.current = playSentence }, [playSentence])
+
+  const unitPlayer = useUnitPlayer()
 
   // ref 기반 커서 오버레이 (React 상태 없이 DOM 직접 조작)
   // slideRef를 전달해서 컨테이너 크기 기준으로 px 변환
@@ -217,10 +229,62 @@ function Student() {
     pc.addIceCandidate(candidate).catch(() => { /* 핸드셰이크 도중 도착 가능 — 무시 */ })
   }, [])
 
+  // unit player 콜백 — useWebSocket 이 호출.
+  // onTranscription: 자막 등록 + TTS 재생을 하나의 apply 콜백으로 묶어 speechStartAt
+  //   시점에 schedule. apply 시작 시 setCurrentPage(pageAtSpeechStart) 로 강사 발화
+  //   페이지 강제 set → 발화가 항상 강사 페이지 위에서 재생되는 강한 보장.
+  // onLifecycle: lecture_end/pause/resume 도 동일 offset 으로 schedule.
+  const addSubtitle = useLectureStore((s) => s.addSubtitle)
+  const setCurrentPage = useLectureStore((s) => s.setCurrentPage)
+  const onTranscription = useCallback((params: {
+    original: string
+    translated: string
+    asrMs?: number
+    nmtMs?: number
+    speechStartAt: number
+    sentAt: number
+    pageAtSpeechStart?: number
+  }) => {
+    unitPlayer.enqueueVisual(params.speechStartAt, () => {
+      // page-anchor — 발화 재생 직전 강사 페이지로 강제 set.
+      if (typeof params.pageAtSpeechStart === 'number') {
+        setCurrentPage(params.pageAtSpeechStart)
+      }
+      const subtitleId = addSubtitle({
+        original: params.original,
+        translated: params.translated,
+        timestamp: Date.now(),
+        inputTime: params.sentAt,
+        asrMs: params.asrMs,
+        nmtMs: params.nmtMs,
+      })
+      // TTS 재생 — translated 가 있고 audio unlock + lang != off 일 때만.
+      // playSentence 안에서 generate (200~500ms) 후 audio start. BASE_DELAY (3s) 가
+      // 합성 시간을 흡수해 음성 시작 ≈ 자막 표시 시점.
+      if (params.translated && isAudioUnlockedRef.current && audioLangRef.current !== 'off') {
+        playSentenceRef.current(params.translated, audioLangRef.current, subtitleId).catch((err) => {
+          console.error('[Student] playSentence 실패:', err)
+        })
+      }
+    }, 'sentence')
+  }, [unitPlayer, addSubtitle, setCurrentPage])
+
+  const onLifecycle = useCallback((ts: number | undefined, apply: () => void, label: string) => {
+    unitPlayer.enqueueLifecycle(ts, apply, label)
+  }, [unitPlayer])
+
   const { isConnected, connect, send, sendChat, sendStudentRename } = useWebSocket(
     WS_PIPELINE_URL,
     'student',
-    { onCursor, onDraw, onTranslation, onWebRtcOffer: handleWebRtcOffer, onWebRtcIce: handleWebRtcIce }
+    {
+      onCursor,
+      onDraw,
+      onWebRtcOffer: handleWebRtcOffer,
+      onWebRtcIce: handleWebRtcIce,
+      unitPlayer,
+      onTranscription,
+      onLifecycle,
+    },
   )
 
   useEffect(() => { sendRef.current = send }, [send])

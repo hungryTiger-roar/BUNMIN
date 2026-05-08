@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLectureStore } from '@/stores/lectureStore'
 import { usePreferencesStore } from '@/stores/preferencesStore'
 import { API_BASE } from '@/lib/api'
+import type { UnitPlayer } from './useUnitPlayer'
 
 interface WebSocketMessage {
   type: string
@@ -31,8 +32,12 @@ export type DrawMessage =
 interface UseWebSocketOptions {
   /** 커서 메시지 수신 시 콜백 (React 상태 대신 DOM 직접 업데이트용) */
   onCursor?: (cursor: CursorMessage) => void
-  /** 번역 텍스트 수신 시 콜백 (TTS 합성 등) */
-  onTranslation?: (text: string) => void
+  /** 번역 텍스트 수신 시 콜백 (TTS 합성 등). subtitleId 로 TTS 시작 시점에
+   *  store 에 ttsMs 를 patch 할 수 있게 한다.
+   *  lecturerTimestamp: 강사 sentence END 시점 (sentAt) — offset 측정용.
+   *  speechStartAt: 강사 sentence START 시점 — audio.start 가 시각 events 와
+   *    동일 시간선에 정렬되도록 useTTS 가 sync 기준으로 사용. */
+  onTranslation?: (text: string, subtitleId: string, lecturerTimestamp?: number, speechStartAt?: number) => void
   /** 강의자 필기 이벤트 수신 (수강자 전용) — DOM 직접 업데이트용, 리렌더 없음 */
   onDraw?: (draw: DrawMessage) => void
   /** WebRTC offer 수신 (수강자 전용) */
@@ -41,10 +46,33 @@ interface UseWebSocketOptions {
   onWebRtcAnswer?: (sender: string, sdp: RTCSessionDescriptionInit) => void
   /** WebRTC ICE candidate 수신 — 강의자는 sender(학생id), 수강자는 sender=null */
   onWebRtcIce?: (sender: string | null, candidate: RTCIceCandidateInit) => void
+  /** 학생측 unit player — fixed-delay mirror. 제공 시 cursor / draw / page_change /
+   *  slide_select / presentation_mode 등 시각 이벤트가 lecturerTimestamp + offset +
+   *  BASE_DELAY 시점에 schedule. 미제공 시 모두 즉시 적용. */
+  unitPlayer?: UnitPlayer
+  /** transcription 도착 시 (학생 + unitPlayer 모드 한정). Student.tsx 가 자막 표시 +
+   *  TTS 재생을 page-anchor 와 함께 schedule. unitPlayer 없을 때는 호출 안 되며
+   *  useWebSocket 이 직접 addSubtitle. */
+  onTranscription?: (params: {
+    original: string
+    translated: string
+    asrMs?: number
+    nmtMs?: number
+    speechStartAt: number
+    sentAt: number
+    pageAtSpeechStart?: number
+  }) => void
+  /** lifecycle event (lecture_end / pause / resume) 도착 시 — ts 와 함께 전달.
+   *  Student.tsx 가 unitPlayer.enqueueLifecycle 로 schedule. */
+  onLifecycle?: (ts: number | undefined, apply: () => void, label: string) => void
+  /** 강사 전용 — 발화가 환각 가드에 차단되면 호출 (UI toast 등). */
+  onAsrBlocked?: (reason: string, preview: string) => void
+  /** 강사 전용 — ASR 큐 포화로 발화 스킵되면 호출 (UI toast 등). */
+  onAsrOverloaded?: (queued: number) => void
 }
 
 export function useWebSocket(url: string, role: Role = 'student', options: UseWebSocketOptions = {}) {
-  const { onCursor, onTranslation, onDraw, onWebRtcOffer, onWebRtcAnswer, onWebRtcIce } = options
+  const { onCursor, onTranslation, onDraw, onWebRtcOffer, onWebRtcAnswer, onWebRtcIce, unitPlayer, onTranscription, onLifecycle, onAsrBlocked, onAsrOverloaded } = options
   const socketRef = useRef<WebSocket | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
@@ -72,6 +100,7 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
   const setLectureTitle = useLectureStore((s) => s.setLectureTitle)
   const setSlideFilename = useLectureStore((s) => s.setSlideFilename)
   const setSessionId = useLectureStore((s) => s.setSessionId)
+  const setAsrStreaming = useLectureStore((s) => s.setAsrStreaming)
   const studentName = useLectureStore((s) => s.studentName)
 
   const lecturerName = usePreferencesStore((s) => s.lecturerName)
@@ -98,6 +127,20 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
   const onWebRtcIceRef = useRef(onWebRtcIce)
   useEffect(() => { onWebRtcIceRef.current = onWebRtcIce }, [onWebRtcIce])
 
+  const onAsrBlockedRef = useRef(onAsrBlocked)
+  useEffect(() => { onAsrBlockedRef.current = onAsrBlocked }, [onAsrBlocked])
+  const onAsrOverloadedRef = useRef(onAsrOverloaded)
+  useEffect(() => { onAsrOverloadedRef.current = onAsrOverloaded }, [onAsrOverloaded])
+
+  // timeline 도 ref 로 — 객체 자체는 매 렌더마다 새로 만들어지지만 안의 enqueue/flush
+  // 메서드는 stable (useCallback). ref 통해 latest 메서드 접근.
+  const unitPlayerRef = useRef(unitPlayer)
+  useEffect(() => { unitPlayerRef.current = unitPlayer }, [unitPlayer])
+  const onTranscriptionRef = useRef(onTranscription)
+  useEffect(() => { onTranscriptionRef.current = onTranscription }, [onTranscription])
+  const onLifecycleRef = useRef(onLifecycle)
+  useEffect(() => { onLifecycleRef.current = onLifecycle }, [onLifecycle])
+
   // 슬라이드 페이지 로드
   const loadSlidePages = useCallback(async (slideId: string) => {
     try {
@@ -122,19 +165,42 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
         if (role === 'student' && !useLectureStore.getState().isLectureStarted) {
           break
         }
-        // 번역 결과 수신
         const outputTime = Date.now()
-        const inputTime = data.sentAt as number | undefined
-        addSubtitle({
-          original: data.original as string,
-          translated: data.translated as string,
+        const inputTime = data.sentAt as number | undefined            // sentence END
+        const speechStartAt = data.speechStartAt as number | undefined  // sentence START
+        const original = data.original as string
+        const translated = data.translated as string
+        const asrMs = data.asrMs as number | undefined
+        const nmtMs = data.nmtMs as number | undefined
+        const pageAtSpeechStart = data.pageAtSpeechStart as number | undefined
+
+        // 학생 + unit player — fixed-delay mirror + page-anchor. addSubtitle 도 audio 도
+        // (speechStartAt + offset + BASE_DELAY) 시점에 schedule. 즉시 호출 X — 그래야
+        // 자막 표시·오디오·시각 events 모두 동일 시간선 위에서 강사 페이스 그대로 mirror.
+        if (role === 'student' && unitPlayerRef.current && onTranscriptionRef.current) {
+          onTranscriptionRef.current({
+            original,
+            translated,
+            asrMs,
+            nmtMs,
+            speechStartAt: speechStartAt ?? inputTime ?? Date.now(),
+            sentAt: inputTime ?? Date.now(),
+            pageAtSpeechStart,
+          })
+          break
+        }
+
+        // 강사 (또는 학생인데 unit player 없는 fallback) — 즉시 addSubtitle.
+        const subtitleId = addSubtitle({
+          original,
+          translated,
           timestamp: outputTime,
           inputTime,
+          asrMs,
+          nmtMs,
         })
-
-        // 번역 텍스트 콜백 (TTS 등 상위에서 처리)
-        if (data.translated) {
-          onTranslationRef.current?.(data.translated as string)
+        if (translated) {
+          onTranslationRef.current?.(translated, subtitleId, inputTime, speechStartAt)
         }
         break
       }
@@ -143,9 +209,17 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
         // 강의자가 슬라이드 선택
         if (role === 'student') {
           const slideId = data.slide_id as string
-          setSlideId(slideId)
-          setSlideStatus('processing')
-          loadSlidePages(slideId)
+          const ts = data.lecturerTimestamp as number | undefined
+          const apply = () => {
+            setSlideId(slideId)
+            setSlideStatus('processing')
+            loadSlidePages(slideId)
+          }
+          if (unitPlayerRef.current && typeof ts === 'number') {
+            unitPlayerRef.current.enqueueVisual(ts, apply, 'slide_select')
+          } else {
+            apply()
+          }
         }
         break
 
@@ -153,12 +227,19 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
         // 페이지 변경 동기화
         if (role === 'student') {
           const page = data.page as number
-          setCurrentPage(page)
+          const ts = data.lecturerTimestamp as number | undefined
+          if (unitPlayerRef.current && typeof ts === 'number') {
+            unitPlayerRef.current.enqueueVisual(ts, () => setCurrentPage(page), 'page_change')
+          } else {
+            setCurrentPage(page)
+          }
         }
         break
 
       case 'lecture_start':
-        // 강의 시작
+        // 강의 시작 — 양측 모두 즉시. 데모/발표 시 강사 클릭과 동시에 학생
+        // 화면이 시작 상태가 돼야 컨트롤 가능. 다른 시각 events 와 달리 delay
+        // 안 함 (시작은 boundary 자체).
         setLectureStarted(true)
         if (role === 'student' && data.slide_id) {
           const slideId = data.slide_id as string
@@ -166,6 +247,8 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
           setSlideStatus('processing')
           loadSlidePages(slideId)
         }
+        // 학생 측 — 이전 강의의 미적용 visual events 폐기 + offset 초기화.
+        if (role === 'student') unitPlayerRef.current?.reset()
         console.log('[WebSocket] 강의 시작')
         break
 
@@ -175,36 +258,85 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
         break
 
       case 'lecture_end':
-        // 강의 종료
-        setLectureStarted(false)
-        setPaused(false)
-        setCurrentScreen(null)
-        // 수강자: 강의 종료 메시지에 포함된 세션 ID 저장
-        if (data.session_id) setSessionId(data.session_id as string)
-        console.log('[WebSocket] 강의 종료')
+        // 강의 종료 — 강사는 즉시. 학생은 visual events 와 동일 offset 으로 schedule.
+        // 마지막 발화/그림이 학생 화면에 다 mirror 된 후 "종료" UI 가 N초 늦게 적용.
+        if (role === 'lecturer') {
+          setLectureStarted(false)
+          setPaused(false)
+          setCurrentScreen(null)
+          if (data.session_id) setSessionId(data.session_id as string)
+          console.log('[WebSocket] 강의 종료')
+        } else {
+          const sessionId = data.session_id as string | undefined
+          const ts = data.lecturerTimestamp as number | undefined
+          const apply = () => {
+            setLectureStarted(false)
+            setPaused(false)
+            setCurrentScreen(null)
+            if (sessionId) setSessionId(sessionId)
+            console.log('[WebSocket] 강의 종료')
+          }
+          if (unitPlayerRef.current && onLifecycleRef.current) {
+            onLifecycleRef.current(ts, apply, 'lecture_end')
+          } else {
+            apply()
+          }
+        }
         break
 
       case 'lecture_pause':
-        // 강의 일시정지
-        setPaused(true)
-        console.log('[WebSocket] 강의 일시정지')
+        if (role === 'lecturer') {
+          setPaused(true)
+          console.log('[WebSocket] 강의 일시정지')
+        } else {
+          const ts = data.lecturerTimestamp as number | undefined
+          const apply = () => {
+            setPaused(true)
+            console.log('[WebSocket] 강의 일시정지')
+          }
+          if (unitPlayerRef.current && onLifecycleRef.current) {
+            onLifecycleRef.current(ts, apply, 'lecture_pause')
+          } else {
+            apply()
+          }
+        }
         break
 
       case 'lecture_resume':
-        // 강의 재개
-        setPaused(false)
-        console.log('[WebSocket] 강의 재개')
+        if (role === 'lecturer') {
+          setPaused(false)
+          console.log('[WebSocket] 강의 재개')
+        } else {
+          const ts = data.lecturerTimestamp as number | undefined
+          const apply = () => {
+            setPaused(false)
+            console.log('[WebSocket] 강의 재개')
+          }
+          if (unitPlayerRef.current && onLifecycleRef.current) {
+            onLifecycleRef.current(ts, apply, 'lecture_resume')
+          } else {
+            apply()
+          }
+        }
         break
 
       case 'presentation_mode':
         // 발표 모드 변경
         if (role === 'student') {
           const mode = data.mode as 'slide' | 'screen'
-          setPresentationMode(mode)
-          if (mode === 'slide') {
-            setCurrentScreen(null)
+          const ts = data.lecturerTimestamp as number | undefined
+          const apply = () => {
+            setPresentationMode(mode)
+            if (mode === 'slide') {
+              setCurrentScreen(null)
+            }
+            console.log('[WebSocket] 발표 모드 변경:', mode)
           }
-          console.log('[WebSocket] 발표 모드 변경:', mode)
+          if (unitPlayerRef.current && typeof ts === 'number') {
+            unitPlayerRef.current.enqueueVisual(ts, apply, 'presentation_mode')
+          } else {
+            apply()
+          }
         }
         break
 
@@ -280,19 +412,35 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
         break
 
       case 'registered':
-        // 역할 등록 확인
-        console.log('[WebSocket] 역할 등록 완료:', data.role)
+        // 역할 등록 확인. backend 의 ASR_STREAMING flag 도 함께 수신.
+        console.log('[WebSocket] 역할 등록 완료:', data.role, 'asr_streaming:', data.asr_streaming)
+        if (typeof data.asr_streaming === 'boolean') {
+          setAsrStreaming(data.asr_streaming)
+        }
         break
 
       case 'cursor':
-        // 강의자 커서 상태 수신 (수강자 전용, callback으로 DOM 직접 업데이트)
-        if (role === 'student' && onCursorRef.current) {
-          onCursorRef.current({
+        // 강의자 커서 상태 수신 (수강자 전용, callback으로 DOM 직접 업데이트).
+        // page-anchor: 메시지에 page 가 있으면 apply 시점에 setCurrentPage 먼저 호출 →
+        // cursor 가 강사 발생 페이지 위에서 보이도록 강한 보장.
+        if (role === 'student') {
+          const cursor: CursorMessage = {
             x: data.x as number,
             y: data.y as number,
             visible: data.visible as boolean,
             color: data.color as string,
-          })
+          }
+          const ts = data.lecturerTimestamp as number | undefined
+          const page = data.page as number | undefined
+          const apply = () => {
+            if (typeof page === 'number') setCurrentPage(page)
+            onCursorRef.current?.(cursor)
+          }
+          if (unitPlayerRef.current && typeof ts === 'number') {
+            unitPlayerRef.current.enqueueVisual(ts, apply, 'cursor')
+          } else {
+            apply()
+          }
         }
         break
 
@@ -301,16 +449,70 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
       case 'draw_end':
       case 'draw_erase':
       case 'draw_clear':
-        // 강의자 필기 이벤트 수신 (수강자 전용, callback으로 캔버스 직접 업데이트)
-        if (role === 'student' && onDrawRef.current) {
-          onDrawRef.current(data as unknown as DrawMessage)
+        // 강의자 필기 이벤트 수신 (수강자 전용, callback으로 캔버스 직접 업데이트).
+        // page-anchor: draw_begin / draw_erase / draw_clear 는 page 필드 보유 →
+        // apply 시 setCurrentPage 먼저. draw_point / draw_end 는 stroke id 로 묶이므로
+        // page 없음 (begin 의 페이지로 자동 라우팅).
+        if (role === 'student') {
+          const draw = data as unknown as DrawMessage
+          const ts = data.lecturerTimestamp as number | undefined
+          const page = (data as { page?: number }).page
+          const apply = () => {
+            if (typeof page === 'number') setCurrentPage(page)
+            onDrawRef.current?.(draw)
+          }
+          if (unitPlayerRef.current && typeof ts === 'number') {
+            unitPlayerRef.current.enqueueVisual(ts, apply, data.type as string)
+          } else {
+            apply()
+          }
+        }
+        break
+
+      case 'drawings_replay':
+        // 신규 입장 학생 — backend 가 보낸 페이지별 누적 필기 일괄 적용.
+        // timeline 우회 (즉시 apply) — 과거 events 라 sync 시간선 의미 없음.
+        // DrawingCanvas 의 receiveDraw 가 page 필드 보고 알맞은 페이지 buffer 에 적재.
+        // → 페이지 전환 시 그 페이지 그림이 자동으로 재현됨.
+        if (role === 'student') {
+          const events = data.events as unknown as DrawMessage[] | undefined
+          if (Array.isArray(events)) {
+            console.log(`[WebSocket] 신규 입장 — 누적 필기 ${events.length}건 replay`)
+            for (const ev of events) {
+              try {
+                onDrawRef.current?.(ev)
+              } catch (err) {
+                console.error('[WebSocket] drawings_replay 적용 오류:', err)
+              }
+            }
+          }
+        }
+        break
+
+      case 'asr_blocked':
+        // 환각 가드 차단 — 강사 측에 알림. 정상 발화가 잘못 차단됐을 수 있어
+        // 사용자가 인지하고 다시 말할 수 있게.
+        if (role === 'lecturer') {
+          const reason = (data.reason as string) || '알 수 없음'
+          const preview = (data.preview as string) || ''
+          onAsrBlockedRef.current?.(reason, preview)
+          console.warn('[WebSocket] ASR 차단:', reason, preview)
+        }
+        break
+
+      case 'asr_overloaded':
+        // ASR 큐 포화 — 강사 측에 알림. 발화가 시스템에 도달 못 했음.
+        if (role === 'lecturer') {
+          const queued = (data.queued as number) || 0
+          onAsrOverloadedRef.current?.(queued)
+          console.warn('[WebSocket] ASR 큐 포화:', queued)
         }
         break
 
       default:
         console.log('[WebSocket] 알 수 없는 메시지:', data.type)
     }
-  }, [role, addSubtitle, setSlideId, setSlideStatus, setCurrentPage, setLectureStarted, setPaused, setPresentationMode, setCurrentScreen, setStudentCount, addChatMessage, setParticipants, setLectureTitle, setSessionId, loadSlidePages])
+  }, [role, addSubtitle, setSlideId, setSlideStatus, setCurrentPage, setLectureStarted, setPaused, setPresentationMode, setCurrentScreen, setStudentCount, addChatMessage, setParticipants, setLectureTitle, setSessionId, setAsrStreaming, loadSlidePages])
 
   // handleMessage를 ref로 분리 → connect의 deps에서 제거해 어떤 selector 흔들림에도 socket이 재생성되지 않게 한다.
   const handleMessageRef = useRef(handleMessage)
@@ -318,11 +520,17 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
 
   const send = useCallback((data: object) => {
     if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify(data))
+      // 강사측 outgoing 에 lecturerTimestamp 자동 부착 — 학생측 timeline scheduler 가
+      // visual event 와 TTS 진도 매칭하는 데 사용. 학생이 보내는 메시지 (chat / rename
+      // / pong 등) 는 sync 와 무관해 부착 안 함.
+      const enriched = role === 'lecturer'
+        ? { ...data, lecturerTimestamp: Date.now() }
+        : data
+      socketRef.current.send(JSON.stringify(enriched))
     } else {
       console.warn('[WebSocket] 연결되지 않음')
     }
-  }, [])
+  }, [role])
 
   // 화면 공유 등 대용량 송신 시 백프레셔 판단용
   const getBufferedAmount = useCallback(() => {

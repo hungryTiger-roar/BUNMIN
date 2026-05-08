@@ -139,6 +139,7 @@ function Lecturer() {
   const lectureTitle = useLectureStore((s) => s.lectureTitle)
   const slideFilename = useLectureStore((s) => s.slideFilename)
   const sessionId = useLectureStore((s) => s.sessionId)
+  const asrStreaming = useLectureStore((s) => s.asrStreaming)
   const setLectureTitle = useLectureStore((s) => s.setLectureTitle)
   const setMicOn = useLectureStore((s) => s.setMicOn)
   const setLectureStarted = useLectureStore((s) => s.setLectureStarted)
@@ -199,12 +200,34 @@ function Lecturer() {
     send({ type: 'audio', audio: base64, sample_rate: 16000, sentAt: Date.now() })
   }, [send, isPaused])
 
+  // streaming 모드 — VAD 가 'speaking' 상태일 때만 200ms PCM frame 이 도착함.
+  // worklet → ArrayBuffer.byteLength = 6400 (3200 samples * 2 bytes).
+  const handleAudioFrame = useCallback((pcm: Int16Array, sentAt: number) => {
+    if (isPaused) return
+    // Int16Array → base64. Uint8Array view 로 byte-level 인코딩.
+    const bytes = new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)
+    let binary = ''
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+    const base64 = btoa(binary)
+    send({ type: 'audio_frame', pcm: base64, sample_rate: 16000, sentAt })
+  }, [send, isPaused])
+
+  const handleSpeechEndFlush = useCallback(() => {
+    if (isPaused) return
+    send({ type: 'audio_frame_flush', sentAt: Date.now() })
+  }, [send, isPaused])
+
   const {
     startCapture: startAudioCapture,
     stopCapture: stopAudioCapture,
     analyserRef,
     setGain,
-  } = useAudioCapture({ onAudioData: handleAudioData })
+  } = useAudioCapture({
+    onAudioData: handleAudioData,
+    streamingMode: asrStreaming,
+    onAudioFrame: handleAudioFrame,
+    onSpeechEndFlush: handleSpeechEndFlush,
+  })
 
   const [micGainPct, setMicGainPct] = useState(100)
 
@@ -388,12 +411,15 @@ function Lecturer() {
   }, [presentationMode, slideStatus])
 
   // 커서 위치 추적 + WebSocket 전송 (슬라이드 영역 기준 상대좌표)
+  // page: 학생측 page-anchor 용 — 강사가 그 시점 어느 페이지에서 커서 움직였는지 기록.
+  // useLectureStore.getState() 로 inline read (deps 추가 시 page 마다 effect 재구성 방지).
   useEffect(() => {
+    const getPage = () => useLectureStore.getState().currentPage
     if (!spotlightEnabled) {
       setCursorPos(null)
       // 스팟라이트 OFF 시 한 번만 visible:false 전송
       if (isConnected && isLectureStarted) {
-        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor })
+        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor, page: getPage() })
       }
       return
     }
@@ -471,7 +497,7 @@ function Lecturer() {
       setCursorPos(null)
       // 즉시 visible:false 전송
       if (isConnected && isLectureStarted) {
-        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor })
+        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor, page: getPage() })
       }
     }
 
@@ -482,9 +508,9 @@ function Lecturer() {
         lastSendTime = now
         if (isInsideSlide) {
           // 슬라이드 기준 상대좌표 전송
-          send({ type: 'cursor', x: currentX, y: currentY, visible: true, color: spotlightColor })
+          send({ type: 'cursor', x: currentX, y: currentY, visible: true, color: spotlightColor, page: getPage() })
         } else {
-          send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor })
+          send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor, page: getPage() })
         }
       }
       rafId = requestAnimationFrame(tick)
@@ -500,7 +526,7 @@ function Lecturer() {
       cancelAnimationFrame(rafId)
       // cleanup 시 visible:false 전송
       if (isConnected && isLectureStarted) {
-        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor })
+        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor, page: getPage() })
       }
     }
   }, [spotlightEnabled, spotlightColor, isConnected, isLectureStarted, send])
@@ -658,8 +684,9 @@ function Lecturer() {
   ) : null
 
   // 슬라이드 박스 내부 하단 컨트롤 바 (CC / 설정 / 전체화면)
+  // z-40 — DrawingCanvas (z-30) 위에 두어 필기 모드 활성 시에도 버튼 클릭 가로채이지 않게.
   const bottomControlBar = (
-    <div className={`absolute left-3 right-3 bottom-3 z-30 flex items-center justify-end gap-2 transition-opacity duration-200 ${
+    <div className={`absolute left-3 right-3 bottom-3 z-40 flex items-center justify-end gap-2 transition-opacity duration-200 ${
       settingsPanel !== null
         ? 'opacity-100 pointer-events-auto'
         : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
@@ -1174,14 +1201,14 @@ function Lecturer() {
                       />
                       <button
                         onClick={stopScreenCapture}
-                        className="absolute top-3 right-3 z-30 flex items-center gap-2 px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors text-sm font-medium shadow-lg"
+                        className="absolute top-3 right-3 z-40 flex items-center gap-2 px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors text-sm font-medium shadow-lg"
                       >
                         <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
                         공유 중지
                       </button>
                     </>
                   ) : (
-                    <div className="text-center text-white/70">
+                    <div className="relative z-40 text-center text-white/70">
                       <svg className="w-16 h-16 mx-auto mb-3 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                       </svg>
