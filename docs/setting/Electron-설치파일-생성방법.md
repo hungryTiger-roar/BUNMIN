@@ -241,20 +241,43 @@ VLM 동봉본 만들려면 electron:build 뒤에 `cp -r models/qwen2.5-vl-7b-ins
    - `C:\Program Files\Aunion AI\` 폴더 잔여 시 수동 삭제
 3. **HF cache 정리 권장**: admin 프로세스로 받은 cache 안에 symlink이 박혀 있어 새 per-user(asInvoker) 프로세스가 traverse 거부 → WinError 448. `%LOCALAPPDATA%\Aunion AI\cache\` 통째로 삭제 후 새 설치본 첫 실행 시 재다운로드.
 
-### HF Hub symlink 차단 ([backend/run.py](../../backend/run.py))
+### HF Hub symlink → copy 대체 ([backend/run.py](../../backend/run.py))
 
 Windows에서는 HF Hub이 cache `snapshots/<commit>/file` 위치에 **symlink** 을 만들어 `blobs/<hash>` 를 가리키게 함 (디스크 절약 목적). 그러나 새 Windows 보안 정책이 사용자 프로세스가 만든 symlink을 "untrusted mount point"로 판정해 다른 프로세스가 traverse 하려 하면 **WinError 448** 로 막힘.
 
-해결: `backend/run.py` 최상단에서 `os.symlink` 을 OSError 던지게 가로챔 → HF Hub이 `shutil.copyfile` 로 자동 폴백.
+해결: `backend/run.py` 최상단에서 `os.symlink` 자체를 `shutil.copyfile` 로 대체. HF Hub 입장에선 symlink 성공으로 보이지만 실제로는 reparse point 대신 일반 파일 복사본이 생성됨.
 
 ```python
 if sys.platform == "win32":
-    def _disabled_symlink(*_args, **_kwargs):
-        raise OSError(1314, "symlinks disabled to avoid WinError 448 (untrusted mount point)")
-    os.symlink = _disabled_symlink
+    import shutil as _shutil
+
+    def _symlink_as_copy(src, dst, target_is_directory=False, *, dir_fd=None):
+        src_str = os.fspath(src)
+        dst_str = os.fspath(dst)
+        # symlink 의 src 는 보통 dst 디렉토리 기준 상대경로 — resolve
+        if not os.path.isabs(src_str):
+            resolved_src = os.path.normpath(os.path.join(os.path.dirname(dst_str), src_str))
+        else:
+            resolved_src = src_str
+        if target_is_directory:
+            return
+        _shutil.copyfile(resolved_src, dst_str)
+
+    os.symlink = _symlink_as_copy
 ```
 
-> **트레이드오프**: snapshots/ 가 blobs/ 의 *복사본*이 되므로 디스크 사용량 ~2배 (VLM 14GB → 28GB). per-user 설치 안정성을 위한 비용.
+> **이전 시도 (deprecated)**: `os.symlink` 을 `OSError` 던지게 해서 HF Hub의 `shutil.copyfile` fallback 을 유도했는데, **xet 다운로드 경로** 또는 `new_blob=False` 인 재호출 등에서는 fallback 자체가 없어 `OSError` 가 그대로 전파돼 다운로드 실패. 직접 copy 로 대체하는 현재 방식이 안전.
+
+> **트레이드오프**: blobs/ 와 snapshots/ 양쪽에 동일 콘텐츠가 들어가 디스크 사용량 ~2배 (VLM 14GB → ~28GB). per-user 설치 안정성을 위한 비용.
+
+### VLM 다운로드 진행률 측정 ([backend/app/main.py](../../backend/app/main.py))
+
+`_measure_dir_size` 가 위 symlink → copy 대체와 함께 동작하도록 두 가지 보강:
+
+1. **`max(blobs/, snapshots/)`**: HF Hub 의 두 가지 layout 을 모두 다룸. symlink 가능 환경에선 blobs/ 에 실제 파일, symlink 차단 환경에선 snapshots/ 에 파일이 들어감. 어느 쪽이든 큰 값을 취하면 정확.
+2. **단조 증가 clamp** (in `_start_byte_progress_watcher`): atomic move/rename 순간이나 partial 삭제 후 재시작으로 측정값이 일시 감소해도 UI 가 뒤로 가지 않게 직전 값으로 clamp.
+
+이전 구현은 `blobs/` 직속만 non-recursive 합산이라 symlink 차단 환경에선 항상 0 GB 로 측정 → 진행률이 7GB → 2GB 같은 부정확한 표시가 났음.
 
 ---
 
@@ -389,7 +412,7 @@ per-user(asInvoker) 프로세스가 cache 안 symlink을 traverse 하려 하면 
 1. **이전 admin 빌드의 cache 잔재**: admin 프로세스가 만든 symlink을 새 per-user 앱이 못 읽음
 2. **Dev Mode 등으로 symlink 생성이 가능한 환경**: 매 다운로드마다 재현
 
-영구 fix: [backend/run.py](../../backend/run.py) 최상단에서 `os.symlink` 차단 → HF Hub이 `shutil.copyfile` 폴백 (위 "설치 위치 및 권한 → HF Hub symlink 차단" 섹션 참고).
+영구 fix: [backend/run.py](../../backend/run.py) 최상단에서 `os.symlink` 자체를 `shutil.copyfile` 로 대체 (위 "설치 위치 및 권한 → HF Hub symlink → copy 대체" 섹션 참고).
 
 이미 손상된 cache를 가진 사용자는 `%LOCALAPPDATA%\Aunion AI\cache\` 통째로 삭제 후 앱 재실행 → 자동 재다운로드.
 
