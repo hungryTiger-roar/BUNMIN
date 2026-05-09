@@ -105,6 +105,13 @@ def _validate_asr_text(text: str) -> tuple[bool, str]:
     if _HALLUCINATION_PATTERNS.search(text):
         return False, f"환각 정형구 매칭 (sentence-level): {text[:50]!r}"
 
+    # 단독 "감사합니다" 차단 — Whisper 가 침묵/노이즈에서 자주 토하는 outro 정형구.
+    # silence-cascade (no_speech_prob 임계) 에 걸리지 않는 케이스에서도 새는 걸 차단.
+    # 강사가 강의 마지막 1회 진짜로 말하는 경우도 막히지만 (false positive),
+    # 수강자에게 "Thank you" / "감사합니다" 만 단독 출력되는 것보다 그게 낫다는 판단.
+    if re.match(r"^\s*감사합니다[\s\.\!\?…]*$", text):
+        return False, f"단독 인사 환각 (Korean): '{text}'"
+
     return True, ""
 
 
