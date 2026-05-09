@@ -64,13 +64,21 @@ async def start_download():
             "current_status": _model_status["status"],
         }
 
-    # 안전장치 — 디스크 부족 시 다운로드 시작 거부
+    # 안전장치 — 디스크 부족/측정 실패 모두 다운로드 시작 거부.
+    # disk_check 와 동일한 fail-closed 정책. 측정 자체가 실패하는 상황은 디스크/파일시스템에
+    # 진짜 문제가 있다는 신호이므로 사용자에게 명시적으로 알리고 차단.
     target = _cache_drive_path()
     try:
         usage = shutil.disk_usage(target)
         free_gb = usage.free / (1024 ** 3)
-    except OSError:
-        free_gb = float("inf")  # 측정 실패 시 통과시킴 (보수적)
+    except OSError as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "disk_check_failed",
+                "message": f"디스크 정보 조회 실패: {e}",
+            },
+        )
     if free_gb < REQUIRED_GB:
         raise HTTPException(
             status_code=400,

@@ -70,18 +70,24 @@ function Install() {
   const [errorMsg, setErrorMsg] = useState<string>('')
   const [starting, setStarting] = useState(false)
   const [disk, setDisk] = useState<DiskCheck | null>(null)
+  const [diskError, setDiskError] = useState<string | null>(null)
   const pollTimerRef = useRef<number | null>(null)
 
   // disk-check 는 마법사 띄울 때 한 번만 — 다운로드 중엔 의미 없음
   useEffect(() => {
     let cancelled = false
     fetch(`${API_BASE}/api/install/disk-check`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data: DiskCheck | null) => {
-        if (!cancelled && data) setDisk(data)
+      .then(async (r) => {
+        if (cancelled) return
+        if (!r.ok) {
+          setDiskError(`HTTP ${r.status}`)
+          return
+        }
+        const data: DiskCheck = await r.json()
+        if (!cancelled) setDisk(data)
       })
-      .catch(() => {
-        // disk-check 실패해도 다운로드는 시도 가능 (백엔드 측에서 안전 차단)
+      .catch((e) => {
+        if (!cancelled) setDiskError(e instanceof Error ? e.message : String(e))
       })
     return () => {
       cancelled = true
@@ -167,7 +173,12 @@ function Install() {
     <div className="min-h-screen bg-stone-100 flex items-center justify-center p-6 antialiased">
       <Card>
         {phase === 'intro' && (
-          <IntroPanel onStart={handleStartDownload} starting={starting} disk={disk} />
+          <IntroPanel
+            onStart={handleStartDownload}
+            starting={starting}
+            disk={disk}
+            diskError={diskError}
+          />
         )}
         {phase === 'downloading' && (
           <DownloadPanel download={download} onCancel={handleCancel} />
@@ -224,14 +235,20 @@ function IntroPanel({
   onStart,
   starting,
   disk,
+  diskError,
 }: {
   onStart: () => void
   starting: boolean
   disk: DiskCheck | null
+  diskError: string | null
 }) {
-  // disk == null: 아직 체크 응답 안 옴 (or 실패) — 버튼은 일단 활성, 백엔드가 안전 차단
-  // disk.ok == false: 부족 — 버튼 disable
+  // 세 상태:
+  //   diskError != null      → 체크 실패 — 다운로드 차단
+  //   disk != null && !disk.ok → 디스크 부족 — 다운로드 차단
+  //   disk == null && diskError == null → 아직 응답 대기 — 버튼은 일단 활성
   const diskInsufficient = disk !== null && !disk.ok
+  const diskCheckFailed = diskError !== null
+  const blockDownload = diskInsufficient || diskCheckFailed
 
   return (
     <>
@@ -269,12 +286,35 @@ function IntroPanel({
           <Meta
             icon={<IconDisk />}
             label="필요 공간"
-            value={disk ? `${disk.required_gb.toFixed(0)} GB` : '확인 중'}
+            value={
+              disk
+                ? `${disk.required_gb.toFixed(0)} GB`
+                : diskCheckFailed
+                ? '확인 실패'
+                : '확인 중'
+            }
           />
         </div>
 
-        {/* 디스크 사용량 표시 */}
-        {disk && (
+        {/* 디스크 체크 실패 (백엔드/네트워크 문제) */}
+        {diskCheckFailed && (
+          <div className="mt-4 px-4 py-3 rounded-lg border bg-red-50 border-red-200 text-red-700 text-[13px] flex items-start gap-3">
+            <svg className="w-4 h-4 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div className="flex-1 min-w-0">
+              <div className="font-medium">디스크 정보 확인 실패</div>
+              <div className="text-[11.5px] mt-0.5 opacity-80">{diskError}</div>
+              <div className="text-[11.5px] mt-1.5 leading-relaxed opacity-90">
+                백엔드와 통신 중 오류가 발생했습니다. 잠시 후 앱을 재시작해 주세요. 문제가 계속되면 관리자에게 문의해 주세요.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 디스크 사용량 표시 (성공 시) */}
+        {disk && !diskCheckFailed && (
           <div
             className={`mt-4 px-4 py-3 rounded-lg border text-[13px] flex items-start gap-3 ${
               diskInsufficient
@@ -317,11 +357,13 @@ function IntroPanel({
         <button
           type="button"
           onClick={onStart}
-          disabled={starting || diskInsufficient}
+          disabled={starting || blockDownload}
           className="px-7 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 disabled:bg-stone-300 disabled:cursor-not-allowed transition-colors text-white text-sm font-medium shadow-sm"
         >
           {starting
             ? '시작 중...'
+            : diskCheckFailed
+            ? '확인 실패'
             : diskInsufficient
             ? '디스크 부족'
             : '다운로드 시작'}
