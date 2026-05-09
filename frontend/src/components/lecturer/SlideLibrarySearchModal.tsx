@@ -9,6 +9,7 @@ interface Props {
   onClose: () => void
   /** 모달 안에서 강의자료를 삭제했을 때 부모 라이브러리 목록도 동기화 */
   onDeleted?: (slideIds: string[]) => void
+  className?: string
 }
 
 const SORT_LABELS: Record<SortOrder, string> = {
@@ -42,7 +43,7 @@ function formatFileSize(bytes?: number): string {
   return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`
 }
 
-export default function SlideLibrarySearchModal({ items, onClose, onDeleted }: Props) {
+export default function SlideLibrarySearchModal({ items, onClose, onDeleted, className }: Props) {
   const [query, setQuery] = useState('')
   const [sortOrder, setSortOrder] = useState<SortOrder>('recent')
   const [selectedId, setSelectedId] = useState<string | null>(items[0]?.slide_id ?? null)
@@ -173,7 +174,7 @@ export default function SlideLibrarySearchModal({ items, onClose, onDeleted }: P
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+      className={`fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 ${className ?? ''}`}
       onClick={onClose}
     >
       <div

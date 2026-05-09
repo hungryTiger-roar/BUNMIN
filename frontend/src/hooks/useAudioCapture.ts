@@ -14,6 +14,7 @@ interface UseAudioCaptureOptions {
 export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
   const [isCapturing, setIsCapturing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [micStream, setMicStream] = useState<MediaStream | null>(null)
   const vadRef = useRef<any>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
@@ -122,6 +123,7 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
       })
 
       streamRef.current = stream
+      setMicStream(stream)
 
       // Web Audio API 설정
       const audioContext = new AudioContext({ sampleRate: 16000 })
@@ -181,6 +183,7 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
     vadRef.current?.destroy()
     vadRef.current = null
     setIsCapturing(false)
+    setMicStream(null)
     console.log('[AudioCapture] 캡처 중지')
   }, [])
 
@@ -201,6 +204,7 @@ export function useAudioCapture({ onAudioData }: UseAudioCaptureOptions) {
   return {
     isCapturing,
     error,
+    micStream,
     startCapture,
     stopCapture,
     analyserRef,

@@ -25,13 +25,21 @@ const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
   { value: 'ru', label: '러시아어 (Русский)' },
 ]
 
-const AUDIO_LANG_OPTIONS = LANG_OPTIONS.filter((o) => o.value !== 'ko')
+const AUDIO_LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
+  { value: 'off', label: 'Off' },
+  { value: 'original', label: '원본 (Original)' },
+  { value: 'en', label: '영어 (English)' },
+  { value: 'de', label: '독일어 (Deutsch)' },
+  { value: 'es', label: '스페인어 (Español)' },
+  { value: 'ru', label: '러시아어 (Русский)' },
+]
 const SUBTITLE_LANG_OPTIONS = LANG_OPTIONS
 
 const STYLE_LABEL: Record<SubtitleStyle, string> = {
   plain: 'Plain',
   outline: 'Outline',
   glow: 'Glow',
+  background: 'Background',
 }
 
 const ASPECT_OPTIONS: { value: AspectRatio; label: string; className: string }[] = [
@@ -78,7 +86,7 @@ function subtitleStyleToCss(style: SubtitleStyle): CSSProperties {
         ].join(', '),
       }
     default:
-      return {}
+      return { color: 'black' }
   }
 }
 
@@ -128,8 +136,8 @@ function Student() {
     toggleTheme,
   } = usePreferencesStore()
 
-  // TTS — Student 전용, audioLang 변경 시 엔진 재생성
-  const { synthesize, unlockAudio: unlockTTS, status: ttsStatus, setVolume: setTTSVolume } = useTTS(true, audioLang)
+  // TTS — Student 전용, audioLang 변경 시 엔진 재생성 (original 선택 시 off로 대체해 엔진 초기화 생략)
+  const { synthesize, unlockAudio: unlockTTS, status: ttsStatus, setVolume: setTTSVolume } = useTTS(true, audioLang === 'original' ? 'off' : audioLang)
 
   const synthesizeRef = useRef(synthesize)
   synthesizeRef.current = synthesize
@@ -143,6 +151,8 @@ function Student() {
   // (autoEnter / sessionStorage 경로는 비동기라 첫 렌더 시점엔 결과 모름)
   const [autoUnlockSettled, setAutoUnlockSettled] = useState(false)
 
+  const originalAudioRef = useRef<HTMLAudioElement>(null)
+
   const unlockAudio = useCallback(async () => {
     const ok = await unlockTTS()
     if (!ok) {
@@ -152,11 +162,12 @@ function Student() {
     }
     isAudioUnlockedRef.current = true
     setIsAudioUnlocked(true)
-    console.log('[Audio] 재생 잠금 해제됨 (WASM TTS)')
+    originalAudioRef.current?.play().catch(() => {})
+    console.log('[Audio] 재생 잠금 해제됨')
   }, [unlockTTS])
 
   const onTranslation = useCallback((text: string) => {
-    if (isAudioUnlockedRef.current) {
+    if (isAudioUnlockedRef.current && audioLangRef.current !== 'original') {
       synthesizeRef.current(text, audioLangRef.current)
     }
   }, [])
@@ -188,10 +199,18 @@ function Student() {
     })
     peerConnectionRef.current = pc
     pc.ontrack = (e) => {
-      const stream = e.streams[0]
-      pendingStreamRef.current = stream
-      if (screenVideoRef.current) {
-        screenVideoRef.current.srcObject = stream
+      if (e.track.kind === 'video') {
+        const stream = e.streams[0]
+        pendingStreamRef.current = stream
+        if (screenVideoRef.current) {
+          screenVideoRef.current.srcObject = stream
+        }
+      } else if (e.track.kind === 'audio') {
+        const audioStream = new MediaStream([e.track])
+        if (originalAudioRef.current) {
+          originalAudioRef.current.srcObject = audioStream
+          originalAudioRef.current.muted = audioLangRef.current !== 'original'
+        }
       }
     }
     pc.onicecandidate = (e) => {
@@ -466,6 +485,14 @@ function Student() {
     setTTSVolume(volume, isMuted)
   }, [volume, isMuted, setTTSVolume])
 
+  // audioLang/volume/muted → 원본 오디오 엘리먼트 동기화
+  useEffect(() => {
+    const audio = originalAudioRef.current
+    if (!audio) return
+    audio.muted = audioLang !== 'original' || isMuted
+    audio.volume = volume / 100
+  }, [audioLang, volume, isMuted])
+
   useEffect(() => {
     chatScrollRef.current?.scrollTo({
       top: chatScrollRef.current.scrollHeight,
@@ -519,6 +546,9 @@ function Student() {
     <div
       className="h-screen overflow-hidden flex flex-col bg-background text-onBackground"
     >
+      {/* 원본 오디오 — audioLang=original 일 때만 언뮤트, 평소엔 muted */}
+      <audio ref={originalAudioRef} autoPlay muted playsInline style={{ display: 'none' }} />
+
       {/* 음성 활성화 오버레이 — 새로고침 / 직접 URL 진입 시 user gesture 확보 용도.
           브라우저 autoplay 정책상 사용자 클릭 없이 AudioContext.resume() 통과 불가 →
           명확한 버튼으로 학생이 의식적으로 음성을 켜게 함. /start 경유 시 autoEnter
@@ -827,28 +857,42 @@ function Student() {
             )}
 
             {/* 자막 오버레이 */}
-            {ccEnabled && (primaryText || secondaryText) && (
-              <div
-                className={`absolute left-1/2 -translate-x-1/2 max-w-[90%] px-4 text-center text-white pointer-events-none z-10 ${
-                  subtitleSettings.position === 'top' ? 'top-6' : 'bottom-20'
-                }`}
-                style={{
-                  fontSize: `${subtitleSettings.fontSize}px`,
-                  opacity: subtitleSettings.opacity,
-                  ...subtitleStyleToCss(subtitleSettings.style),
-                }}
-              >
-                {primaryText && <p className="font-medium leading-snug">{primaryText}</p>}
-                {secondaryText && (
-                  <p
-                    className="mt-1 leading-snug opacity-80"
-                    style={{ fontSize: `${Math.max(12, subtitleSettings.fontSize - 4)}px` }}
-                  >
-                    {secondaryText}
-                  </p>
-                )}
-              </div>
-            )}
+            {ccEnabled && (primaryText || secondaryText) && (() => {
+              const isBg = subtitleSettings.style === 'background'
+              const textShadowIfNotBg = isBg ? {} : subtitleStyleToCss(subtitleSettings.style)
+              const bgSpanStyle = isBg ? {
+                backgroundColor: `rgba(8,8,8,${subtitleSettings.subtitleBgOpacity ?? 0.75})`,
+                padding: '0 8px',
+                WebkitBoxDecorationBreak: 'clone',
+                boxDecorationBreak: 'clone',
+              } as CSSProperties : {} as CSSProperties
+              return (
+                <div
+                  className={`absolute left-1/2 -translate-x-1/2 max-w-[90%] text-center text-white pointer-events-none z-10 ${
+                    subtitleSettings.position === 'top' ? 'top-6' : 'bottom-20'
+                  } px-4`}
+                  style={{
+                    fontSize: `${subtitleSettings.fontSize}px`,
+                    opacity: subtitleSettings.opacity,
+                    ...textShadowIfNotBg,
+                  }}
+                >
+                  {primaryText && (
+                    <p className="font-medium leading-snug">
+                      <span style={bgSpanStyle}>{primaryText}</span>
+                    </p>
+                  )}
+                  {secondaryText && (
+                    <p
+                      className="mt-1 leading-snug"
+                      style={{ fontSize: `${Math.max(12, subtitleSettings.fontSize - 4)}px`, ...(isBg ? {} : { opacity: 0.8 }) }}
+                    >
+                      <span style={bgSpanStyle}>{secondaryText}</span>
+                    </p>
+                  )}
+                </div>
+              )
+            })()}
 
             {/* 화면 내부 하단 컨트롤 바 — 마우스 올렸을 때만 표시 (설정 열려있으면 항상 표시) */}
             <div className={`absolute left-3 right-3 bottom-3 z-30 flex items-center gap-2 transition-opacity duration-200 ${
@@ -989,13 +1033,13 @@ function Student() {
 
                       <div className="h-px bg-white/10" />
 
-                      {/* 글자 크기 */}
+                      {/* 자막 크기 */}
                       <button
                         type="button"
                         onClick={() => setSettingsPanel('fontSize')}
                         className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/10 transition-colors"
                       >
-                        <span>Font Size</span>
+                        <span>Subtitle Font Size</span>
                         <div className="flex items-center gap-2 text-white/60">
                           <span className="text-sm">{subtitleSettings.fontSize}px</span>
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1012,7 +1056,7 @@ function Student() {
                         onClick={() => setSettingsPanel('style')}
                         className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/10 transition-colors"
                       >
-                        <span>Style</span>
+                        <span>Subtitle Style</span>
                         <div className="flex items-center gap-2 text-white/60">
                           <span className="text-sm">{STYLE_LABEL[subtitleSettings.style]}</span>
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1104,7 +1148,7 @@ function Student() {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                           </svg>
                         </button>
-                        <span className="font-medium">Font Size</span>
+                        <span className="font-medium">Subtitle Font Size</span>
                       </div>
                       <div className="px-4 py-4">
                         <div className="flex justify-end items-center mb-3">
@@ -1137,19 +1181,36 @@ function Student() {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                           </svg>
                         </button>
-                        <span className="font-medium">Style</span>
+                        <span className="font-medium">Subtitle Style</span>
                       </div>
                       {(Object.keys(STYLE_LABEL) as SubtitleStyle[]).map((s) => (
                         <button
                           key={s}
                           type="button"
-                          onClick={() => { setSubtitleSettings({ style: s }); setSettingsPanel('main') }}
+                          onClick={() => setSubtitleSettings({ style: s })}
                           className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/10 transition-colors"
                         >
                           <span className={`w-4 text-sm ${subtitleSettings.style === s ? 'opacity-100' : 'opacity-0'}`}>✓</span>
                           <span className={subtitleSettings.style === s ? 'font-medium' : ''}>{STYLE_LABEL[s]}</span>
                         </button>
                       ))}
+                      {subtitleSettings.style === 'background' && (
+                        <div className="px-4 py-3 border-t border-white/10">
+                          <div className="flex justify-between text-xs text-white/70 mb-1">
+                            <span>Background opacity</span>
+                            <span>{Math.round((subtitleSettings.subtitleBgOpacity ?? 0.8) * 100)}%</span>
+                          </div>
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            step={5}
+                            value={Math.round((subtitleSettings.subtitleBgOpacity ?? 0.8) * 100)}
+                            onChange={(e) => setSubtitleSettings({ subtitleBgOpacity: Number(e.target.value) / 100 })}
+                            className="w-full accent-white"
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1163,7 +1224,7 @@ function Student() {
           <button
             type="button"
             onClick={() => setSidebarOpen(v => !v)}
-            className={`absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-4 h-20 border border-r-0 rounded-l-lg ${theme === 'light' ? 'bg-surface border-primaryContainer shadow-[0_0_14px_rgba(0,0,0,0.18)]' : theme === 'dark' ? 'bg-overlayBorder border-white/20 shadow-md' : 'bg-[#E0DEF7] border-purple-200/50 shadow-md'} transition-all duration-300 ease-in-out ${
+            className={`absolute top-1/2 -translate-y-1/2 z-[55] flex items-center justify-center w-4 h-20 border border-r-0 rounded-l-lg ${theme === 'light' ? 'bg-surface border-primaryContainer shadow-[0_0_14px_rgba(0,0,0,0.18)]' : theme === 'dark' ? 'bg-overlayBorder border-white/20 shadow-md' : 'bg-[#E0DEF7] border-purple-200/50 shadow-md'} transition-all duration-300 ease-in-out ${
               sidebarOpen ? 'right-80' : 'right-0'
             }`}
             aria-label={sidebarOpen ? 'Hide panel' : 'Show panel'}
@@ -1176,8 +1237,8 @@ function Student() {
 
         {/* 우측 사이드: 강의자료 + 채팅 */}
         <aside className={isNarrow
-          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 min-h-0 px-3 py-4 sidebar-panel z-40 transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
-          : 'w-80 flex-shrink-0 flex flex-col gap-3 min-h-0'
+          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 min-h-0 px-3 py-4 sidebar-panel z-[55] transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
+          : 'relative z-[55] w-80 flex-shrink-0 flex flex-col gap-3 min-h-0'
         }>
           {/* 오늘의 강의 자료 — 강의 시작 후에만 노출 */}
           {isLectureStarted && (
