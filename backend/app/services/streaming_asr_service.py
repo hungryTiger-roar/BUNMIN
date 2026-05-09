@@ -42,15 +42,36 @@ def _env_float(key: str, default: float) -> float:
 
 
 # 한국어 종결어미 — 문장이 끝났음을 표시하는 마지막 형태소 패턴.
-# 보수적으로: 매칭은 "음절+종결어미+(구두점|공백)" 형태로만 인정해
-# 본문 중간의 "다음" 같은 패턴이 오탐되지 않게 함.
+# 보수적 매칭: "음절+종결어미+구두점(.!?)" 형태만 인정 → 본문 중간 "다음" 같은 단어
+# 가 오탐되지 않게. 구두점 강제로 false positive 거의 없음.
+# 알고리즘: 정규식 alternation 은 left-to-right first-match — 긴 패턴부터 나열해야
+# "합니다." 가 "다." 가 아니라 "습니다." 로 매칭됨.
 _SENTENCE_TERMINATOR = re.compile(
     r"[가-힣]*?"                              # 종결어미 앞 음절
-    r"(니다|습니다|니까|거든요|네요|군요|구나|"
-    r"세요|십시오|어요|아요|에요|예요|"
-    r"죠|지요|"
-    r"다|요|까)"
-    r"[.!?]+\s*"                              # 구두점 1개+ 와 trailing space (Whisper output 기준)
+    r"("
+    # === 격식체 (formal) — 4~3글자 ===
+    r"습니다|습니까|입니다|입니까|"
+    r"십시오|십시다|ㅂ니다|ㅂ니까|"
+    # === 존댓말 -요 종결 — 3글자 ===
+    r"거든요|잖아요|는데요|던데요|는군요|"
+    r"이에요|으세요|을게요|을까요|ㄹ게요|ㄹ까요|"
+    r"잖니요|구나요|"
+    # === 존댓말 -요 종결 — 2글자 ===
+    r"네요|군요|지요|아요|어요|에요|예요|세요|대요|데요|"
+    # === 반말 종결 — 2~3글자 ===
+    r"잖아|거든|는데|구나|구먼|단다|더라|던데|는군|"
+    r"답니다|답니까|"   # -답니다, -답니까 (대화체 인용)
+    r"ㄹ까|ㄹ게|을까|을게|"
+    # === 반말 + -요 (1글자 + 요) ===
+    r"죠|"
+    # === 반말 1글자 종결 (구두점 필수) ===
+    r"네|군|데|대|"
+    # === 단음절 종결 (구두점이 강제라 false positive 적음) ===
+    r"다|요|까|야|자|어|아|지|니|냐|"
+    # === 의문/감탄 ===
+    r"나"                # "어쩌나.", "어디나." 같은 케이스
+    r")"
+    r"[.!?]+\s*"                              # 구두점 1개+ 와 trailing space
 )
 
 # 아래 4개 튜닝 상수는 env 로 오버라이드 가능. backend 재시작 없이 .env 만 바꾸고
@@ -68,9 +89,10 @@ _TERMINATION_GRACE_SEC = _env_float("ASR_STREAMING_GRACE_SEC", 0.3)
 _MIN_TRANSCRIBE_INTERVAL_SEC = _env_float("ASR_STREAMING_INTERVAL_SEC", 0.25)
 
 # Buffer 최대 길이 (초) — 종결어미 못 잡고 누적되는 비정상 케이스 방어. 초과 시 force-finalize.
-# ASR_STREAMING_MAX_BUFFER_SEC: 너무 짧으면 정상 발화도 강제로 잘림 / 길면 stale 상태 오래 보존.
-# 10~30 권장.
-_MAX_BUFFER_SEC = _env_float("ASR_STREAMING_MAX_BUFFER_SEC", 15.0)
+# ASR_STREAMING_MAX_BUFFER_SEC: 너무 짧으면 정상 발화도 강제로 잘림 / 길면 sync 어긋남.
+# 8s 권장 — 22~66s buffer 누적으로 학생측 lecturerSpan 비정상 → visual sync 깨짐 방지.
+# 강사가 한 호흡 8s 이상 길게 말하면 중간에 잘릴 수 있음 (절충점).
+_MAX_BUFFER_SEC = _env_float("ASR_STREAMING_MAX_BUFFER_SEC", 8.0)
 
 # Buffer 최소 길이 (초) — 너무 짧은 buffer 는 transcribe 무의미.
 # ASR_STREAMING_MIN_BUFFER_SEC: 0.3~0.8 권장. 작으면 transcribe 잦아져 GPU 부하 ↑.
