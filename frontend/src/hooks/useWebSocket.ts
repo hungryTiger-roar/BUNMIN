@@ -154,6 +154,25 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
   }, [setSlidePages, setSlideStatus, setSlideFilename])
 
   const handleMessage = useCallback((data: WebSocketMessage) => {
+    // [Diag] 학생측 receive 로그 — sync 진단용. cursor / draw_point 는 매 10번째.
+    // window.__SYNC_DEBUG = true 로 활성화. 강사 보낸 시각 (lecturerTimestamp) 과
+    // 학생 도착 시각 (Date.now()) 차이로 네트워크+서버 지연 측정.
+    if (role === 'student' && (window as unknown as { __SYNC_DEBUG?: boolean }).__SYNC_DEBUG) {
+      const t = data.type
+      const lecTs = data.lecturerTimestamp as number | undefined
+      const lag = typeof lecTs === 'number' ? Date.now() - lecTs : null
+      const lagStr = lag !== null ? `lag=${lag}ms` : 'lag=N/A'
+      if (t === 'cursor' || t === 'draw_point') {
+        const counter = ((window as unknown as { __SYNC_RECV_COUNTER?: Record<string, number> }).__SYNC_RECV_COUNTER ??= {})
+        counter[t] = (counter[t] ?? 0) + 1
+        if (counter[t] % 10 === 0) {
+          console.log(`[S←L] ${t} #${counter[t]} ${lagStr} lecTs=${lecTs}`)
+        }
+      } else if (t !== 'pong' && t !== 'ping' && t !== 'student_count' && t !== 'participants') {
+        const extra = t === 'transcription' ? ` text="${(data.translated as string ?? '').slice(0, 30)}..."` : ''
+        console.log(`[S←L] ${t} ${lagStr} lecTs=${lecTs}${extra}`)
+      }
+    }
     switch (data.type) {
       case 'transcription': {
         // 강의 시작 전엔 강의자 마이크 테스트 자막을 수강자에게 표시/재생 안 함
@@ -236,6 +255,11 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
           setSlideId(slideId)
           setSlideStatus('processing')
           loadSlidePages(slideId)
+          // 강사 시작 시점 페이지를 즉시 반영 — page_change 가 다음 sentence 까지
+          // 큐에 묶여 늦게 적용되는 동안 학생이 page 1 로 보이는 문제 차단.
+          if (typeof data.page === 'number' && data.page > 0) {
+            setCurrentPage(data.page)
+          }
         }
         // 학생 측 — 이전 강의의 미적용 visual events 폐기 + offset 초기화.
         if (role === 'student') unitPlayerRef.current?.reset()
@@ -499,6 +523,20 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
       const enriched = role === 'lecturer'
         ? { ...data, lecturerTimestamp: Date.now() }
         : data
+      // [Diag] 강사측 send 로그 — sync 진단용. cursor / draw_point 는 고빈도라 매 10번째.
+      // window.__SYNC_DEBUG = true 로 활성화. 비활성 기본 (성능).
+      if (role === 'lecturer' && (window as unknown as { __SYNC_DEBUG?: boolean }).__SYNC_DEBUG) {
+        const t = (data as { type?: string }).type
+        if (t === 'cursor' || t === 'draw_point') {
+          const counter = ((window as unknown as { __SYNC_COUNTER?: Record<string, number> }).__SYNC_COUNTER ??= {})
+          counter[t] = (counter[t] ?? 0) + 1
+          if (counter[t] % 10 === 0) {
+            console.log(`[L→S] ${t} #${counter[t]} ts=${(enriched as { lecturerTimestamp: number }).lecturerTimestamp}`, data)
+          }
+        } else {
+          console.log(`[L→S] ${t} ts=${(enriched as { lecturerTimestamp: number }).lecturerTimestamp}`, data)
+        }
+      }
       socketRef.current.send(JSON.stringify(enriched))
     } else {
       console.warn('[WebSocket] 연결되지 않음')

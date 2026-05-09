@@ -93,7 +93,7 @@ function Lecturer() {
   const [copied, setCopied] = useState(false)
   const [chatInput, setChatInput] = useState('')
   const [showParticipants, setShowParticipants] = useState(false)
-  const [ccEnabled, setCcEnabled] = useState(true)
+  const [ccEnabled, setCcEnabled] = useState(false)
   const [settingsPanel, setSettingsPanel] = useState<null | 'main' | 'aspect' | 'language' | 'fontSize' | 'style'>(null)
   const [primaryLang, setPrimaryLang] = useState<LecturerLang>('en')
   const [secondaryLang, setSecondaryLang] = useState<LecturerLang>('ko')
@@ -341,12 +341,19 @@ function Lecturer() {
     connect()
   }, [connect])
 
+  // 강사 기본값 — 원본 PDF 보기. lectureStore 의 default 는 'translated' (수강자 기준).
+  // 강사 페이지 mount 시 강사용으로 override. 이후 강사가 토글로 변경 가능.
+  useEffect(() => {
+    useLectureStore.getState().setMaterialMode('original')
+  }, [])
+
   useEffect(() => {
     fetch(`${API_BASE}/network/info`)
       .then((res) => res.json())
       .then((data) => {
         const port = window.location.port || data.port
-        setShareUrl(`http://${data.lan_ip}:${port}/#/student/start`)
+        // 수강자는 BrowserRouter 사용 — # 없는 깨끗한 URL 로 공유.
+        setShareUrl(`http://${data.lan_ip}:${port}/student/start`)
       })
       .catch(() => {})
   }, [])
@@ -558,7 +565,7 @@ function Lecturer() {
     }
     setLectureStarted(true)
     setPaused(false)
-    send({ type: 'lecture_start', slide_id: slideId, mode: presentationMode })
+    send({ type: 'lecture_start', slide_id: slideId, page: currentPage, mode: presentationMode })
   }
 
   // 보류된 강의 시작이 있고 모델 전환이 끝났으면 자동으로 강의 시작
@@ -567,9 +574,9 @@ function Lecturer() {
       setPendingStart(false)
       setLectureStarted(true)
       setPaused(false)
-      send({ type: 'lecture_start', slide_id: slideId, mode: presentationMode })
+      send({ type: 'lecture_start', slide_id: slideId, page: currentPage, mode: presentationMode })
     }
-  }, [pendingStart, modelMode, slideId, presentationMode, send, setLectureStarted, setPaused])
+  }, [pendingStart, modelMode, slideId, currentPage, presentationMode, send, setLectureStarted, setPaused])
 
   const togglePause = () => {
     const newPaused = !isPaused

@@ -1,24 +1,39 @@
 /**
- * useUnitPlayer — Queue + TTS-end 기반 sequential 재생 (Option C).
+ * useUnitPlayer — Queue + visual stretch (Option F).
  *
- * 모델:
- *   강사가 한 모든 행동 (그림 / 커서 / 페이지 / 음성) 을 sentence 단위 unit 으로
- *   묶어 학생 PC 큐에 적재. 학생은 큐에서 한 unit 씩 꺼내 재생. 한 unit 의 TTS
- *   audio 가 끝나야 다음 unit 시작.
+ * 모델 — 음성은 1배속 자연 그대로, 그림/커서를 음성 길이에 맞춰 늘려 sync 보장.
+ *
+ *   영어 TTS audio 가 한국어 발화보다 평균 1.2~1.5배 길다는 사실에서 출발.
+ *   option-c 와 달리 audio 를 압축하지 않음 — 학생이 듣는 영어는 처음부터 끝까지
+ *   1배속 (자연 합성 결과 그대로). 대신 그림/커서 visual events 를 그 sentence 의
+ *   audio 길이에 맞춰 stretch.
+ *
+ *   비유: "더빙된 영화" — 화면 속 동작이 영어 발음 길이에 맞춰 진행. 영어는 자연,
+ *         화면은 약간 늘어진 느낌. 시간이 흘러도 한 sentence 의 visual + audio 는
+ *         항상 한 쌍으로 흘러감.
  *
  *   한 unit 안:
- *     - TTS audio (그 sentence 의 영어 음성)
- *     - 그 sentence 발화 동안 강사가 한 visual events (drawings/cursor/page change)
- *     - lecturer 시간선상 [speechStartAt, sentAt] 에 매핑되는 events
+ *     - TTS audio (그 sentence 의 영어 음성, 1배속)
+ *     - 그 sentence 발화 동안 강사가 한 visual events
+ *     - lecturer span [speechStartAt, sentAt] → audio span [audioStart, audioStart+audioDuration]
+ *       으로 시간 비례 stretch
  *
  *   재생:
- *     - audio 시작 시점에 visual events 를 lecturer 시간 비례로 schedule
+ *     - audio 시작 시점에 visual events 를 audio span 에 비례 schedule (visual stretch)
  *     - audio 끝 (ended Promise) → 다음 unit 시작
  *
  * 결과:
- *   - 음성 끊김 없이 sentence 단위로 깔끔하게 이어짐
- *   - 페이지 정합성 자연 보장 (한 sentence 의 visual 이 그 sentence audio 안에서 재생)
- *   - 강사 침묵 시간은 사라짐 (TTS-end 즉시 다음 unit), silent 그림은 watchdog 700ms 후
+ *   - 음성 끊김 없이 sentence 단위로 깔끔하게 이어짐 (option-c 동일)
+ *   - 영어 음성 100% 자연 1배속 (option-c 와 차별화 — option-c 는 visual 이 Korean span
+ *     에 끝나고 audio 만 남는 mismatch)
+ *   - 그림/커서가 그 영어 설명과 정확히 같은 시간에 흘러감 (per-sentence sync)
+ *   - 시간이 흘러도 학생이 듣는 영어 품질 일관 — 빠르기 변화 없음
+ *
+ * Trade-off:
+ *   강사가 1초에 한 그림을 학생은 1.3초에 봄 (영어가 1.3배라면). visual 박자가
+ *   살짝 느려짐. 하지만 영어 음성과 정확히 paired 되어 자연스러움.
+ *   강사-학생 누적 lag 은 시간 흐를수록 증가하지만 visual+audio 가 함께 늦으므로
+ *   "라이브 방송 시청" 처럼 자연스럽게 느껴짐.
  *
  * pendingVisualRef: 아직 sentence 와 결합되지 않은 visual events 임시 보관.
  *   transcription 도착 시 그 sentence 의 sentAt 까지의 events 를 unit 으로 묶음.
@@ -134,15 +149,54 @@ export function useUnitPlayer(options: Options): UnitPlayer {
     }
   }, [])
 
-  /** sentence unit 재생 — visuals 는 lecturerSpan 1:1 매핑 (압축 X) → 강사 박자 보존. */
+  /** sentence unit 재생 — Option F: visuals 를 audio 실제 길이에 맞춰 stretch.
+   *  영어 audio 는 합성 결과 그대로 1배속, visual 만 audio span 에 늘어남.
+   *  발화 전 visual (ts < speechStartAt) 은 별도로 강사 박자 그대로 먼저 replay
+   *  (audio 시작 전) — burst 방지 + 강사가 침묵 중에 그린 그림 자연스럽게 보임. */
   const playSentenceUnit = async (unit: Extract<Unit, { kind: 'sentence' }>) => {
     const opts = optionsRef.current
     const audioOk = opts.isAudioUnlocked()
     const lang = opts.getAudioLang()
     const lecturerSpan = Math.max(1, unit.sentAt - unit.speechStartAt)
+    const unitStartWall = Date.now()
+
+    // 발화 전 visual 과 발화 중 visual 분리.
+    //   pre-speech (ts < speechStartAt): 강사가 발화 시작 전에 그린/움직인 것 →
+    //     강사 박자 그대로 먼저 replay (mirror).
+    //   during-speech (ts >= speechStartAt): 발화 중 그림/커서 → audio 길이에 stretch.
+    const preSpeech: PendingVisual[] = []
+    const duringSpeech: PendingVisual[] = []
+    for (const v of unit.visuals) {
+      if (v.ts < unit.speechStartAt) preSpeech.push(v)
+      else duringSpeech.push(v)
+    }
+
+    // [DIAGNOSTIC] sentence unit 시작 — speechStartAt / sentAt / 분리 통계.
+    console.log(
+      `[Diag] unit START text="${unit.text.slice(0, 30)}..." ` +
+      `lecturerSpan=${Math.round(lecturerSpan)}ms ` +
+      `pre=${preSpeech.length} during=${duringSpeech.length} ` +
+      `text_len=${unit.text.length} audioReady=${audioOk}`,
+    )
+
+    // 1) pre-speech replay — 강사 박자 그대로. 시작은 now, 마지막 event 까지 preSpan
+    //    걸려서 발사. await 으로 끝까지 기다린 후 audio 시작.
+    if (preSpeech.length > 0) {
+      preSpeech.sort((a, b) => a.ts - b.ts)
+      const earliestTs = preSpeech[0].ts
+      const latestTs = preSpeech[preSpeech.length - 1].ts
+      const preSpan = Math.max(1, latestTs - earliestTs)
+      console.log(
+        `[UnitPlayer] pre-speech replay (${preSpeech.length}건, span ${Math.round(preSpan)}ms)`,
+      )
+      // 1:1 매핑 — earliestTs 가 now 에 fire, latestTs 가 now+preSpan 에 fire.
+      scheduleVisuals(preSpeech, earliestTs, preSpan, Date.now(), preSpan)
+      await new Promise((resolve) => setTimeout(resolve, preSpan + 50))
+    }
 
     if (lang === 'off' || !audioOk) {
-      scheduleVisuals(unit.visuals, unit.speechStartAt, lecturerSpan, Date.now(), lecturerSpan)
+      // audio 미사용 — during-speech visual 은 lecturerSpan 그대로 (stretch 기준 audio 가 없음).
+      scheduleVisuals(duringSpeech, unit.speechStartAt, lecturerSpan, Date.now(), lecturerSpan)
       await new Promise((resolve) => setTimeout(resolve, lecturerSpan))
       return
     }
@@ -152,21 +206,27 @@ export function useUnitPlayer(options: Options): UnitPlayer {
       result = await opts.playSentence(unit.text, lang, unit.subtitleId)
     } catch (err) {
       console.error('[UnitPlayer] playSentence 실패 — visual 만 적용:', err)
-      for (const v of unit.visuals) {
+      for (const v of duringSpeech) {
         try { v.apply() } catch (e) { console.error(e) }
       }
       return
     }
 
-    // visuals 는 lecturerSpan 1:1 매핑 (audioDuration = lecturerSpan 으로 두면 압축 없음).
-    scheduleVisuals(unit.visuals, unit.speechStartAt, lecturerSpan, result.audioStartedAt, lecturerSpan)
+    // 2) during-speech visual stretch — audio 실제 길이에 맞춰 늘어남.
+    //    한국어 lecturerSpan 1초 + 영어 audio 1.5초면 visual 이 1.5초에 걸쳐 0.67배속.
+    const stretchRatio = result.durationMs / lecturerSpan
+    console.log(
+      `[Diag] AUDIO ready: audioDuration=${Math.round(result.durationMs)}ms ` +
+      `stretchRatio=${stretchRatio.toFixed(2)}x ` +
+      `audioStartsIn=${Math.round(result.audioStartedAt - Date.now())}ms`,
+    )
+    scheduleVisuals(duringSpeech, unit.speechStartAt, lecturerSpan, result.audioStartedAt, result.durationMs)
 
-    // unit 길이 = max(audio, visual). 둘 중 늦게 끝나는 쪽까지 대기 후 다음 unit.
-    const visualEndPromise = new Promise<void>((resolve) => {
-      const remainingMs = Math.max(0, result.audioStartedAt + lecturerSpan + 50 - Date.now())
-      setTimeout(resolve, remainingMs)
-    })
-    await Promise.all([result.ended, visualEndPromise])
+    // unit 길이 = audio.ended 시점. visual 도 audio span 안에 들어감.
+    await result.ended
+    console.log(
+      `[Diag] unit END total=${Date.now() - unitStartWall}ms text="${unit.text.slice(0, 30)}..."`,
+    )
   }
 
   /** visual events 를 lecturer 시간 비례로 학생 wall time 에 schedule.
@@ -227,8 +287,11 @@ export function useUnitPlayer(options: Options): UnitPlayer {
       sentAt: params.sentAt,
       visuals: matched,
     })
+    // [Diag] transcription 도착 시 — 어떤 visual 이 이 sentence 에 묶였는지.
     console.log(
-      `[UnitPlayer] sentence unit 큐 (visual=${matched.length}, queue depth=${queueRef.current.length})`,
+      `[Diag] enqueueSentence text="${params.text.slice(0, 30)}..." ` +
+      `lecturerSpan=${params.sentAt - params.speechStartAt}ms ` +
+      `matchedVisuals=${matched.length} remainingPending=${remaining.length} queueDepth=${queueRef.current.length}`,
     )
     processNext()
   }, [processNext])
