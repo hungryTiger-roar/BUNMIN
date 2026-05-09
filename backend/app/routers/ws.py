@@ -24,6 +24,36 @@ from app.services.asr_service import _HALLUCINATION_PATTERNS
 # streaming path 가 실제로 사용되며, 'audio'(legacy chunk) 는 항상 동작.
 ASR_STREAMING_ENABLED = os.getenv("ASR_STREAMING", "false").lower() == "true"
 
+# 진단 로그 토글 — SYNC_DEBUG=true 면 강사 메시지 도착 / broadcast 시점 로그 출력.
+# 강사 send (lecturerTimestamp) → 서버 도착 → broadcast 전 과정 visibility.
+# 고빈도 (cursor / draw_point) 는 매 10번째만.
+SYNC_DEBUG = os.getenv("SYNC_DEBUG", "false").lower() == "true"
+_sync_diag_counter: dict[str, int] = {}
+
+
+def _sync_log(msg_type: str, message: dict, action: str = "recv") -> None:
+    """진단 로그 출력. 고빈도 메시지는 sampling.
+    action: 'recv' (강사로부터 도착) 또는 'broadcast' (학생에게 송출 직전)."""
+    if not SYNC_DEBUG:
+        return
+    lec_ts = message.get("lecturerTimestamp")
+    if msg_type in ("cursor", "draw_point"):
+        _sync_diag_counter[msg_type] = _sync_diag_counter.get(msg_type, 0) + 1
+        if _sync_diag_counter[msg_type] % 10 != 0:
+            return
+        n = _sync_diag_counter[msg_type]
+        print(f"[Diag/Server] {action} {msg_type} #{n} lecTs={lec_ts}", flush=True)
+    else:
+        # 추가 필드 일부 미리보기.
+        extras = ""
+        if msg_type == "page_change":
+            extras = f" page={message.get('page')}"
+        elif msg_type in ("draw_begin", "draw_end"):
+            extras = f" id={message.get('id')}"
+        elif msg_type == "audio_frame":
+            extras = f" sentAt={message.get('sentAt')}"
+        print(f"[Diag/Server] {action} {msg_type} lecTs={lec_ts}{extras}", flush=True)
+
 
 def _validate_audio(audio_bytes: bytes) -> tuple[bool, str]:
     """WAV 오디오 사전 검증 — ASR 실행 전 노이즈 차단"""
@@ -199,6 +229,11 @@ class ConnectionManager:
         self._lock = asyncio.Lock()  # students 리스트 동시 접근 방지
         self._tasks: set[asyncio.Task] = set()  # 실행 중인 태스크 추적
 
+        # 강사 WS 끊김 시 grace period 후 자동 lecture_end 처리하는 task.
+        # transient (pong miss) vs permanent (브라우저/exe 종료) 구분 — 30초 안에
+        # 재연결 안 되면 permanent 로 간주.
+        self._lecturer_grace_task: Optional[asyncio.Task] = None
+
         # 페이지별 시각 event 영속 저장소 — 신규 입장 학생 / 페이지 복귀 시 재생용.
         # key: (slide_id, page) 1-based, value: 그 페이지에서 일어난 모든 draw event 메시지.
         # draw_clear 가 도착하면 그 페이지 list 비움 (강사 "전체 지우기" 버튼 의도 보존).
@@ -211,27 +246,67 @@ class ConnectionManager:
         task.add_done_callback(self._tasks.discard)
 
     def disconnect_lecturer(self):
+        """강사 WS 연결 해제 — 30초 grace 후 자동 lecture_end 처리.
+
+        구분:
+          - transient (pong miss / 네트워크 깜박 / 일시정지 silence + 브라우저 throttling):
+            보통 3~10초 안에 재연결 → grace 안에 들어와서 cleanup 취소 → 강의 계속
+          - permanent (브라우저 닫음 / exe 종료 / 영구 네트워크 단절):
+            grace timeout → 자동 lecture_end → 자막 finalize + 학생 modal 표시
+
+        WS ref 만 즉시 clear, 나머지 상태는 grace 후 cleanup task 가 정리.
+        """
         self.lecturer = None
-        self.lecturer_name = "professor"
-        self.lecture_title = ""
-        # 강의 중 비정상 종료 — 자막 저장 마무리
+        # 이전 grace task 가 있으면 cancel (중복 disconnect 케이스)
+        if self._lecturer_grace_task and not self._lecturer_grace_task.done():
+            self._lecturer_grace_task.cancel()
+        self._lecturer_grace_task = asyncio.create_task(self._lecturer_grace_cleanup())
+        print("[WS] 강사 WS 연결 해제 — 30초 grace 시작 (재연결 대기)")
+
+    async def _lecturer_grace_cleanup(self):
+        """강사 재연결 grace period — timeout 후 강의 영구 종료 처리.
+        grace 안에 새 강사 WS 가 들어와 manager.lecturer 가 set 되면 이 task 는 cancel 됨.
+        """
+        GRACE_SEC = 30
+        try:
+            await asyncio.sleep(GRACE_SEC)
+        except asyncio.CancelledError:
+            print("[WS] 강사 재연결 — grace cleanup 취소")
+            return
+
+        if self.lecturer is not None:
+            # 어떤 이유로 재연결됐는데 task cancel 안 된 케이스 (race) — 정리 X
+            return
+
+        # permanent disconnect 확정 — lecture_end 와 동등 처리.
+        print(f"[WS] 강사 grace timeout ({GRACE_SEC}초) — 자동 lecture_end 처리")
+        ended_id = None
         if self.is_lecture_started and self.current_session_id:
             ended_id = transcripts.end_session(self.current_session_id)
-            print(f"[WS] 강의자 비정상 종료, 자막 세션 자동 저장: {ended_id}")
-            # NMT 용어집도 해제 (잔존 매핑 방지)
+            print(f"[WS] 자막 세션 자동 저장: {ended_id}")
             if _nmt_service:
                 try:
                     _nmt_service.set_glossary(None)
                 except Exception:
                     pass
-            self.current_session_id = None
-            self.is_lecture_started = False
-        # 슬라이드/페이지/발표모드 상태 리셋 — 다음 강의자 재연결 시 stale state 방지
+        # 학생들에게 lecture_end broadcast (session_id 포함 → 다운로드 modal 표시)
+        if ended_id:
+            try:
+                await self.broadcast_to_students({
+                    "type": "lecture_end",
+                    "session_id": ended_id,
+                })
+            except Exception as e:
+                print(f"[WS] grace cleanup broadcast 오류: {e}")
+        # 모든 강의 상태 reset — 다음 강사가 깨끗하게 시작
+        self.current_session_id = None
+        self.is_lecture_started = False
+        self.is_paused = False
+        self.lecturer_name = "professor"
+        self.lecture_title = ""
         self.current_slide_id = None
         self.current_page = 1
         self.presentation_mode = "slide"
-        self.is_paused = False
-        print("[WS] 강의자 연결 해제")
 
     def disconnect_student(self, websocket: WebSocket):
         if websocket in self.students:
@@ -259,6 +334,11 @@ class ConnectionManager:
 
     async def broadcast_to_students(self, message: dict):
         """모든 수강자에게 메시지 전송 (Lock으로 동시 접근 보호)"""
+        # [Diag/Server] broadcast 직전 로그 — SYNC_DEBUG=true 환경변수 활성 시.
+        if SYNC_DEBUG:
+            mt = message.get("type", "?")
+            if mt and mt not in ("student_count", "participants", "pong", "ping"):
+                _sync_log(mt, message, action="broadcast")
         async with self._lock:
             students_snapshot = list(self.students)
 
@@ -418,6 +498,11 @@ async def websocket_pipeline(websocket: WebSocket):
                 print("[WS] 강의자 역할 거부 (중복 연결)")
                 await websocket.close(code=4409, reason="lecturer already connected")
                 return
+            # grace cleanup 진행 중이면 cancel — 재연결로 강의 계속.
+            if manager._lecturer_grace_task and not manager._lecturer_grace_task.done():
+                manager._lecturer_grace_task.cancel()
+                manager._lecturer_grace_task = None
+                print("[WS] 강사 재연결 — grace cleanup 취소, 강의 상태 보존")
             manager.lecturer = websocket
             manager.lecturer_name = name or "professor"
             print(f"[WS] 강의자 연결됨 (이름: {manager.lecturer_name})")
@@ -432,7 +517,30 @@ async def websocket_pipeline(websocket: WebSocket):
                     "title": manager.lecture_title,
                 })
             await manager.broadcast_participants()
-            await run_with_heartbeat(handle_lecturer(websocket), websocket)
+            # pong_event 추가 — 일시정지 중 silent disconnect 감지용. 학생과 동일.
+            # try/finally — heartbeat send 실패로 WebSocketDisconnect 안 던져진 케이스에도
+            # 자리 정리 보장. 안 그러면 manager.lecturer 가 dead websocket 가리킨 채 남아
+            # 새 연결을 "중복" 으로 거부하는 sticky bug 발생.
+            lecturer_pong_event = asyncio.Event()
+            try:
+                await run_with_heartbeat(
+                    handle_lecturer(websocket, lecturer_pong_event),
+                    websocket,
+                    lecturer_pong_event,
+                )
+            finally:
+                # 1) 새 강사가 이미 자리 차지했으면 (identity 다름) → 그 자리 건드리지 않음.
+                # 2) 내 자리면 → disconnect_lecturer().
+                # 3) broadcast_all 경로로 disconnect_lecturer 가 먼저 호출돼 None 인 경우
+                #    → disconnect 는 skip 하지만 streaming reset / participants 는 수행.
+                other_lecturer_active = (
+                    manager.lecturer is not None and manager.lecturer is not websocket
+                )
+                if not other_lecturer_active:
+                    if manager.lecturer is websocket:
+                        manager.disconnect_lecturer()
+                    await _reset_streaming_state()
+                    await manager.broadcast_participants()
 
         elif role == "student":
             student_id = str(uuid.uuid4())
@@ -458,6 +566,7 @@ async def websocket_pipeline(websocket: WebSocket):
                 await websocket.send_json({
                     "type": "lecture_start",
                     "slide_id": manager.current_slide_id,
+                    "page": manager.current_page,
                 })
                 await websocket.send_json({
                     "type": "presentation_mode",
@@ -497,35 +606,42 @@ async def websocket_pipeline(websocket: WebSocket):
                     print(f"[WS] 신규 학생에게 누적 필기 {len(replay_events)}건 replay 전송")
 
             pong_event = asyncio.Event()
-            await run_with_heartbeat(handle_student(websocket, pong_event), websocket, pong_event)
+            # try/finally — handler 가 어떻게 끝나도 (정상 close, silent disconnect,
+            # 예외) 자리 정리 보장. 강사와 동일 패턴.
+            try:
+                await run_with_heartbeat(handle_student(websocket, pong_event), websocket, pong_event)
+            finally:
+                manager.disconnect_student(websocket)
+                await manager.broadcast_student_count()
+                await manager.broadcast_participants()
 
         else:
             await websocket.close(code=4001, reason="올바른 역할이 아닙니다")
 
     except WebSocketDisconnect:
-        if role == "lecturer":
-            manager.disconnect_lecturer()
-            # streaming buffer 비움 — 다음 강의자 연결 시 stale 잔재 방지
-            await _reset_streaming_state()
-            await manager.broadcast_participants()
-        elif role == "student":
-            manager.disconnect_student(websocket)
-            await manager.broadcast_student_count()
-            await manager.broadcast_participants()
+        # finally 블록이 이미 cleanup 수행 — 여기선 추가 동작 불필요.
+        # WebSocketDisconnect 외 예외가 올라오면 fastapi 가 처리하도록 두기 위해 except 유지.
+        pass
 
 
-async def handle_lecturer(websocket: WebSocket):
+async def handle_lecturer(websocket: WebSocket, pong_event: asyncio.Event | None = None):
     """강의자 메시지 처리"""
     try:
         while True:
             message = await websocket.receive_json()
             msg_type = message.get("type")
+            # [Diag/Server] 강사 메시지 도착 로그 — SYNC_DEBUG=true 환경변수 활성 시.
+            # ping/pong/heartbeat 류 노이즈는 제외.
+            if SYNC_DEBUG and msg_type and msg_type not in ("ping", "pong"):
+                _sync_log(msg_type, message, action="recv")
 
             if msg_type == "ping":
                 await websocket.send_json({"type": "pong"})
 
             elif msg_type == "pong":
-                pass  # heartbeat 응답 확인
+                # heartbeat 응답 — 일시정지 중 silent disconnect 감지용 (timeout 시 강제 close)
+                if pong_event:
+                    pong_event.set()
 
             elif msg_type == "audio":
                 audio_size = len(message.get("audio", "")) * 3 // 4 // 1024
@@ -585,8 +701,16 @@ async def handle_lecturer(websocket: WebSocket):
                 })
 
             elif msg_type == "lecture_start":
+                # 이전 강의 stale 세션 finalize — 강사 WS 가 비정상 종료된 후 lecture_end
+                # 못 보낸 채로 재연결 / 새 강의 시작 시 jsonl 만 남고 final json 안 만들어짐.
+                # 여기서 명시적으로 정리.
+                if manager.current_session_id:
+                    stale_id = transcripts.end_session(manager.current_session_id)
+                    print(f"[WS] 이전 미종료 세션 정리: {stale_id}")
                 manager.is_lecture_started = True
+                manager.is_paused = False  # 재시작 시 pause 상태 reset
                 manager.current_slide_id = message.get("slide_id")
+                manager.current_page = int(message.get("page") or 1)
                 manager.presentation_mode = message.get("mode", "slide")
                 # 새 강의 — 이전 강의의 누적 필기 폐기 (replay 시 stale 방지)
                 manager.page_draw_events.clear()
@@ -611,6 +735,7 @@ async def handle_lecturer(websocket: WebSocket):
                 await manager.broadcast_to_students({
                     "type": "lecture_start",
                     "slide_id": manager.current_slide_id,
+                    "page": manager.current_page,
                     "session_id": manager.current_session_id,
                     **_ts(message),
                 })
@@ -622,20 +747,12 @@ async def handle_lecturer(websocket: WebSocket):
                 })
 
             elif msg_type == "lecture_end":
-                manager.is_lecture_started = False
-                manager.is_paused = False
-                # NMT 용어집 해제 — 다음 강의에서 잔존 용어가 오작용하지 않도록
-                if _nmt_service:
-                    try:
-                        _nmt_service.set_glossary(None)
-                    except Exception:
-                        pass
-                # 강의 종료 직전 — streaming buffer 안의 미완료 audio 를 강제 finalize 해
-                # 마지막 발화가 손실되지 않도록. flush 후 reset 순서.
-                # (reset 만 하면 마지막 1~2 sentence 가 buffer 째 폐기됨)
+                # 처리 순서 중요 — 마지막 flush 가 broadcast 가드 (`not is_lecture_started`)
+                # 에 막히지 않도록 flush 가 끝난 뒤에 is_lecture_started=False 로 전환.
+                #
+                # 1) 마지막 flush — 강의 진행 중 상태 유지로 broadcast 가드 통과.
                 if _streaming_asr_service is not None:
                     try:
-                        # speech_start_wall 정확히 모르므로 마지막 알려진 값 사용.
                         last_speech_start = _streaming_speech_start_wall_at
                         sentences = await _streaming_asr_service.flush()
                         for s in sentences or []:
@@ -643,18 +760,25 @@ async def handle_lecturer(websocket: WebSocket):
                             await _broadcast_streaming_sentence(s, None, last_speech_start)
                     except Exception as e:
                         print(f"[WS] lecture_end 마지막 flush 오류 (무시): {e}", flush=True)
-                # 그 후 streaming buffer 비움 — 다음 강의에서 stale 잔재 합성 방지
-                await _reset_streaming_state()
-                # 자막 세션 종료 — jsonl → 최종 json 병합
+                # 2) 자막 세션 finalize — jsonl → final json 병합.
                 ended_id = transcripts.end_session(manager.current_session_id)
                 print(f"[WS] 강의 종료 (세션: {ended_id})")
+                # 3) 학생들에게 lecture_end broadcast — session_id 포함 → 다운로드 modal.
                 await manager.broadcast_to_students({
                     "type": "lecture_end",
                     "session_id": ended_id,
                     **_ts(message),
                 })
+                # 4) 상태 reset — 이후 들어오는 stale transcript broadcast 차단.
+                manager.is_lecture_started = False
+                manager.is_paused = False
                 manager.current_session_id = None
-                # 슬라이드/페이지/발표모드 상태 리셋 — 다음 강의 시작 시 stale state 방지
+                if _nmt_service:
+                    try:
+                        _nmt_service.set_glossary(None)
+                    except Exception:
+                        pass
+                await _reset_streaming_state()
                 manager.current_slide_id = None
                 manager.current_page = 1
                 manager.presentation_mode = "slide"
@@ -930,20 +1054,25 @@ async def process_audio(message: dict):
 
         async def _process_sentence(sub_seq: int, sentence: str) -> None:
             """한 문장을 NMT → broadcast. NMT 완료 즉시 송출되어 첫 자막 latency 단축."""
+            # pause / 강의 종료 boundary 가드 — streaming path 와 동일 정책.
+            # ASR 끝났는데 강의 paused / 종료 됐으면 broadcast skip.
+            if manager.is_paused or not manager.is_lecture_started:
+                boundary = "paused" if manager.is_paused else "not started"
+                print(f"[NMT seq={seq}.{sub_seq}] skip ({boundary}): {sentence[:40]!r}", flush=True)
+                return
             t_nmt_call = time.perf_counter()
             async with _nmt_semaphore:
                 english = await asyncio.to_thread(
                     _nmt_service.translate, sentence, "ko", "en", 512
                 )
             nmt_ms = int((time.perf_counter() - t_nmt_call) * 1000)
-            # NMT 실패/빈 결과 fallback — 한국어 원문이라도 학생에게 자막으로 전달.
-            # 음성 재생은 어차피 영어 voice 없이 안 됨 (translated 비면 useTTS skip),
-            # 그러나 자막은 학생이 한국어로라도 볼 수 있어야 손실 없음.
+            # NMT 빈 결과 — 환각 트리거 차단 ('아멘', 짧은 음절 반복 등) 또는 모델 실패.
+            # 학생에게 한국어 원문 자막 띄우면 환각 노이즈가 그대로 노출되므로 broadcast 자체 skip.
+            # 자막 / transcripts 저장도 skip — 학생 화면에 안 뜨고 강사 측 로그만 남김.
             if not english.strip():
-                english = ""
-                print(f"[NMT 실패] seq={seq}.{sub_seq} → 한국어 자막 fallback", flush=True)
-            else:
-                print(f"[NMT  seq={seq}.{sub_seq}] {english}", flush=True)
+                print(f"[NMT 빈 결과] seq={seq}.{sub_seq} → broadcast skip ('{sentence[:40]}')", flush=True)
+                return
+            print(f"[NMT  seq={seq}.{sub_seq}] {english}", flush=True)
             # 첫 자막 latency — 분할 효과 측정용 (마지막 자막은 LATENCY 로그의 '전체')
             if sub_seq == 0:
                 print(
@@ -1014,6 +1143,16 @@ async def _broadcast_streaming_sentence(
     """
     global _utterance_seq, _streaming_speech_start_at
 
+    # pause / 강의 종료 boundary 가드 — pause 직전 audio frame 이 ASR 큐에 남아 있다가
+    # 뒤늦게 finalize 되면 "강의 종료 후 / pause 중에 새 자막이 학생에게 송출" 되는
+    # 시나리오 발생. 그 시점엔 학생이 paused / lecture_end 상태라 자막이 sync 깨진 채
+    # 흘러가 혼란 야기. broadcast 자체를 skip 해 깔끔하게 끝나게 한다.
+    # transcripts 저장도 skip — 강의 활성 구간이 아니라 의미 없는 데이터.
+    if manager.is_paused or not manager.is_lecture_started:
+        boundary = "paused" if manager.is_paused else "not started"
+        print(f"[STREAM] sentence skip ({boundary}): {sentence[:50]!r}", flush=True)
+        return
+
     ok, reason = _validate_asr_text(sentence)
     if not ok:
         # 차단 — 강사에게 알림. 정상 발화가 환각 가드에 걸린 케이스 catch.
@@ -1044,12 +1183,11 @@ async def _broadcast_streaming_sentence(
             _nmt_service.translate, sentence, "ko", "en", 512
         )
     nmt_ms = int((time.perf_counter() - t_nmt) * 1000)
-    # NMT 실패/빈 결과 fallback — 한국어 원문이라도 자막으로 전달.
+    # NMT 빈 결과 — 환각 트리거 차단 또는 모델 실패. 학생 화면 노출 차단.
     if not english.strip():
-        english = ""
-        print(f"[NMT 실패] seq={seq} → 한국어 자막 fallback", flush=True)
-    else:
-        print(f"[NMT  seq={seq}] {english}", flush=True)
+        print(f"[NMT 빈 결과] seq={seq} → broadcast skip ('{sentence[:40]}')", flush=True)
+        return
+    print(f"[NMT  seq={seq}] {english}", flush=True)
 
     if manager.current_session_id:
         transcripts.append_segment(manager.current_session_id, sentence, english)

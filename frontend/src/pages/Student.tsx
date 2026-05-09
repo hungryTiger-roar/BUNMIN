@@ -11,6 +11,7 @@ import {
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { useTTS } from '@/hooks/useTTS'
 import { useUnitPlayer } from '@/hooks/useUnitPlayer'
+import { useDelayBufferPlayer } from '@/hooks/useDelayBufferPlayer'
 import ParticipantsPanel from '@/components/common/ParticipantsPanel'
 import MaterialViewToggle from '@/components/common/MaterialViewToggle'
 import { StudentCursorOverlay, useCursorOverlay } from '@/components/student/StudentCursorOverlay'
@@ -163,19 +164,35 @@ function Student() {
     console.log('[Audio] 재생 잠금 해제됨 (WASM TTS)')
   }, [unlockTTS])
 
-  // 학생측 unit player — Queue + TTS-end gating (Option C).
-  // visual events 는 pending buffer 에 적재 → transcription 도착 시 sentence
-  // unit 으로 묶임 → 한 unit 의 audio 끝나야 다음 unit 진행.
-  // 강사 발화와 그림/커서가 한 unit 안에서 lecturerSpan 1:1 매핑으로 sync.
+  // 학생측 player — sync mode 에 따라 둘 중 하나 선택.
+  //   delay-buffer (default): wall-clock + 15초 delay 로 강사 박자 그대로 재현.
+  //                            visual 자연스러움 ↑, lag 일정 (15초).
+  //   unit-stretch:           legacy option-f. visual 을 audio 길이에 stretch.
+  //                            긴 ASR / 환각 차단 케이스에서 stretch 비정상.
+  // env: VITE_SYNC_MODE=delay-buffer | unit-stretch
+  //      VITE_SYNC_DELAY_MS=15000  (delay-buffer 전용)
   const playSentenceRef = useRef(playSentence)
   useEffect(() => { playSentenceRef.current = playSentence }, [playSentence])
 
-  const unitPlayer = useUnitPlayer({
-    playSentence: (text, lang, subtitleId) =>
+  const syncMode = (import.meta.env.VITE_SYNC_MODE as string) || 'delay-buffer'
+  const delayMs = Number(import.meta.env.VITE_SYNC_DELAY_MS) || 15000
+
+  const playerOptions = {
+    playSentence: (text: string, lang: TranslationLang, subtitleId?: string) =>
       playSentenceRef.current(text, lang, subtitleId),
     isAudioUnlocked: () => isAudioUnlockedRef.current,
     getAudioLang: () => audioLangRef.current,
-  })
+  }
+
+  // 두 hook 모두 항상 호출 (React Hooks rules) — 사용 안 하는 쪽은 idle 상태.
+  const unitStretchPlayer = useUnitPlayer(playerOptions)
+  const delayBufferPlayer = useDelayBufferPlayer({ ...playerOptions, delayMs })
+
+  const unitPlayer = syncMode === 'unit-stretch' ? unitStretchPlayer : delayBufferPlayer
+
+  useEffect(() => {
+    console.log(`[SyncMode] ${syncMode}${syncMode === 'delay-buffer' ? ` (delay=${delayMs}ms)` : ''}`)
+  }, [syncMode, delayMs])
 
   // ref 기반 커서 오버레이 (React 상태 없이 DOM 직접 조작)
   // slideRef를 전달해서 컨테이너 크기 기준으로 px 변환
