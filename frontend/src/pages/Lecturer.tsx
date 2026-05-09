@@ -411,15 +411,12 @@ function Lecturer() {
   }, [presentationMode, slideStatus])
 
   // 커서 위치 추적 + WebSocket 전송 (슬라이드 영역 기준 상대좌표)
-  // page: 학생측 page-anchor 용 — 강사가 그 시점 어느 페이지에서 커서 움직였는지 기록.
-  // useLectureStore.getState() 로 inline read (deps 추가 시 page 마다 effect 재구성 방지).
   useEffect(() => {
-    const getPage = () => useLectureStore.getState().currentPage
     if (!spotlightEnabled) {
       setCursorPos(null)
       // 스팟라이트 OFF 시 한 번만 visible:false 전송
       if (isConnected && isLectureStarted) {
-        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor, page: getPage() })
+        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor })
       }
       return
     }
@@ -497,7 +494,7 @@ function Lecturer() {
       setCursorPos(null)
       // 즉시 visible:false 전송
       if (isConnected && isLectureStarted) {
-        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor, page: getPage() })
+        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor })
       }
     }
 
@@ -508,9 +505,9 @@ function Lecturer() {
         lastSendTime = now
         if (isInsideSlide) {
           // 슬라이드 기준 상대좌표 전송
-          send({ type: 'cursor', x: currentX, y: currentY, visible: true, color: spotlightColor, page: getPage() })
+          send({ type: 'cursor', x: currentX, y: currentY, visible: true, color: spotlightColor })
         } else {
-          send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor, page: getPage() })
+          send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor })
         }
       }
       rafId = requestAnimationFrame(tick)
@@ -526,7 +523,7 @@ function Lecturer() {
       cancelAnimationFrame(rafId)
       // cleanup 시 visible:false 전송
       if (isConnected && isLectureStarted) {
-        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor, page: getPage() })
+        send({ type: 'cursor', x: 0, y: 0, visible: false, color: spotlightColor })
       }
     }
   }, [spotlightEnabled, spotlightColor, isConnected, isLectureStarted, send])

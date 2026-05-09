@@ -319,10 +319,6 @@ _streaming_speech_start_at: Optional[float] = None
 # 학생측 useTTS 가 audio.start = speechStartAt + offset 으로 sync 맞추는 데 사용.
 # 학생 시각 정보 (그림/커서) 와 정확히 동일 시간선 정렬 위해.
 _streaming_speech_start_wall_at: Optional[int] = None
-# 발화 시작 시점의 강사 현재 페이지 — 학생측 page-anchor 용.
-# transcription 도착 시 학생이 강제로 그 페이지로 set 한 후 자막/오디오 재생.
-# 시계 미스매치가 있어도 발화가 강사 페이지 위에서 재생되는 강한 보장.
-_streaming_speech_start_page: Optional[int] = None
 
 
 def _ts(message: dict) -> dict:
@@ -338,12 +334,11 @@ async def _reset_streaming_state():
     lecture_end / lecture_pause / lecturer disconnect 등 발화 boundary 가 끊기는
     시점에서 호출. service 가 None 이면 timestamp 만 리셋.
     """
-    global _streaming_speech_start_at, _streaming_speech_start_wall_at, _streaming_speech_start_page
+    global _streaming_speech_start_at, _streaming_speech_start_wall_at
     if _streaming_asr_service is not None:
         await _streaming_asr_service.reset()
     _streaming_speech_start_at = None
     _streaming_speech_start_wall_at = None
-    _streaming_speech_start_page = None
 
 PING_INTERVAL = 20  # 서버 → 클라이언트 ping 주기 (초)
 PING_TIMEOUT  = 10  # pong 미응답 허용 시간 (초)
@@ -871,9 +866,6 @@ async def process_audio(message: dict):
         bytes_per_ms = (sample_rate * 2) / 1000
         audio_duration_ms = int(len(audio_bytes) / bytes_per_ms) if bytes_per_ms > 0 else 0
         speech_start_wall = (sent_at - audio_duration_ms) if isinstance(sent_at, int) else None
-        # page-anchor — chunk 도착 즉시 강사 현재 페이지 캡처. ASR/NMT 처리 동안 강사가
-        # 페이지 넘기더라도 이 발화가 시작될 때의 페이지로 학생측이 강제 set 하도록.
-        speech_start_page = manager.current_page
 
         # ASR 큐 포화 방지: 이미 충분한 발화가 대기 중이면 신규 발화 스킵.
         # 동시에 강사에게 알림 — 발화가 시스템에 도달 못 했음을 알려 다시 말할 기회.
@@ -976,7 +968,6 @@ async def process_audio(message: dict):
                 "translated": english,
                 "sentAt": sent_at,
                 "speechStartAt": speech_start_wall,
-                "pageAtSpeechStart": speech_start_page,
                 "asrMs": asr_ms,
                 "nmtMs": nmt_ms,
             }
@@ -1010,7 +1001,6 @@ async def _broadcast_streaming_sentence(
     sentence: str,
     sent_at: Optional[int],
     speech_start_wall: Optional[int] = None,
-    speech_start_page: Optional[int] = None,
 ) -> None:
     """streaming path: finalize 된 한국어 문장 1개를 NMT → broadcast.
     seq 는 전역 카운터에서 1 sentence = 1 seq 로 발급. sub_seq/total_sub 는
@@ -1073,7 +1063,6 @@ async def _broadcast_streaming_sentence(
         "translated": english,
         "sentAt": sent_at,
         "speechStartAt": speech_start_wall,
-        "pageAtSpeechStart": speech_start_page,
         "asrMs": asr_ms,
         "nmtMs": nmt_ms,
     }
@@ -1094,7 +1083,7 @@ async def process_audio_frame(message: dict):
     """streaming path: 200ms PCM frame 1개를 ASRStreamingService 에 push 후
     finalize 된 문장이 있으면 NMT → broadcast.
     """
-    global _streaming_speech_start_at, _streaming_speech_start_wall_at, _streaming_speech_start_page
+    global _streaming_speech_start_at, _streaming_speech_start_wall_at
     if _streaming_asr_service is None or _nmt_service is None:
         return
     if manager.is_paused:
@@ -1108,15 +1097,12 @@ async def process_audio_frame(message: dict):
 
     # 발화 시작 시각 마킹 — 첫 frame 에서만 (이후 frame 은 그대로 유지).
     # perf_counter: ASR latency 측정용 (단조). wall_at: 학생측 sync 용 (강사 wall 시계).
-    # page: 학생측 page-anchor — 이 발화가 강사 어느 페이지에서 시작됐는지 기록.
     if _streaming_speech_start_at is None:
         _streaming_speech_start_at = time.perf_counter()
         _streaming_speech_start_wall_at = sent_at
-        _streaming_speech_start_page = manager.current_page
 
-    # 이 sentence broadcast 에 사용할 speech_start_wall + page (이번 utterance 시작점).
+    # 이 sentence broadcast 에 사용할 speech_start_wall (이번 utterance 시작점).
     speech_start_wall = _streaming_speech_start_wall_at
-    speech_start_page = _streaming_speech_start_page
 
     try:
         pcm_bytes = base64.b64decode(pcm_b64)
@@ -1130,24 +1116,21 @@ async def process_audio_frame(message: dict):
             if i == 0 and _streaming_speech_start_at is not None:
                 lat = time.perf_counter() - _streaming_speech_start_at
                 print(f"[STREAM-FIRST] 첫 자막 {lat:.2f}s", flush=True)
-            await _broadcast_streaming_sentence(s, sent_at, speech_start_wall, speech_start_page)
+            await _broadcast_streaming_sentence(s, sent_at, speech_start_wall)
         # finalize 된 문장 이후의 audio 는 새 boundary — 다음 sentence 의 시작점으로 갱신.
         # speech_start_wall_at 은 sent_at 으로 (현재 frame = 다음 발화 시작 근사).
-        # page 도 현재 페이지로 — 다음 발화가 새 페이지에서 시작될 수 있으므로.
         _streaming_speech_start_at = time.perf_counter()
         _streaming_speech_start_wall_at = sent_at
-        _streaming_speech_start_page = manager.current_page
     except Exception as e:
         print(f"[WS] streaming frame 처리 오류: {e}", flush=True)
 
 
 async def process_audio_frame_flush(message: dict):
     """streaming path: VAD onSpeechEnd 시 호출 — buffer 잔여분 강제 finalize."""
-    global _streaming_speech_start_at, _streaming_speech_start_wall_at, _streaming_speech_start_page
+    global _streaming_speech_start_at, _streaming_speech_start_wall_at
     if _streaming_asr_service is None or _nmt_service is None:
         _streaming_speech_start_at = None
         _streaming_speech_start_wall_at = None
-        _streaming_speech_start_page = None
         return
     if manager.is_paused:
         # paused 중에도 buffer 는 비워야 다음 발화가 깨끗하게 시작
@@ -1156,7 +1139,6 @@ async def process_audio_frame_flush(message: dict):
 
     sent_at = message.get("sentAt")
     speech_start_wall = _streaming_speech_start_wall_at
-    speech_start_page = _streaming_speech_start_page
     try:
         sentences = await _streaming_asr_service.flush()
         if not sentences:
@@ -1166,13 +1148,12 @@ async def process_audio_frame_flush(message: dict):
             if i == 0 and _streaming_speech_start_at is not None:
                 lat = time.perf_counter() - _streaming_speech_start_at
                 print(f"[STREAM-FIRST flush] 첫 자막 {lat:.2f}s", flush=True)
-            await _broadcast_streaming_sentence(s, sent_at, speech_start_wall, speech_start_page)
+            await _broadcast_streaming_sentence(s, sent_at, speech_start_wall)
     except Exception as e:
         print(f"[WS] streaming flush 처리 오류: {e}", flush=True)
     finally:
         # speech end 도달 → 다음 발화의 시작점은 새 frame 도착 시 mark
         _streaming_speech_start_at = None
         _streaming_speech_start_wall_at = None
-        _streaming_speech_start_page = None
 
 
