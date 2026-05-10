@@ -8,6 +8,7 @@ PDF 텍스트 교체 모듈 (Production Level)
 4. redaction 전략: 배경 유형에 따라 다른 처리
 """
 import fitz
+import os
 from typing import Optional
 from dataclasses import dataclass, field, asdict
 import logging
@@ -19,6 +20,23 @@ from .pdf_font_handler import (
 )
 
 logger = logging.getLogger(__name__)
+
+# 한글 폰트 경로 (env에서 읽기, 없으면 기본값)
+KOREAN_FONT_PATH = os.getenv("KOREAN_FONT_PATH", "C:/Windows/Fonts/malgun.ttf")
+if not os.path.exists(KOREAN_FONT_PATH):
+    # fallback 경로들
+    fallback_paths = [
+        "C:/Windows/Fonts/NanumGothic.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansKR-Regular.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    ]
+    for path in fallback_paths:
+        if os.path.exists(path):
+            KOREAN_FONT_PATH = path
+            break
+
+# 이미지 배경 감지 threshold
+IMAGE_BG_VARIANCE_THRESHOLD = int(os.getenv("IMAGE_BG_VARIANCE_THRESHOLD", "150"))
 
 
 def _render_multi_color_text(
@@ -134,16 +152,16 @@ class ReplaceResult:
     error: str = ""
 
 
-# Role별 최소 폰트 크기
+# Role별 최소 폰트 크기 (env에서 읽기)
 MIN_FONT_SIZE = {
-    "title": 14.0,
-    "heading": 12.0,
-    "body": 10.0,
-    "bullet": 10.0,
-    "caption": 6.0,
-    "footer": 6.0,
-    "source": 6.0,
-    "default": 8.0,
+    "title": float(os.getenv("MIN_FONT_SIZE_TITLE", "14.0")),
+    "heading": float(os.getenv("MIN_FONT_SIZE_HEADING", "12.0")),
+    "body": float(os.getenv("MIN_FONT_SIZE_BODY", "10.0")),
+    "bullet": float(os.getenv("MIN_FONT_SIZE_BODY", "10.0")),
+    "caption": float(os.getenv("MIN_FONT_SIZE_CAPTION", "6.0")),
+    "footer": float(os.getenv("MIN_FONT_SIZE_CAPTION", "6.0")),
+    "source": float(os.getenv("MIN_FONT_SIZE_CAPTION", "6.0")),
+    "default": float(os.getenv("MIN_FONT_SIZE_DEFAULT", "8.0")),
 }
 
 # Role별 bbox 확장 허용 비율 (더 넓게 설정)
@@ -200,27 +218,66 @@ def replace_texts_in_pdf(
         page = doc[page_num - 1]
         page_rect = page.rect
 
-        # 1단계: 모든 텍스트 영역에 redaction 주석 추가
-        redaction_data = []
+        # 1단계: redaction 준비 (VLM 분석 결과 반영)
+        redaction_data = []  # redaction 적용할 블록
+        overlay_data = []     # 이미지 위 텍스트 (redaction 없이 덮어쓰기)
+
         for trans in trans_list:
             bbox = trans.get("bbox", (0, 0, 0, 0))
             prefix_width = trans.get("prefix_width", 0.0)
+            on_image = trans.get("on_image_background", False)
+            keep_prefix = trans.get("keep_prefix", True)  # 기본: prefix 유지
+
             if len(bbox) == 4:
                 x0, y0, x1, y1 = bbox
-                x0_adjusted = x0 + prefix_width if prefix_width > 0 else x0
+                # keep_prefix=True이고 prefix_width가 있을 때만 prefix 영역 보존
+                x0_adjusted = x0 + prefix_width if (keep_prefix and prefix_width > 0) else x0
                 rect = fitz.Rect(x0_adjusted, y0, x1, y1)
-                # 배경색 분석
-                bg_info = _analyze_background(page, rect)
-                # redaction 주석 추가 (텍스트 제거 준비)
-                page.add_redact_annot(rect, fill=bg_info["color"])
-                redaction_data.append((trans, rect, bg_info))
 
-        # 2단계: redaction 적용 (원본 텍스트 제거)
-        page.apply_redactions()
+                if on_image:
+                    # 이미지 위 텍스트: 배경색 샘플링 후 판단
+                    bg_info = _analyze_background(page, rect)
+                    bg_color = bg_info.get("color", (1, 1, 1))
+
+                    # 안전장치: 배경이 흰색에 가까우면 on_image 무시
+                    is_white_bg = (bg_color[0] > 0.9 and bg_color[1] > 0.9 and bg_color[2] > 0.9)
+
+                    if is_white_bg:
+                        # 배경이 흰색이면 일반 텍스트로 처리
+                        page.add_redact_annot(rect, fill=(1, 1, 1))
+                        redaction_data.append((trans, rect))
+                    else:
+                        # 실제 이미지/다이어그램 배경: 해당 색으로 redaction
+                        page.add_redact_annot(rect, fill=bg_color)
+                        trans["expand_allowed"] = False
+                        redaction_data.append((trans, rect))
+                else:
+                    # 일반 텍스트: 흰색 배경으로 redaction
+                    page.add_redact_annot(rect, fill=(1, 1, 1))
+                    redaction_data.append((trans, rect))
+
+        # 2단계: redaction 적용 (일반 배경만)
+        if redaction_data:
+            page.apply_redactions(images=0)  # 이미지 유지
 
         # 3단계: 번역된 텍스트 삽입
-        for trans, _, bg_info in redaction_data:
-            result = _replace_single_block(page, trans, page_rect, bg_info)
+        # 3a: redaction된 영역
+        for trans, _ in redaction_data:
+            result = _replace_single_block(page, trans, page_rect, None)
+            debug_records.append(asdict(result))
+
+            if result.status == "replaced":
+                results["replaced"] += 1
+            elif result.status == "review_needed":
+                results["review_needed"] += 1
+            else:
+                results["failed"] += 1
+
+        # 3b: 이미지 위 텍스트 (redaction 없이 덮어쓰기)
+        for trans, _ in overlay_data:
+            # expand_allowed=False로 설정해서 bbox 확장 방지
+            trans["expand_allowed"] = False
+            result = _replace_single_block(page, trans, page_rect, None)
             debug_records.append(asdict(result))
 
             if result.status == "replaced":
@@ -265,6 +322,8 @@ def _replace_single_block(
     color_int = trans.get("color", 0)
     prefix_width = trans.get("prefix_width", 0.0)  # prefix
     has_multi_color = trans.get("has_multi_color", False)  # multi-color 영역 너비
+    expand_allowed = trans.get("expand_allowed", True)  # VLM 분석 결과
+    keep_prefix = trans.get("keep_prefix", True)  # prefix 유지 여부
 
     # 기본 결과 초기화
     result = ReplaceResult(
@@ -289,8 +348,8 @@ def _replace_single_block(
         return result
 
     x0, y0, x1, y1 = bbox
-    # prefix 영역 건너뛰기 (원본 기호 유지)
-    x0_adjusted = x0 + prefix_width if prefix_width > 0 else x0
+    # prefix area skip (only when keep_prefix=True and prefix_width > 0)
+    x0_adjusted = x0 + prefix_width if (keep_prefix and prefix_width > 0) else x0
     original_rect = fitz.Rect(x0_adjusted, y0, x1, y1)
 
     # 1. 배경 정보 사용 (이미 redaction에서 분석됨)
@@ -313,7 +372,8 @@ def _replace_single_block(
     # 4. fit 기반 폰트 크기 계산 + bbox 확장
     fit_result = _calculate_fit_with_expansion(
         page, translated, english_font, original_size,
-        original_rect, page_rect, role, min_size
+        original_rect, page_rect, role, min_size,
+        allow_expansion=expand_allowed
     )
 
     final_rect = fit_result["rect"]
@@ -353,52 +413,56 @@ def _replace_single_block(
         )
     result.insert_result = insert_result
 
-    # overflow 발생 시 rect를 더 확장해서 재시도
+    # overflow 발생 시 재시도
     if insert_result < 0:
-        # 번역이 원본보다 훨씬 긴 경우 (예: "구분"→"Classification") 더 공격적 확장
-        orig_len = len(original) if original else 1
-        trans_len = len(translated) if translated else 1
-        expansion_factor = max(0.5, min(2.0, trans_len / orig_len - 1))
+        retry_rect = final_rect  # 기본적으로 현재 rect 사용
 
-        # 추가 확장: 오른쪽과 아래로 더 확장
-        expanded_rect = fitz.Rect(
-            final_rect.x0,
-            final_rect.y0,
-            min(final_rect.x1 + final_rect.width * expansion_factor, page_rect.width - 5),
-            min(final_rect.y1 + final_rect.height * 0.3, page_rect.height - 5)
-        )
+        # expand_allowed=True일 때만 rect 확장 시도
+        if expand_allowed:
+            # 번역이 원본보다 훨씬 긴 경우 (예: "구분"→"Classification") 더 공격적 확장
+            orig_len = len(original) if original else 1
+            trans_len = len(translated) if translated else 1
+            expansion_factor = max(0.5, min(2.0, trans_len / orig_len - 1))
 
-        # 재시도 (다중 색상이면 다시 시도)
-        if has_multi_color:
-            insert_result = _render_multi_color_text(
-                page, trans, expanded_rect, english_font, final_size, bg_info["color"]
+            # 추가 확장: 오른쪽과 아래로 더 확장
+            retry_rect = fitz.Rect(
+                final_rect.x0,
+                final_rect.y0,
+                min(final_rect.x1 + final_rect.width * expansion_factor, page_rect.width - 5),
+                min(final_rect.y1 + final_rect.height * 0.3, page_rect.height - 5)
             )
-            if insert_result < 0:
+
+            # 재시도 (다중 색상이면 다시 시도)
+            if has_multi_color:
+                insert_result = _render_multi_color_text(
+                    page, trans, retry_rect, english_font, final_size, bg_info["color"]
+                )
+                if insert_result < 0:
+                    insert_result = page.insert_textbox(
+                        retry_rect,
+                        translated,
+                        fontname=english_font,
+                        fontsize=final_size,
+                        color=text_color,
+                        align=fitz.TEXT_ALIGN_LEFT
+                    )
+            else:
                 insert_result = page.insert_textbox(
-                    expanded_rect,
+                    retry_rect,
                     translated,
                     fontname=english_font,
                     fontsize=final_size,
                     color=text_color,
                     align=fitz.TEXT_ALIGN_LEFT
                 )
-        else:
-            insert_result = page.insert_textbox(
-                expanded_rect,
-                translated,
-                fontname=english_font,
-                fontsize=final_size,
-                color=text_color,
-                align=fitz.TEXT_ALIGN_LEFT
-            )
-        result.insert_result = insert_result
-        result.expanded_bbox = (expanded_rect.x0, expanded_rect.y0, expanded_rect.x1, expanded_rect.y1)
+            result.insert_result = insert_result
+            result.expanded_bbox = (retry_rect.x0, retry_rect.y0, retry_rect.x1, retry_rect.y1)
 
-        # 여전히 overflow면 폰트를 더 줄여서 시도
+        # 여전히 overflow면 폰트를 더 줄여서 시도 (확장 여부와 관계없이)
         if insert_result < 0 and final_size > 8.0:
             smaller_size = max(8.0, final_size * 0.7)
             insert_result = page.insert_textbox(
-                expanded_rect,
+                retry_rect,
                 translated,
                 fontname=english_font,
                 fontsize=smaller_size,
@@ -452,13 +516,14 @@ def _analyze_background(page: fitz.Page, rect: fitz.Rect) -> dict:
         if r > 0.85 and g > 0.85 and b > 0.85:
             return {"type": "white", "color": (1, 1, 1)}
 
-        # variance 높으면 이미지 → 흰색
+        # variance 높으면 이미지 배경
         r_vals = [samples[i] for i in range(0, len(samples), 3)]
         if len(r_vals) > 1:
             avg_r = sum(r_vals) / len(r_vals)
             variance = sum((x - avg_r)**2 for x in r_vals) / len(r_vals)
-            if variance > 150:
-                return {"type": "white", "color": (1, 1, 1)}
+            if variance > IMAGE_BG_VARIANCE_THRESHOLD:
+                # 이미지 배경: 평균 색상 반환 (한글 위장용)
+                return {"type": "image", "color": (r, g, b)}
 
         return {"type": "solid", "color": (r, g, b)}
     except Exception as e:
@@ -474,16 +539,20 @@ def _calculate_fit_with_expansion(
     original_rect: fitz.Rect,
     page_rect: fitz.Rect,
     role: str,
-    min_size: float
+    min_size: float,
+    allow_expansion: bool = True
 ) -> dict:
     """
     fit 기반 폰트 크기 계산 + bbox 확장
 
     순서:
     1. 원본 크기로 시도
-    2. 안 되면 rect 확장
+    2. 안 되면 rect 확장 (allow_expansion=True일 때만)
     3. 안 되면 폰트 축소
     4. min_size까지만 축소
+
+    Args:
+        allow_expansion: False면 bbox 확장 없이 폰트만 축소
     """
     expand_config = EXPAND_RATIO.get(role, EXPAND_RATIO["default"])
 
@@ -498,11 +567,15 @@ def _calculate_fit_with_expansion(
     )
 
     # 시도할 rect 목록 (점진적 확장)
-    rects_to_try = [
-        original_rect,
-        fitz.Rect(original_rect.x0, original_rect.y0, max_right, original_rect.y1),
-        fitz.Rect(original_rect.x0, original_rect.y0, max_right, max_bottom),
-    ]
+    if allow_expansion:
+        rects_to_try = [
+            original_rect,
+            fitz.Rect(original_rect.x0, original_rect.y0, max_right, original_rect.y1),
+            fitz.Rect(original_rect.x0, original_rect.y0, max_right, max_bottom),
+        ]
+    else:
+        # 확장 금지: 원본 rect만 사용
+        rects_to_try = [original_rect]
 
     # 시도할 폰트 크기 (원본 → 최소)
     sizes_to_try = []
@@ -521,12 +594,20 @@ def _calculate_fit_with_expansion(
             if result >= 0:
                 return {"rect": rect, "size": size, "fit": result}
 
-    # 모두 실패 시 최대 확장 + 최소 크기
-    return {
-        "rect": fitz.Rect(original_rect.x0, original_rect.y0, max_right, max_bottom),
-        "size": min_size,
-        "fit": -1
-    }
+    # 모두 실패 시 (확장 허용 여부에 따라 다른 결과)
+    if allow_expansion:
+        return {
+            "rect": fitz.Rect(original_rect.x0, original_rect.y0, max_right, max_bottom),
+            "size": min_size,
+            "fit": -1
+        }
+    else:
+        # 확장 금지: 원본 rect + 최소 크기
+        return {
+            "rect": original_rect,
+            "size": min_size,
+            "fit": -1
+        }
 
 
 def _test_text_fit(text: str, font: str, size: float, rect: fitz.Rect) -> float:

@@ -1089,7 +1089,16 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
 
         if pdf_layer_pages:
             print(f"[Slides] PDF 레이어 방식으로 {len(pdf_layer_pages)} 페이지 처리...")
-            pipeline = PDFLayerPipeline(output_dir=str(TRANSLATED_DIR))
+
+            # 진행 상황 콜백 (ETA 계산용)
+            def on_page_done(current_page: int):
+                _page_completed(slide_id, current_page)
+                slide_status[slide_id]["processed_pages"] = current_page
+
+            pipeline = PDFLayerPipeline(
+                output_dir=str(TRANSLATED_DIR),
+                on_page_complete=on_page_done
+            )
             result = await asyncio.to_thread(
                 pipeline.run,
                 str(pdf_path),
@@ -1172,9 +1181,10 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
                 # VLM 모델 언로드
                 await asyncio.to_thread(unload_vlm_model)
 
-        # ========== 3단계: PDF 레이어 처리 후 남은 한글 OCR fallback ==========
+        # ========== 3단계: PDF 레이어 처리 후 이미지 영역 한글 OCR fallback ==========
+        # 이미지가 포함된 페이지에서 이미지 내 한글 텍스트도 번역
         if translated_pdf_path.exists() and pdf_layer_pages:
-            print(f"[Slides] PDF 레이어 처리 후 남은 한글 감지 중...")
+            print(f"[Slides] PDF 레이어 처리 후 이미지 영역 한글 OCR fallback 시작...")
 
             # VLM 모듈 로드 (아직 안 되어있으면)
             try:
@@ -1190,8 +1200,29 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
             if vlm_available:
                 import re
                 trans_doc = fitz.open(str(translated_pdf_path))
+                orig_doc = fitz.open(str(pdf_path))  # 원본 PDF도 열기
 
                 for page_idx in pdf_layer_pages:
+                    # 원본 페이지에서 이미지 블록 확인
+                    orig_page = orig_doc[page_idx]
+                    orig_dict = orig_page.get_text("dict")
+                    image_blocks = [b for b in orig_dict.get("blocks", []) if b.get("type") == 1]
+
+                    # 이미지 블록의 총 면적 계산
+                    page_area = orig_page.rect.width * orig_page.rect.height
+                    image_area = sum(
+                        (b["bbox"][2] - b["bbox"][0]) * (b["bbox"][3] - b["bbox"][1])
+                        for b in image_blocks
+                    )
+                    image_ratio = image_area / page_area if page_area > 0 else 0
+
+                    # 이미지가 페이지의 10% 이상을 차지하면 OCR fallback 수행
+                    if image_ratio < 0.10:
+                        print(f"[Slides] 페이지 {page_idx+1}: 이미지 비율 {image_ratio:.1%} (10% 미만) - OCR 스킵")
+                        continue
+
+                    print(f"[Slides] 페이지 {page_idx+1}: 이미지 비율 {image_ratio:.1%} - OCR fallback 수행")
+
                     page = trans_doc[page_idx]
                     mat = fitz.Matrix(2, 2)
                     pix = page.get_pixmap(matrix=mat)
@@ -1203,6 +1234,7 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
                     # OCR로 남은 한글 감지
                     try:
                         regions = await asyncio.to_thread(stage_ocr_surya, str(temp_img_path))
+                        print(f"[Slides] 페이지 {page_idx+1}: OCR 영역 {len(regions) if regions else 0}개 감지")
 
                         # 한글이 포함된 영역만 필터링
                         korean_regions = []
@@ -1211,15 +1243,17 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
                                 ocr_text = region.get("ocr_text", "")
                                 if re.search(r'[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]', ocr_text):
                                     korean_regions.append(region)
+                                    print(f"    - 한글 감지: \"{ocr_text[:30]}...\"")
 
                         if korean_regions:
-                            print(f"[Slides] 페이지 {page_idx+1}: 남은 한글 {len(korean_regions)}개 발견, OCR fallback 적용")
+                            print(f"[Slides] 페이지 {page_idx+1}: 남은 한글 {len(korean_regions)}개 발견, 번역 중...")
 
                             # 번역 + 오버레이
-                            regions = await asyncio.to_thread(stage_translate, str(temp_img_path), korean_regions, {})
+                            translated_regions = await asyncio.to_thread(stage_translate, str(temp_img_path), korean_regions, {})
 
                             final_img_path = TRANSLATED_DIR / f"{slide_id}_{page_idx}.png"
-                            await asyncio.to_thread(stage_overlay, str(temp_img_path), regions, str(final_img_path))
+                            await asyncio.to_thread(stage_overlay, str(temp_img_path), translated_regions, str(final_img_path))
+                            print(f"[Slides] 페이지 {page_idx+1}: OCR fallback 완료")
 
                             # temp 삭제
                             if temp_img_path.exists():
@@ -1228,11 +1262,12 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
                             slide_data[slide_id][page_idx] = {
                                 "page_number": page_idx,
                                 "ocr_text": None,
-                                "overlay_items": [{"original": r.get("ocr_text", ""), "translated": r.get("english", "")} for r in regions],
+                                "overlay_items": [{"original": r.get("ocr_text", ""), "translated": r.get("english", "")} for r in translated_regions],
                                 "has_translation": True,
                                 "method": "pdf_layer+ocr_fallback",
                             }
                         else:
+                            print(f"[Slides] 페이지 {page_idx+1}: 남은 한글 없음")
                             # 남은 한글 없음 - temp를 최종으로 이동
                             final_img_path = TRANSLATED_DIR / f"{slide_id}_{page_idx}.png"
                             if temp_img_path.exists():
@@ -1248,6 +1283,8 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
 
                     except Exception as e:
                         print(f"[Slides] 페이지 {page_idx+1} OCR fallback 실패: {e}")
+                        import traceback
+                        traceback.print_exc()
                         # 실패 시 temp를 최종으로
                         final_img_path = TRANSLATED_DIR / f"{slide_id}_{page_idx}.png"
                         if temp_img_path.exists():
@@ -1264,6 +1301,7 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
                     _page_completed(slide_id, page_idx + 1)
 
                 trans_doc.close()
+                orig_doc.close()
 
                 # VLM 모델 언로드
                 await asyncio.to_thread(unload_vlm_model)

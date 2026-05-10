@@ -266,6 +266,10 @@ def extract_korean_texts_for_translation(
         page_lines = []  # 이 페이지의 모든 라인
         block_idx = 0
 
+        # 불렛-only 라인 위치 추적 (Y좌표 -> X좌표)
+        # 별도 라인에 있는 불렛을 추적해서 다음 텍스트 라인에 has_bullet 표시
+        bullet_only_positions = []  # [(y_center, x0), ...]
+
         for block in text_dict.get("blocks", []):
             if block.get("type") != 0:  # 텍스트 블록만
                 continue
@@ -273,34 +277,59 @@ def extract_korean_texts_for_translation(
             block_bbox = block.get("bbox", (0, 0, 0, 0))
 
             for line in block.get("lines", []):
-                line_bbox = line.get("bbox", (0, 0, 0, 0))
+                line_bbox = list(line.get("bbox", (0, 0, 0, 0)))
                 line_texts = []
                 line_font = ""
                 line_size = 12.0
                 line_color = 0
                 has_bullet = False
+                symbol_width = 0  # 심볼 폰트 영역 너비 (bbox 조정용)
 
                 for span in line.get("spans", []):
                     span_text = span.get("text", "")
                     span_font = span.get("font", "")
+                    span_bbox = span.get("bbox", (0, 0, 0, 0))
 
                     # 심볼 폰트 체크 (Wingdings 등)
+                    # 심볼 폰트는 번역하지 않고 원본 그대로 유지
                     if any(sf in span_font.lower() for sf in SYMBOL_FONTS):
                         has_bullet = True
-                        # bullet point를 "- "로 변환 (ASCII, 폰트 호환성)
-                        if span_text.strip():
-                            line_texts.append("- ")
-                        continue
+                        # 심볼 span의 너비를 기록 (bbox 조정용)
+                        # 아직 텍스트가 없으면 (맨 앞 심볼) 너비 누적
+                        if not line_texts:
+                            symbol_width = span_bbox[2] - line_bbox[0]  # span 끝 - 라인 시작
+                        continue  # 아무것도 추가하지 않음 → 원본 유지
 
                     if span_text.strip():
+                        # 기호만 있는 span은 번역 대상에서 제외 (원본 유지)
+                        BULLET_CHARS = {'•', '·', '■', '□', '▶', '▷', '◆', '◇', '○', '●', '★', '☆', '→', '⇒', '✓', '✔', '◀', '▼', '▲'}
+                        if span_text.strip() in BULLET_CHARS:
+                            has_bullet = True
+                            # 아직 텍스트가 없으면 (맨 앞 기호) 너비 누적
+                            if not line_texts:
+                                symbol_width = span_bbox[2] - line_bbox[0]
+                            continue  # 기호는 번역하지 않음
+
                         line_texts.append(span_text)
                         if not line_font:
                             line_font = span_font
                             line_size = span.get("size", 12.0)
                             line_color = span.get("color", 0)
 
+                # 심볼/기호가 맨 앞에 있었으면 bbox.x0 조정 (기호 영역 보존)
+                if symbol_width > 0:
+                    line_bbox[0] = line_bbox[0] + symbol_width
+
                 # 라인 텍스트 합치기
                 full_text = "".join(line_texts).strip()
+
+                # 불렛-only 라인 추적 (텍스트 없이 불렛만 있는 경우)
+                if not full_text and has_bullet:
+                    # 불렛 위치 저장 (Y 중심, X 시작점)
+                    y_center = (line_bbox[1] + line_bbox[3]) / 2
+                    bullet_only_positions.append((y_center, line_bbox[0]))
+                    continue
+
                 if not full_text:
                     continue
 
@@ -331,6 +360,18 @@ def extract_korean_texts_for_translation(
                 # bbox 크기가 너무 작은 경우 스킵
                 if (x1 - x0) < 5 or (y1 - y0) < 5:
                     continue
+
+                # 불렛-only 라인 근처인지 확인 (별도 라인에 있던 불렛)
+                # 현재 라인의 Y 중심과 불렛 위치 비교
+                if not has_bullet and bullet_only_positions:
+                    line_y_center = (line_bbox[1] + line_bbox[3]) / 2
+                    line_height = line_bbox[3] - line_bbox[1]
+                    for bullet_y, bullet_x in bullet_only_positions:
+                        # Y가 비슷하고 (같은 줄), 불렛이 텍스트 왼쪽에 있으면
+                        y_diff = abs(line_y_center - bullet_y)
+                        if y_diff < line_height * 0.8 and bullet_x < line_bbox[0]:
+                            has_bullet = True
+                            break
 
                 # role 추론
                 role = _infer_line_role(
@@ -449,6 +490,138 @@ def _is_text_char(c: str) -> bool:
     return False
 
 
+def _is_text_character(char: str) -> bool:
+    """
+    텍스트 문자인지 판별 (기호가 아닌 것)
+
+    텍스트: 한글, 영어, 숫자, 일반 구두점, 공백
+    기호: 그 외 모든 것 (•, ■, ●, → 등)
+    """
+    if not char:
+        return False
+
+    # 공백/탭
+    if char in ' \t\n':
+        return True
+
+    # 일반 구두점 및 괄호
+    if char in '.,;:!?\'"()[]{}/<>@#$%^&*+=_-~`\\|':
+        return True
+
+    # 숫자
+    if char.isdigit():
+        return True
+
+    # 영어
+    if char.isascii() and char.isalpha():
+        return True
+
+    # 한글 (완성형 + 자모)
+    code = ord(char)
+    if 0xAC00 <= code <= 0xD7AF:  # 완성형 한글
+        return True
+    if 0x1100 <= code <= 0x11FF:  # 한글 자모
+        return True
+    if 0x3130 <= code <= 0x318F:  # 호환용 한글 자모
+        return True
+
+    # 그 외는 기호로 판단
+    return False
+
+
+def _split_at_inline_symbols(text: str, bbox: tuple, font_size: float) -> list[dict]:
+    """
+    텍스트를 인라인 기호 기준으로 분리하고 각 세그먼트의 bbox 계산
+
+    텍스트가 아닌 문자(기호)를 만나면 분리
+
+    Returns:
+        [{"text": "...", "bbox": (...), "is_symbol": False}, ...]
+    """
+    if not text:
+        return []
+
+    x0, y0, x1, y1 = bbox
+    total_width = x1 - x0
+
+    char_count = len(text)
+    if char_count == 0:
+        return []
+
+    avg_char_width = total_width / char_count
+
+    segments = []
+    current_text = ""
+    current_start_idx = 0
+    current_is_symbol = None  # None, True, False
+
+    for i, char in enumerate(text):
+        is_text = _is_text_character(char)
+
+        if current_is_symbol is None:
+            # 첫 문자
+            current_is_symbol = not is_text
+            current_text = char
+            current_start_idx = i
+        elif current_is_symbol == (not is_text):
+            # 같은 타입 계속
+            current_text += char
+        else:
+            # 타입 변경 - 이전 세그먼트 저장
+            if current_text.strip():
+                seg_x0 = x0 + current_start_idx * avg_char_width
+                seg_x1 = x0 + i * avg_char_width
+                segments.append({
+                    "text": current_text,
+                    "bbox": (seg_x0, y0, seg_x1, y1),
+                    "is_symbol": current_is_symbol
+                })
+
+            # 새 세그먼트 시작
+            current_text = char
+            current_start_idx = i
+            current_is_symbol = not is_text
+
+    # 마지막 세그먼트
+    if current_text.strip():
+        seg_x0 = x0 + current_start_idx * avg_char_width
+        segments.append({
+            "text": current_text,
+            "bbox": (seg_x0, y0, x1, y1),
+            "is_symbol": current_is_symbol
+        })
+
+    return segments
+
+
+def _has_inline_symbols(text: str) -> bool:
+    """텍스트에 인라인 기호가 포함되어 있는지 확인 (앞뒤 공백 제외한 중간 부분)"""
+    text = text.strip()
+    if len(text) < 2:
+        return False
+    # 첫 문자와 마지막 문자 제외한 중간에 기호가 있는지
+    middle = text[1:-1] if len(text) > 2 else ""
+    return any(not _is_text_character(c) for c in middle)
+
+
+def _remove_inline_symbols(text: str) -> str:
+    """
+    인라인 기호를 공백으로 변환 (번역용)
+
+    예: "텍스트 • 다른텍스트" → "텍스트   다른텍스트"
+    """
+    result = []
+    for char in text:
+        if _is_text_character(char):
+            result.append(char)
+        else:
+            result.append(' ')  # 기호를 공백으로 변환
+
+    # 연속 공백 정리
+    import re
+    return re.sub(r' +', ' ', ''.join(result))
+
+
 def _separate_prefix(text: str, font_size: float) -> tuple[str, str, float]:
     """텍스트에서 prefix 특수기호 분리 (한글/영어/숫자 아닌 것들)"""
     if not text:
@@ -476,6 +649,62 @@ def _separate_prefix(text: str, font_size: float) -> tuple[str, str, float]:
     return text_without, prefix, width
 
 
+def _is_symbol_only(text: str) -> bool:
+    """텍스트가 기호/화살표만으로 구성되어 있는지 확인"""
+    import re
+    # 한글, 영문, 숫자 제거 후 남은 것만 있으면 기호
+    stripped = re.sub(r'[\uac00-\ud7af\u1100-\u11ff\u3130-\u318fa-zA-Z0-9\s]', '', text)
+    text_chars = re.sub(r'[^a-zA-Z0-9\uac00-\ud7af]', '', text)
+    # 기호만 있고 실제 텍스트가 없는 경우
+    return len(stripped) > 0 and len(text_chars) == 0
+
+
+def _is_connector_symbol(text: str) -> bool:
+    """연결 기호인지 확인 (화살표, 점 등)"""
+    CONNECTORS = {'⇒', '→', '➡', '↔', '←', '⟹', '⟸', '⇔', '·', '•', '■', '□', '▶', '▷', '◆', '◇', '○', '●', '★', '☆', '>', '<', '->', '<-', '=>', '<='}
+    return text.strip() in CONNECTORS or _is_symbol_only(text.strip())
+
+
+def _is_diagram_label(line: dict, page_rect) -> bool:
+    """
+    도식/다이어그램 라벨인지 확인
+
+    도식 라벨 특징:
+    - 짧은 텍스트 (1-4 단어, 보통 20자 이하)
+    - 작은 폰트 (14pt 이하)
+    - 페이지 중앙 영역에 위치 (상단 15% ~ 하단 15% 제외)
+    - body role
+    """
+    text = line.get("text", "")
+    font_size = line.get("size", 12)
+    role = line.get("role", "body")
+    bbox = line.get("bbox", (0, 0, 0, 0))
+
+    # 텍스트 길이 체크 (짧은 텍스트)
+    text_len = len(text.strip())
+    if text_len > 20:
+        return False
+
+    # 폰트 크기 체크 (작은 폰트)
+    if font_size > 14:
+        return False
+
+    # role 체크 (body만)
+    if role not in ("body", "caption"):
+        return False
+
+    # 위치 체크 (페이지 중앙 영역)
+    page_height = page_rect.height
+    y0 = bbox[1]
+    y_ratio = y0 / page_height if page_height > 0 else 0
+
+    # 상단 15% 이하거나 하단 15% 이상이면 도식 라벨 아님
+    if y_ratio < 0.15 or y_ratio > 0.85:
+        return False
+
+    return True
+
+
 def _group_adjacent_lines(
     lines: list[dict],
     page_rect
@@ -490,6 +719,7 @@ def _group_adjacent_lines(
     - font size/color가 비슷
     - 앞 line이 문장 종결로 끝나지 않음
     - bullet 첫 줄은 개별, 그 뒤 continuation은 병합
+    - 기호/화살표는 경계로 분리 (그룹화 안 함)
     """
     if not lines:
         return []
@@ -505,10 +735,27 @@ def _group_adjacent_lines(
         text = line["text"]
         has_bullet = line.get("has_bullet", False)
 
+        # 기호/화살표만 있는 라인은 스킵 (번역 대상 아님, 원본 유지)
+        if _is_connector_symbol(text):
+            # 현재 그룹이 있으면 끊고 새 그룹 시작 준비
+            if current_group:
+                groups.append(current_group)
+                current_group = None
+            continue
+
+        # 도식 라벨은 항상 개별 그룹 (병합 안 함)
+        is_diagram = _is_diagram_label(line, page_rect)
+
         # 새 그룹 시작 조건 확인
         start_new_group = False
 
         if current_group is None:
+            start_new_group = True
+        elif is_diagram:
+            # 도식 라벨은 항상 새 그룹
+            start_new_group = True
+        elif current_group.get("is_diagram"):
+            # 이전 그룹이 도식 라벨이었으면 새 그룹 시작
             start_new_group = True
         else:
             prev_line = current_group["lines"][-1]
@@ -580,6 +827,7 @@ def _group_adjacent_lines(
                 "lines": [line],
                 "role": role,
                 "is_bullet": has_bullet or text.startswith("- "),
+                "is_diagram": is_diagram,
             }
         else:
             current_group["lines"].append(line)
@@ -597,6 +845,7 @@ def _group_adjacent_lines(
         is_bullet = group.get("is_bullet", False)
 
         # bbox 병합 (전체 영역)
+        # 각 라인의 x0은 이미 symbol_width만큼 조정되어 있음
         x0 = min(l["bbox"][0] for l in group_lines)
         y0 = min(l["bbox"][1] for l in group_lines)
         x1 = max(l["bbox"][2] for l in group_lines)
@@ -618,7 +867,7 @@ def _group_adjacent_lines(
         if len(group_lines) > 1:
             role = "body" if not is_bullet else "bullet"
 
-        # prefix 분리 (•, ■ 등 Helvetica 비호환 기호)
+        # prefix 분리 (맨 앞 기호)
         text_for_trans, prefix, prefix_width = _separate_prefix(text, first_line["size"])
 
         # 라인별 색상/텍스트 정보 보존 (다중 색상 span 처리용)
@@ -626,11 +875,15 @@ def _group_adjacent_lines(
         line_texts = [l["text"] for l in group_lines]
         has_multi_color = len(set(line_colors)) > 1
 
+        # 인라인 기호를 공백으로 변환 (번역 텍스트에서만)
+        # bbox 분리는 하지 않음 (여러 줄 텍스트에서 문제 발생)
+        text_for_trans_clean = _remove_inline_symbols(text_for_trans)
+
         result.append({
             "page_num": page_num,
             "block_id": f"p{page_num}_b{idx}",
             "text": text,
-            "text_for_translation": text_for_trans if text_for_trans else text,
+            "text_for_translation": text_for_trans_clean.strip() if text_for_trans_clean.strip() else text_for_trans,
             "prefix": prefix,
             "prefix_width": prefix_width,
             "bbox": (x0, y0, x1, y1),

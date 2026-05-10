@@ -17,6 +17,7 @@ from .pdf_text_extractor import (
 )
 from .pdf_text_replacer import replace_texts_in_pdf
 from .llm_client import get_default_llm_client, BaseLLMClient
+from .bbox_analyzer import analyze_page_layout
 
 logger = logging.getLogger(__name__)
 
@@ -28,9 +29,11 @@ class PDFLayerPipeline:
         self,
         llm_client: Optional[BaseLLMClient] = None,
         output_dir: Optional[str] = None,
+        on_page_complete: Optional[callable] = None,
     ):
         self.llm_client = llm_client or get_default_llm_client()
         self.output_dir = output_dir
+        self.on_page_complete = on_page_complete  # 페이지 완료 시 콜백 (page_num: int)
         self.log_lines = []
 
     def _log(self, message: str):
@@ -111,10 +114,28 @@ class PDFLayerPipeline:
                 result["message"] = "No Korean text to translate"
                 return result
 
+            # Step 2.5: VLM 레이아웃 분석 (선택적)
+            layout_analysis = None
+            try:
+                self._log("[Step 2.5] Analyzing page layout with VLM...")
+                layout_analysis = self._analyze_layout_with_vlm(pdf_path, korean_texts)
+                if layout_analysis:
+                    on_image_count = sum(1 for b in layout_analysis.get("blocks", []) if b.get("on_image_background"))
+                    self._log(f"  - Analyzed {len(layout_analysis.get('blocks', []))} blocks")
+                    self._log(f"  - On image background: {on_image_count}")
+                else:
+                    self._log("  - VLM not available, using heuristics")
+            except Exception as e:
+                self._log(f"  - VLM analysis skipped: {e}")
+
             # Step 3: 번역
             self._log("[Step 3] Translating texts...")
             translations = self._translate_texts(korean_texts, target_lang)
             self._log(f"  - Translated {len(translations)} blocks")
+
+            # 레이아웃 분석 결과를 translations에 반영
+            if layout_analysis:
+                translations = self._apply_layout_analysis(translations, layout_analysis)
 
             # Step 4: PDF 텍스트 교체
             self._log("[Step 4] Replacing texts in PDF...")
@@ -186,6 +207,9 @@ class PDFLayerPipeline:
                 page_groups[page] = []
             page_groups[page].append(item)
 
+        processed_pages = 0
+        total_page_count = len(page_groups)
+
         for page_num, items in page_groups.items():
             self._log(f"    Page {page_num}: {len(items)} blocks")
 
@@ -198,6 +222,14 @@ class PDFLayerPipeline:
                 self._log(f"    [ERROR] Page {page_num} translation failed: {e}")
                 # 실패 시 placeholder 사용
                 translations.extend(self._placeholder_translations(items))
+
+            # 페이지 완료 콜백 호출
+            processed_pages += 1
+            if self.on_page_complete:
+                try:
+                    self.on_page_complete(processed_pages)
+                except Exception as cb_err:
+                    self._log(f"    [WARN] Page complete callback error: {cb_err}")
 
         return translations
 
@@ -241,7 +273,9 @@ class PDFLayerPipeline:
             "3. Keep numbers as digits, do NOT spell them out (10 → 10, not Ten)",
             "4. NEVER add ANY bullet symbols (-, *, •, ■, etc.) - they are preserved from original",
             "5. Do NOT add extra punctuation or quotes",
-            "6. Output format: [BLOCK_ID]: translated text",
+            "6. If text contains symbols (⇒, →, ·, etc.), keep them exactly in place",
+            "7. ALWAYS preserve and translate parentheses and their contents",
+            "8. Output format: [BLOCK_ID]: translated text",
             "",
             "Texts to translate:",
         ]
@@ -368,6 +402,121 @@ class PDFLayerPipeline:
         trans_path = Path(self.output_dir) / "translations.json"
         with open(trans_path, "w", encoding="utf-8") as f:
             json.dump(translations, f, ensure_ascii=False, indent=2)
+
+    def _analyze_layout_with_vlm(
+        self,
+        pdf_path: str,
+        korean_texts: list[dict]
+    ) -> Optional[dict]:
+        """
+        VLM으로 페이지 레이아웃 분석
+
+        Args:
+            pdf_path: PDF 파일 경로
+            korean_texts: 추출된 한글 텍스트 블록들
+
+        Returns:
+            레이아웃 분석 결과 또는 None
+        """
+        import fitz
+        from PIL import Image
+        import io
+
+        try:
+            doc = fitz.open(pdf_path)
+            all_blocks = []
+
+            # 페이지별로 그룹화
+            page_groups = {}
+            for item in korean_texts:
+                page_num = item["page_num"]
+                if page_num not in page_groups:
+                    page_groups[page_num] = []
+                page_groups[page_num].append(item)
+
+            # 각 페이지 분석
+            for page_num, blocks in page_groups.items():
+                if page_num < 1 or page_num > len(doc):
+                    continue
+
+                page = doc[page_num - 1]
+
+                # 페이지를 이미지로 렌더링
+                mat = fitz.Matrix(2.0, 2.0)  # 2x 해상도
+                pix = page.get_pixmap(matrix=mat)
+                img_data = pix.tobytes("png")
+                page_image = Image.open(io.BytesIO(img_data))
+
+                # bbox 좌표를 이미지 해상도에 맞게 조정
+                scaled_blocks = []
+                for block in blocks:
+                    scaled_block = block.copy()
+                    bbox = block.get("bbox", [0, 0, 0, 0])
+                    # 2x 스케일
+                    scaled_block["bbox"] = [v * 2 for v in bbox]
+                    scaled_blocks.append(scaled_block)
+
+                # VLM 분석
+                analysis = analyze_page_layout(page_image, scaled_blocks, use_vlm=True)
+
+                # bbox를 원래 좌표로 복원하고 결과 저장
+                for block_result in analysis.get("blocks", []):
+                    all_blocks.append(block_result)
+
+            doc.close()
+
+            return {
+                "blocks": all_blocks,
+                "merge_groups": []  # TODO: 페이지 간 병합 그룹
+            }
+
+        except Exception as e:
+            self._log(f"  - Layout analysis error: {e}")
+            return None
+
+    def _apply_layout_analysis(
+        self,
+        translations: list[dict],
+        layout_analysis: dict
+    ) -> list[dict]:
+        """
+        레이아웃 분석 결과를 번역 데이터에 적용
+
+        Args:
+            translations: 번역된 텍스트 리스트
+            layout_analysis: VLM 분석 결과
+
+        Returns:
+            분석 결과가 반영된 번역 리스트
+        """
+        # block_id → 분석 결과 매핑
+        analysis_map = {}
+        for block in layout_analysis.get("blocks", []):
+            block_id = block.get("block_id", "")
+            analysis_map[block_id] = block
+
+        # 각 번역에 분석 결과 추가
+        for trans in translations:
+            block_id = trans.get("block_id", "")
+            has_prefix = bool(trans.get("prefix", ""))
+
+            if block_id in analysis_map:
+                analysis = analysis_map[block_id]
+                trans["on_image_background"] = analysis.get("on_image_background", False)
+                trans["expand_allowed"] = analysis.get("expand_allowed", True)
+                # VLM 결과가 있어도 prefix가 있으면 기본적으로 유지 (VLM이 명시적으로 False 반환 시만 제거)
+                vlm_keep_prefix = analysis.get("keep_prefix")
+                if vlm_keep_prefix is None:
+                    trans["keep_prefix"] = has_prefix  # VLM 결과 없으면 prefix 존재 여부로 판단
+                else:
+                    trans["keep_prefix"] = vlm_keep_prefix or has_prefix  # prefix 있으면 우선 유지
+            else:
+                # 기본값
+                trans["on_image_background"] = False
+                trans["expand_allowed"] = True
+                trans["keep_prefix"] = has_prefix
+
+        return translations
 
 
 def translate_pdf(
