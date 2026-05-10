@@ -136,18 +136,10 @@ function Student() {
     unlockAudio: unlockTTS,
     status: ttsStatus,
     setVolume: setTTSVolume,
-    setOnTtsStart,
   } = useTTS(true, audioLang)
-
-  // TTS 시작 시점 콜백 — useTTS 가 audio schedule 끝낸 후 호출.
-  // subtitle store 의 ttsMs 를 patch 해 SubtitleDisplay 가 단계별 latency 표시.
-  const updateSubtitleTts = useLectureStore((s) => s.updateSubtitleTts)
-  useEffect(() => {
-    setOnTtsStart((subtitleId, ttsMs) => {
-      updateSubtitleTts(subtitleId, ttsMs)
-    })
-    return () => setOnTtsStart(null)
-  }, [setOnTtsStart, updateSubtitleTts])
+  // ttsMs 는 player 가 playSentence return 값에서 직접 받아 commitSubtitle 에 전달
+  // (setOnTtsStart 콜백 경로 우회). 자막은 TTS 시작 시점에 처음 store 에 추가되므로
+  // 그 add 호출에 ttsMs 를 같이 넣음 → 별도 patch 불필요.
 
   const audioLangRef = useRef(audioLang)
   useEffect(() => { audioLangRef.current = audioLang }, [audioLang])
@@ -254,14 +246,14 @@ function Student() {
   // lifecycle (lecture_end/pause/resume) 은 lifecycle unit 으로 큐에 적재.
   const onTranscription = useCallback((params: {
     text: string
-    subtitleId: string
+    commitSubtitle: (ttsMs?: number) => void
     speechStartAt: number
     sentAt: number
   }) => {
     unitPlayer.enqueueSentence(params)
   }, [unitPlayer])
 
-  const onLifecycle = useCallback((apply: () => void, label: string) => {
+  const onLifecycle = useCallback((apply: () => void | Promise<void>, label: string) => {
     unitPlayer.enqueueLifecycle(apply, label)
   }, [unitPlayer])
 
@@ -339,8 +331,17 @@ function Student() {
   const dragStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
   const zoomRef = useRef(zoom)
 
+  // 자막 다운로드 모달 트리거 — sessionId null → 값 transition.
+  //   학생은 강의 진행 중엔 sessionId 가 null 이고, lecture_end 메시지 도착 시점에
+  //   useWebSocket 이 즉시 setSessionId 를 호출하므로 그 순간 모달이 뜸.
+  //   (lifecycle queue 에 들어간 UI 종료 전환은 발화 큐가 다 끝난 뒤 적용되지만,
+  //    sessionId 자체는 큐와 무관하게 즉시 세팅되어 모달은 빠르게 노출.)
+  const prevSessionIdRef = useRef<string | null>(null)
   useEffect(() => {
-    if (sessionId) setShowTranscriptModal(true)
+    if (!prevSessionIdRef.current && sessionId) {
+      setShowTranscriptModal(true)
+    }
+    prevSessionIdRef.current = sessionId
   }, [sessionId])
 
   useEffect(() => {

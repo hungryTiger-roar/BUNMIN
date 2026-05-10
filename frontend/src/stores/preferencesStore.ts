@@ -55,7 +55,7 @@ const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
   fontSize: 18,
   position: 'bottom',
   opacity: 0.9,
-  style: 'plain',
+  style: 'outline',
 }
 
 export const usePreferencesStore = create<PreferencesState>()(

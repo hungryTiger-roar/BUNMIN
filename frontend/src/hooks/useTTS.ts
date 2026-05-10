@@ -148,6 +148,10 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
   // setState 라 setRecoveryGen 호출이 React 의 state diff 로 useEffect 트리거.
   const [recoveryGen, setRecoveryGen] = useState(0)
   const lastRecoveryAtRef = useRef(0)  // 마지막 재생성 timestamp (cooldown 비교용)
+  // 재생 중 heap 압박 감지 시 즉시 재생성 안 하고 예약. task 끝나면 즉시 재생성.
+  // 이전 동작 (다음 30s tick 대기) 의 race window — tick 통과 후 새 task 가 끼어들어
+  // 재생 중 engine.destroy() 가 호출돼 음성 cutoff. flag 로 race 차단.
+  const recreationPendingRef = useRef(false)
 
   const updateStatus = useCallback((s: TTSStatus) => {
     statusRef.current = s
@@ -314,11 +318,15 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
       }
 
       // 발화 중 재생성 = 학생이 듣던 음성 cutoff. 재생 중인 task 가 없을 때만.
-      // 다음 idle 시점까지 대기 (다음 30s tick 에서 재시도 — heap 계속 높으면 결국 재생성됨).
+      // race 차단 — 발화 중이면 pending flag 만 세팅. task 종료 시 onended 가 즉시
+      // 재생성 트리거 → 다음 30s tick 까지 기다리다 race 끼어들 일 없음.
       if (currentTaskRef.current !== null) {
-        console.warn(
-          `[TTS] heap 압박 (${(ratio * 100).toFixed(0)}%) but 발화 진행 중 — idle 대기`
-        )
+        if (!recreationPendingRef.current) {
+          console.warn(
+            `[TTS] heap 압박 (${(ratio * 100).toFixed(0)}%) — 발화 진행 중, task 종료 후 재생성 예약`,
+          )
+          recreationPendingRef.current = true
+        }
         return
       }
 
@@ -327,6 +335,7 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
         `${(limit / 1024 / 1024).toFixed(0)}MB, ${(ratio * 100).toFixed(0)}%) → 엔진 재생성`
       )
       lastRecoveryAtRef.current = now
+      recreationPendingRef.current = false
       // setState 트리거 → init useEffect 의 cleanup → engine.destroy() → 재실행 → 새 엔진
       setRecoveryGen((g) => g + 1)
     }, HEAP_CHECK_INTERVAL_MS)
@@ -426,12 +435,14 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
    *    audioStartedAt: 학생 wall clock 기준 audio 가 실제 재생 시작될 시점 (Date.now() ms)
    *    durationMs:     audio 길이
    *    ended:          audio 재생 끝나면 resolve 되는 Promise (다음 unit 진행 트리거)
+   *    ttsMs:          TTS 합성 소요 시간 (ms). 자막을 audio 시작 시점에 store 에
+   *                    추가할 때 함께 기록 → SubtitleDisplay 의 단계별 latency 표시.
    *  unit player 가 await 로 sequencing 하므로 useTTS 자체 큐 우회. */
   const playSentence = useCallback(async (
     text: string,
     lang: TranslationLang = 'en',
     subtitleId?: string,
-  ): Promise<{ audioStartedAt: number; durationMs: number; ended: Promise<void> }> => {
+  ): Promise<{ audioStartedAt: number; durationMs: number; ended: Promise<void>; ttsMs: number }> => {
     const voice = resolveVoice(lang)
     if (!voice) throw new Error('TTS 음성 끄기 상태')
     if (!engineRef.current || statusRef.current !== 'ready') {
@@ -466,8 +477,8 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
     sourceGain.connect(gainRef.current ?? ctx.destination)
     source.start(startCtxTime)
 
+    const ttsMs = Math.max(0, Math.round(performance.now() - requestedAt))
     if (subtitleId && onTtsStartRef.current) {
-      const ttsMs = Math.max(0, Math.round(performance.now() - requestedAt))
       try { onTtsStartRef.current(subtitleId, ttsMs) } catch (err) {
         console.warn('[TTS] onTtsStart 콜백 오류:', err)
       }
@@ -481,11 +492,19 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
         try { source.disconnect() } catch { /* */ }
         try { sourceGain.disconnect() } catch { /* */ }
         if (currentTaskRef.current === newTask) currentTaskRef.current = null
+        // heap 압박 감지 후 발화 중이라 보류했던 재생성을 즉시 트리거.
+        // 다음 30s tick 까지 기다리지 않고 idle 진입 시점에 바로 재생성 → race 차단.
+        if (recreationPendingRef.current && currentTaskRef.current === null) {
+          recreationPendingRef.current = false
+          lastRecoveryAtRef.current = Date.now()
+          console.warn('[TTS] task 종료 — 예약된 엔진 재생성 트리거')
+          setRecoveryGen((g) => g + 1)
+        }
         resolve()
       }
     })
 
-    return { audioStartedAt, durationMs: audioBuffer.duration * 1000, ended }
+    return { audioStartedAt, durationMs: audioBuffer.duration * 1000, ended, ttsMs }
   }, [])
 
   return { status, loadingProgress, error, mode, playSentence, unlockAudio, setVolume, setOnTtsStart }

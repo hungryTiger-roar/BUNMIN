@@ -399,6 +399,22 @@ _streaming_speech_start_at: Optional[float] = None
 # 학생측 useTTS 가 audio.start = speechStartAt + offset 으로 sync 맞추는 데 사용.
 # 학생 시각 정보 (그림/커서) 와 정확히 동일 시간선 정렬 위해.
 _streaming_speech_start_wall_at: Optional[int] = None
+# 발화 시작 시점의 페이지 — transcription payload 에 포함되어 학생측이
+# "어느 페이지에서 시작된 발화인가" 를 판별. 발화 도중 페이지 전환되어도
+# 발화의 주제 페이지는 시작 페이지로 본다는 정책.
+_streaming_speech_start_page: Optional[int] = None
+
+# 전역 broadcast event seq — cursor / draw / transcription / page_change 등
+# 학생측이 순서 검증 / 중복·누락 감지에 사용. WebSocket 자체 순서 보장 위에 추가
+# safety net. 강사 wall clock (lecturerTimestamp) 와 별개로 서버 발사 순번.
+_event_seq: int = 0
+
+
+def _next_event_seq() -> int:
+    """전역 broadcast event seq 다음 번호 발급. monotonic, 1부터 시작."""
+    global _event_seq
+    _event_seq += 1
+    return _event_seq
 
 
 def _ts(message: dict) -> dict:
@@ -413,12 +429,43 @@ async def _reset_streaming_state():
     """streaming path 의 buffer + speech_start_at 동시 초기화.
     lecture_end / lecture_pause / lecturer disconnect 등 발화 boundary 가 끊기는
     시점에서 호출. service 가 None 이면 timestamp 만 리셋.
+    speech_active 였으면 speech_end broadcast — 학생 silent watchdog 가
+    visual 보류 풀고 다음 단계 진행하도록.
     """
-    global _streaming_speech_start_at, _streaming_speech_start_wall_at
+    global _streaming_speech_start_at, _streaming_speech_start_wall_at, _streaming_speech_start_page
+    was_active = _streaming_speech_start_at is not None
     if _streaming_asr_service is not None:
         await _streaming_asr_service.reset()
     _streaming_speech_start_at = None
     _streaming_speech_start_wall_at = None
+    _streaming_speech_start_page = None
+    if was_active:
+        try:
+            await manager.broadcast_to_students({
+                "type": "speech_end",
+                "eventSeq": _next_event_seq(),
+            })
+        except Exception:
+            pass
+
+
+async def _flush_streaming_to_transcripts():
+    """streaming buffer 잔여분을 flush 해 broadcast + transcripts 저장.
+    pause / end / disconnect 등 발화 boundary 에서 in-flight 발화가 transcripts
+    다운로드에 누락되지 않도록 호출. _broadcast_streaming_sentence 가
+    is_paused / is_lecture_started 가드를 거치므로 호출 순서 주의 — pause 의
+    경우 is_paused=True 로 set 하기 전에 호출해야 함.
+    """
+    if _streaming_asr_service is None:
+        return
+    try:
+        last_speech_start = _streaming_speech_start_wall_at
+        sentences = await _streaming_asr_service.flush()
+        for s in sentences or []:
+            print(f"[ASR-STREAM flush] {s}", flush=True)
+            await _broadcast_streaming_sentence(s, None, last_speech_start)
+    except Exception as e:
+        print(f"[WS] streaming flush 오류 (무시): {e}", flush=True)
 
 PING_INTERVAL = 20  # 서버 → 클라이언트 ping 주기 (초)
 PING_TIMEOUT  = 10  # pong 미응답 허용 시간 (초)
@@ -493,11 +540,28 @@ async def websocket_pipeline(websocket: WebSocket):
                 print(f"[WS] 강의자 역할 거부 (외부 호스트): {client_host}")
                 await websocket.close(code=4403, reason="lecturer role requires localhost")
                 return
-            # 이미 강의자가 연결되어 있으면 중복 연결 거부
+            # 이미 강의자가 연결되어 있으면 중복 연결 거부.
+            # 단, 죽은 websocket 이 reference 만 남아 있는 경우 즉시 교체 (sticky lock 방지).
+            #   배경: heartbeat 가 pong miss 로 websocket.close() 한 직후~handler 의 finally
+            #         block 이 disconnect_lecturer() 호출하기 전 사이에 새 강사 연결 시도가 들어오면
+            #         manager.lecturer 가 dead websocket 을 가리킨 채라 매번 4409 로 거부됨.
+            #         (이전 운영 로그상 16~25회 거부 후에야 풀리는 sticky lock 발생.)
             if manager.lecturer is not None:
-                print("[WS] 강의자 역할 거부 (중복 연결)")
-                await websocket.close(code=4409, reason="lecturer already connected")
-                return
+                existing_ws = manager.lecturer
+                ws_alive = (
+                    existing_ws.client_state == WebSocketState.CONNECTED
+                    and existing_ws.application_state == WebSocketState.CONNECTED
+                )
+                if ws_alive:
+                    print("[WS] 강의자 역할 거부 (중복 연결)")
+                    await websocket.close(code=4409, reason="lecturer already connected")
+                    return
+                # dead websocket — 즉시 교체. 강의 상태는 보존 (transient disconnect 와 동일 효과).
+                print("[WS] 기존 강사 websocket dead → 새 연결로 즉시 교체 (sticky lock 방지)")
+                manager.lecturer = None
+                if manager._lecturer_grace_task and not manager._lecturer_grace_task.done():
+                    manager._lecturer_grace_task.cancel()
+                    manager._lecturer_grace_task = None
             # grace cleanup 진행 중이면 cancel — 재연결로 강의 계속.
             if manager._lecturer_grace_task and not manager._lecturer_grace_task.done():
                 manager._lecturer_grace_task.cancel()
@@ -537,6 +601,10 @@ async def websocket_pipeline(websocket: WebSocket):
                     manager.lecturer is not None and manager.lecturer is not websocket
                 )
                 if not other_lecturer_active:
+                    # 안전망 flush — handle_lecturer 의 inner except 가 이미 처리했으면
+                    # buffer 비어 있어 no-op. inner except 안 거친 경로 (예: 강제 close)
+                    # 에서도 직전 발화가 transcripts 에 살아남도록.
+                    await _flush_streaming_to_transcripts()
                     if manager.lecturer is websocket:
                         manager.disconnect_lecturer()
                     await _reset_streaming_state()
@@ -751,15 +819,14 @@ async def handle_lecturer(websocket: WebSocket, pong_event: asyncio.Event | None
                 # 에 막히지 않도록 flush 가 끝난 뒤에 is_lecture_started=False 로 전환.
                 #
                 # 1) 마지막 flush — 강의 진행 중 상태 유지로 broadcast 가드 통과.
-                if _streaming_asr_service is not None:
-                    try:
-                        last_speech_start = _streaming_speech_start_wall_at
-                        sentences = await _streaming_asr_service.flush()
-                        for s in sentences or []:
-                            print(f"[ASR-STREAM lecture_end flush] {s}", flush=True)
-                            await _broadcast_streaming_sentence(s, None, last_speech_start)
-                    except Exception as e:
-                        print(f"[WS] lecture_end 마지막 flush 오류 (무시): {e}", flush=True)
+                #    streaming 모드에서 lock 경합으로 hang 되는 케이스 방어 (timeout 5s) —
+                #    flush 가 늦어도 학생 다운로드 모달은 무조건 떠야 한다.
+                try:
+                    await asyncio.wait_for(_flush_streaming_to_transcripts(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    print("[WS] lecture_end flush 5초 타임아웃 — 그대로 종료 진행")
+                except Exception as e:
+                    print(f"[WS] lecture_end flush 오류 (무시): {e}")
                 # 2) 자막 세션 finalize — jsonl → final json 병합.
                 ended_id = transcripts.end_session(manager.current_session_id)
                 print(f"[WS] 강의 종료 (세션: {ended_id})")
@@ -784,9 +851,13 @@ async def handle_lecturer(websocket: WebSocket, pong_event: asyncio.Event | None
                 manager.presentation_mode = "slide"
 
             elif msg_type == "lecture_pause":
+                # 처리 순서 — flush 가 broadcast 가드 (`is_paused`) 에 막히지 않도록
+                #   ① flush (is_paused=False 상태) → 직전 발화 transcripts 저장
+                #   ② is_paused=True 로 전환
+                #   ③ buffer reset → 재개 시 stale audio 가 새 문장과 안 합쳐짐
+                await _flush_streaming_to_transcripts()
                 manager.is_paused = True
                 print("[WS] 강의 일시정지")
-                # streaming buffer 비움 — 재개 시 stale audio 가 새 문장과 합쳐지지 않도록
                 await _reset_streaming_state()
                 await manager.broadcast_to_students({
                     "type": "lecture_pause",
@@ -840,12 +911,16 @@ async def handle_lecturer(websocket: WebSocket, pong_event: asyncio.Event | None
 
             elif msg_type == "cursor":
                 # 강의자 커서 상태 → 수강자에게만 브로드캐스트 (강의자에게 재전송 X)
+                # page + eventSeq: 학생측 currentPage 매칭 가드 + 순서 보장.
                 await manager.broadcast_to_students({
                     "type": "cursor",
                     "x": message.get("x", 0),
                     "y": message.get("y", 0),
                     "visible": message.get("visible", False),
                     "color": message.get("color", "#60A5FA"),
+                    "slide_id": manager.current_slide_id,
+                    "page": manager.current_page,
+                    "eventSeq": _next_event_seq(),
                     **_ts(message),
                 })
 
@@ -875,6 +950,11 @@ async def handle_lecturer(websocket: WebSocket, pong_event: asyncio.Event | None
                 await websocket.send_json(manager.participants_payload())
 
     except WebSocketDisconnect:
+        # 발화 중 끊긴 경우 buffer 잔여분 transcripts 에 보존.
+        # disconnect_lecturer 는 manager.lecturer 만 클리어하고 is_lecture_started 유지 →
+        # _broadcast_streaming_sentence 의 boundary 가드 통과. grace 동안 또는 종료까지
+        # 직전 발화 자막이 살아남음.
+        await _flush_streaming_to_transcripts()
         manager.disconnect_lecturer()
         await _reset_streaming_state()
         await manager.broadcast_participants()
@@ -960,6 +1040,11 @@ async def process_audio(message: dict):
         print("[WS] 서비스가 초기화되지 않았습니다")
         return
 
+    # chunk path 용 speech_start/end signaling — finally 에서 반드시 speech_end 송출.
+    # streaming path 와 달리 chunk 가 backend 도착 시점이 발화 종료 직후 ≈ ASR 시작점.
+    # 학생측 silent watchdog 가 ASR+MT 처리 동안 visual 을 flush 하지 않도록 알림.
+    speech_signaled = False
+
     try:
         t_start = time.perf_counter()
 
@@ -990,6 +1075,11 @@ async def process_audio(message: dict):
         bytes_per_ms = (sample_rate * 2) / 1000
         audio_duration_ms = int(len(audio_bytes) / bytes_per_ms) if bytes_per_ms > 0 else 0
         speech_start_wall = (sent_at - audio_duration_ms) if isinstance(sent_at, int) else None
+        # 발화 시작 page — chunk path 는 발화가 끝난 직후 도착하므로 current_page ≈
+        # 발화 종료 page. 발화 도중 page 전환이 있었다면 종료 page 가 우선 (정책상
+        # 발화 시작 page 가 이상적이나 chunk 모드는 그 시점 캡처 어려움 → 근사).
+        speech_start_slide_id = manager.current_slide_id
+        speech_start_page = manager.current_page
 
         # ASR 큐 포화 방지: 이미 충분한 발화가 대기 중이면 신규 발화 스킵.
         # 동시에 강사에게 알림 — 발화가 시스템에 도달 못 했음을 알려 다시 말할 기회.
@@ -1004,6 +1094,18 @@ async def process_audio(message: dict):
                 except Exception:
                     pass
             return
+
+        # 처리 확정 — 이 시점부터 학생측 watchdog 가 visual flush 안 하도록 speech_start 송출.
+        # finally 에서 speech_end 가 반드시 짝지어 송출되므로 락이 영구히 걸리지는 않음.
+        try:
+            await manager.broadcast_to_students({
+                "type": "speech_start",
+                "lecturerTimestamp": sent_at,
+                "eventSeq": _next_event_seq(),
+            })
+            speech_signaled = True
+        except Exception:
+            pass
 
         _queued_audio_count += 1
         _utterance_seq += 1
@@ -1038,10 +1140,10 @@ async def process_audio(message: dict):
                         })
                     except Exception:
                         pass
-                print(f"[ASR  seq={seq}] 차단 — {reason}", flush=True)
+                print(f"[SKIP/ASR  seq={seq}] 차단 — {reason}: {korean_text!r}", flush=True)
                 return
 
-            print(f"[ASR  seq={seq}] {korean_text}", flush=True)
+            print(f"[ASR  seq={seq}] 한: {korean_text}", flush=True)
 
         # _asr_semaphore 해제 → 다음 발화 ASR이 즉시 시작 가능 (pipeline parallelism)
         # Phase 2: NMT — 문장 단위 분할 처리. ASR이 한 덩어리(5초+)로 보내도 NMT/broadcast는
@@ -1058,7 +1160,7 @@ async def process_audio(message: dict):
             # ASR 끝났는데 강의 paused / 종료 됐으면 broadcast skip.
             if manager.is_paused or not manager.is_lecture_started:
                 boundary = "paused" if manager.is_paused else "not started"
-                print(f"[NMT seq={seq}.{sub_seq}] skip ({boundary}): {sentence[:40]!r}", flush=True)
+                print(f"[SKIP/BOUNDARY seq={seq}.{sub_seq}] {boundary} — 한: {sentence!r}", flush=True)
                 return
             t_nmt_call = time.perf_counter()
             async with _nmt_semaphore:
@@ -1070,9 +1172,10 @@ async def process_audio(message: dict):
             # 학생에게 한국어 원문 자막 띄우면 환각 노이즈가 그대로 노출되므로 broadcast 자체 skip.
             # 자막 / transcripts 저장도 skip — 학생 화면에 안 뜨고 강사 측 로그만 남김.
             if not english.strip():
-                print(f"[NMT 빈 결과] seq={seq}.{sub_seq} → broadcast skip ('{sentence[:40]}')", flush=True)
+                print(f"[SKIP/NMT  seq={seq}.{sub_seq}] 빈 번역 — 한: {sentence!r}", flush=True)
                 return
-            print(f"[NMT  seq={seq}.{sub_seq}] {english}", flush=True)
+            # 원문 + 번역본 한 줄로 정리해 둘 다 한눈에 보이게.
+            print(f"[BROADCAST seq={seq}.{sub_seq}] 한: {sentence}  →  영: {english}", flush=True)
             # 첫 자막 latency — 분할 효과 측정용 (마지막 자막은 LATENCY 로그의 '전체')
             if sub_seq == 0:
                 print(
@@ -1082,7 +1185,8 @@ async def process_audio(message: dict):
 
             if manager.current_session_id:
                 transcripts.append_segment(
-                    manager.current_session_id, sentence, english
+                    manager.current_session_id, sentence, english,
+                    slide_id=speech_start_slide_id, page=speech_start_page,
                 )
 
             # TTS는 수강자 브라우저(WASM)에서 처리 — audio 필드 없이 텍스트만 전송
@@ -1099,6 +1203,9 @@ async def process_audio(message: dict):
                 "speechStartAt": speech_start_wall,
                 "asrMs": asr_ms,
                 "nmtMs": nmt_ms,
+                "slide_id": speech_start_slide_id,
+                "page": speech_start_page,
+                "eventSeq": _next_event_seq(),
             }
             await manager.broadcast_to_students(payload)
             if manager.lecturer:
@@ -1124,6 +1231,19 @@ async def process_audio(message: dict):
 
     except Exception as e:
         print(f"[WS] 오디오 처리 오류: {e}")
+    finally:
+        # speech_end — chunk 처리 끝 (성공/스킵/예외 모두). 학생측 watchdog
+        # 가 visual flush 재개하도록 알림. transcription 보다 약간 뒤일 수 있으나
+        # frontend 에서 transcription 도착 시 enqueueSentence 가 lastTranscriptionAtRef
+        # 를 갱신해 watchdog 가 정상 모드로 돌아감.
+        if speech_signaled:
+            try:
+                await manager.broadcast_to_students({
+                    "type": "speech_end",
+                    "eventSeq": _next_event_seq(),
+                })
+            except Exception:
+                pass
 
 
 async def _broadcast_streaming_sentence(
@@ -1150,7 +1270,7 @@ async def _broadcast_streaming_sentence(
     # transcripts 저장도 skip — 강의 활성 구간이 아니라 의미 없는 데이터.
     if manager.is_paused or not manager.is_lecture_started:
         boundary = "paused" if manager.is_paused else "not started"
-        print(f"[STREAM] sentence skip ({boundary}): {sentence[:50]!r}", flush=True)
+        print(f"[SKIP/BOUNDARY stream] {boundary} — 한: {sentence!r}", flush=True)
         return
 
     ok, reason = _validate_asr_text(sentence)
@@ -1165,7 +1285,7 @@ async def _broadcast_streaming_sentence(
                 })
             except Exception:
                 pass
-        print(f"[STREAM] sentence 차단 — {reason}", flush=True)
+        print(f"[SKIP/ASR  stream] 차단 — {reason}: {sentence!r}", flush=True)
         return
 
     _utterance_seq += 1
@@ -1185,12 +1305,19 @@ async def _broadcast_streaming_sentence(
     nmt_ms = int((time.perf_counter() - t_nmt) * 1000)
     # NMT 빈 결과 — 환각 트리거 차단 또는 모델 실패. 학생 화면 노출 차단.
     if not english.strip():
-        print(f"[NMT 빈 결과] seq={seq} → broadcast skip ('{sentence[:40]}')", flush=True)
+        print(f"[SKIP/NMT  seq={seq}] 빈 번역 — 한: {sentence!r}", flush=True)
         return
-    print(f"[NMT  seq={seq}] {english}", flush=True)
+    # 원문 + 번역본 한 줄로 정리.
+    print(f"[BROADCAST seq={seq}] 한: {sentence}  →  영: {english}", flush=True)
+
+    speech_start_slide_id = manager.current_slide_id
+    speech_start_page = _streaming_speech_start_page if _streaming_speech_start_page is not None else manager.current_page
 
     if manager.current_session_id:
-        transcripts.append_segment(manager.current_session_id, sentence, english)
+        transcripts.append_segment(
+            manager.current_session_id, sentence, english,
+            slide_id=speech_start_slide_id, page=speech_start_page,
+        )
 
     payload = {
         "type": "transcription",
@@ -1203,6 +1330,9 @@ async def _broadcast_streaming_sentence(
         "speechStartAt": speech_start_wall,
         "asrMs": asr_ms,
         "nmtMs": nmt_ms,
+        "slide_id": speech_start_slide_id,
+        "page": speech_start_page,
+        "eventSeq": _next_event_seq(),
     }
     await manager.broadcast_to_students(payload)
     if manager.lecturer:
@@ -1221,7 +1351,7 @@ async def process_audio_frame(message: dict):
     """streaming path: 200ms PCM frame 1개를 ASRStreamingService 에 push 후
     finalize 된 문장이 있으면 NMT → broadcast.
     """
-    global _streaming_speech_start_at, _streaming_speech_start_wall_at
+    global _streaming_speech_start_at, _streaming_speech_start_wall_at, _streaming_speech_start_page
     if _streaming_asr_service is None or _nmt_service is None:
         return
     if manager.is_paused:
@@ -1235,9 +1365,18 @@ async def process_audio_frame(message: dict):
 
     # 발화 시작 시각 마킹 — 첫 frame 에서만 (이후 frame 은 그대로 유지).
     # perf_counter: ASR latency 측정용 (단조). wall_at: 학생측 sync 용 (강사 wall 시계).
+    # speech_start_page: 발화의 주제 페이지 (도중 전환 무시 — 시작 페이지 우선 정책).
     if _streaming_speech_start_at is None:
         _streaming_speech_start_at = time.perf_counter()
         _streaming_speech_start_wall_at = sent_at
+        _streaming_speech_start_page = manager.current_page
+        # speech_start 신호 — 학생 silent watchdog 가 발화 진행 중임을 알도록.
+        # ASR latency 길어도 그 동안 visual 이 분리되지 않게 가드.
+        await manager.broadcast_to_students({
+            "type": "speech_start",
+            "lecturerTimestamp": sent_at,
+            "eventSeq": _next_event_seq(),
+        })
 
     # 이 sentence broadcast 에 사용할 speech_start_wall (이번 utterance 시작점).
     speech_start_wall = _streaming_speech_start_wall_at
@@ -1257,18 +1396,21 @@ async def process_audio_frame(message: dict):
             await _broadcast_streaming_sentence(s, sent_at, speech_start_wall)
         # finalize 된 문장 이후의 audio 는 새 boundary — 다음 sentence 의 시작점으로 갱신.
         # speech_start_wall_at 은 sent_at 으로 (현재 frame = 다음 발화 시작 근사).
+        # speech_start_page 도 갱신 — 다음 발화의 주제 페이지 = 현재 page.
         _streaming_speech_start_at = time.perf_counter()
         _streaming_speech_start_wall_at = sent_at
+        _streaming_speech_start_page = manager.current_page
     except Exception as e:
         print(f"[WS] streaming frame 처리 오류: {e}", flush=True)
 
 
 async def process_audio_frame_flush(message: dict):
     """streaming path: VAD onSpeechEnd 시 호출 — buffer 잔여분 강제 finalize."""
-    global _streaming_speech_start_at, _streaming_speech_start_wall_at
+    global _streaming_speech_start_at, _streaming_speech_start_wall_at, _streaming_speech_start_page
     if _streaming_asr_service is None or _nmt_service is None:
         _streaming_speech_start_at = None
         _streaming_speech_start_wall_at = None
+        _streaming_speech_start_page = None
         return
     if manager.is_paused:
         # paused 중에도 buffer 는 비워야 다음 발화가 깨끗하게 시작
@@ -1293,5 +1435,17 @@ async def process_audio_frame_flush(message: dict):
         # speech end 도달 → 다음 발화의 시작점은 새 frame 도착 시 mark
         _streaming_speech_start_at = None
         _streaming_speech_start_wall_at = None
+        _streaming_speech_start_page = None
+        # speech_end 신호 — 학생 silent watchdog 가 발화 종료를 알고 transcription
+        # 도착 가능성을 평가할 수 있도록. ASR latency 길면 transcription 도착까지
+        # 학생측이 visual 보류 (silent flush 안 함).
+        try:
+            await manager.broadcast_to_students({
+                "type": "speech_end",
+                "lecturerTimestamp": message.get("sentAt"),
+                "eventSeq": _next_event_seq(),
+            })
+        except Exception:
+            pass
 
 

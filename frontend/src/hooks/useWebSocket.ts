@@ -50,16 +50,19 @@ interface UseWebSocketOptions {
    *  page_change / slide_select / presentation_mode 가 pending visual buffer 에 적재,
    *  transcription 도착 시 sentence unit 으로 묶임 → 한 unit 의 audio 끝나야 다음 unit. */
   unitPlayer?: UnitPlayer
-  /** transcription 도착 시 — Student.tsx 가 unitPlayer.enqueueSentence 호출용. */
+  /** transcription 도착 시 — Student.tsx 가 unitPlayer.enqueueSentence 호출용.
+   *  commitSubtitle 은 TTS 가 실제 시작되는 시점에 player 가 호출 → store 에
+   *  subtitle 추가. 이 콜백을 부르기 전엔 자막이 화면에 안 보임 → 자막↔TTS 동기화. */
   onTranscription?: (params: {
     text: string
-    subtitleId: string
+    commitSubtitle: (ttsMs?: number) => void
     speechStartAt: number
     sentAt: number
   }) => void
   /** lifecycle event (lecture_end / pause / resume) 도착 시 — Student.tsx 가
-   *  unitPlayer.enqueueLifecycle 호출용. apply 가 실제 UI 적용 함수. */
-  onLifecycle?: (apply: () => void, label: string) => void
+   *  unitPlayer.enqueueLifecycle 호출용. apply 가 실제 UI 적용 함수.
+   *  resume 의 경우 apply 가 async — 강사 pause 시간 만큼 sleep 후 setPaused(false). */
+  onLifecycle?: (apply: () => void | Promise<void>, label: string) => void
   /** 강사 전용 — 발화가 환각 가드에 차단되면 호출 (UI toast 등). */
   onAsrBlocked?: (reason: string, preview: string) => void
   /** 강사 전용 — ASR 큐 포화로 발화 스킵되면 호출 (UI toast 등). */
@@ -76,6 +79,14 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
   // 부수 효과: React 18 StrictMode dev 의 합성 unmount → cleanup → disconnect → onclose 경로에서
   // ghost reconnect 타이머가 잡혀 같은 audio 가 두 번 송출되던 race 도 함께 차단.
   const intentionallyClosedRef = useRef(false)
+
+  // pause ↔ resume 시간 동등 반영용.
+  //   pauseLectureTsRef: 강사 시계 기준 pause ts (resume 도착 시 duration 계산).
+  //   pauseAppliedAtRef: 학생측에서 setPaused(true) 가 실제로 적용된 시각 — resume sleep
+  //     의 elapsed 계산 기준. unit-stretch 모드에선 큐가 다 빠진 후, delay-buffer 모드
+  //     에선 scheduled timer 가 fire 한 시점.
+  const pauseLectureTsRef = useRef<number | null>(null)
+  const pauseAppliedAtRef = useRef<number | null>(null)
 
   // 각 setter를 개별 selector로 구독 — Zustand action은 stable 이므로 재렌더 트리거하지 않음
   // (전체 destructure 시 store 어떤 필드가 바뀌어도 useWebSocket 재렌더 → send/connect ref 흔들림)
@@ -183,33 +194,63 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
         const outputTime = Date.now()
         const inputTime = data.sentAt as number | undefined            // sentence END
         const speechStartAt = data.speechStartAt as number | undefined  // sentence START
-        const subtitleId = addSubtitle({
-          original: data.original as string,
-          translated: data.translated as string,
-          timestamp: outputTime,
-          inputTime,
-          asrMs: data.asrMs as number | undefined,
-          nmtMs: data.nmtMs as number | undefined,
-        })
+        const original = data.original as string
+        const translated = data.translated as string
+        const asrMs = data.asrMs as number | undefined
+        const nmtMs = data.nmtMs as number | undefined
+        // [ASR/NMT] 로그 — 강사: 원문만 / 학생: 원문 + 번역.
+        // 콘솔(F12)에서 어떤 발화가 어떻게 인식됐는지 한눈에 확인용.
+        if (role === 'lecturer') {
+          console.log(`[ASR] 한: ${original}`)
+        } else {
+          console.log(`[ASR→NMT] 한: ${original}  →  영: ${translated}`)
+        }
 
-        // unit player 모드 — sentence 단위 unit 으로 큐에 적재해 TTS-end 기반 sequential 재생.
-        // pending visual events 가 sentAt 까지의 events 를 묶어 하나의 unit 으로 만듦.
-        // unit player 미사용 시 (강사 모드) onTranslation 그대로 호출.
-        if (data.translated) {
-          if (role === 'student' && onTranscriptionRef.current) {
-            onTranscriptionRef.current({
-              text: data.translated as string,
-              subtitleId,
-              speechStartAt: speechStartAt ?? inputTime ?? Date.now(),
-              sentAt: inputTime ?? Date.now(),
-            })
-          }
-          onTranslationRef.current?.(
-            data.translated as string,
-            subtitleId,
+        if (role === 'lecturer') {
+          // 강사는 unit player 가 없으므로 즉시 자막 표시.
+          const subtitleId = addSubtitle({
+            original,
+            translated,
+            timestamp: outputTime,
             inputTime,
-            speechStartAt,
-          )
+            asrMs,
+            nmtMs,
+          })
+          if (data.translated) {
+            onTranslationRef.current?.(translated, subtitleId, inputTime, speechStartAt)
+          }
+        } else if (data.translated && onTranscriptionRef.current) {
+          // 학생측 — 자막 표시는 TTS 시작 시점까지 지연 (commitSubtitle 콜백).
+          // 이전엔 transcription 도착 즉시 addSubtitle 했으나 큐 대기 + TTS 합성으로
+          // 자막이 audio 보다 수 초 일찍 떠 답답함. 이제 player 가 audio 시작 시점에
+          // commitSubtitle 호출 → 자막↔TTS 동시 등장.
+          onTranscriptionRef.current({
+            text: translated,
+            commitSubtitle: (ttsMs?: number) => {
+              addSubtitle({
+                original,
+                translated,
+                timestamp: outputTime,
+                inputTime,
+                asrMs,
+                nmtMs,
+                ttsMs,
+              })
+            },
+            speechStartAt: speechStartAt ?? inputTime ?? Date.now(),
+            sentAt: inputTime ?? Date.now(),
+          })
+        } else {
+          // 학생측이지만 translated 가 비어 있음 (NMT 빈 결과) — 자막을 동기화할
+          // TTS 가 없으므로 한국어 원문만 즉시 표시 (구버전 호환).
+          addSubtitle({
+            original,
+            translated,
+            timestamp: outputTime,
+            inputTime,
+            asrMs,
+            nmtMs,
+          })
         }
         break
       }
@@ -272,8 +313,10 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
         break
 
       case 'lecture_end':
-        // 강의 종료 — 강사 측은 즉시, 학생 측은 다른 시각 events 와 같은 시간선
-        // 상에서 적용 (마지막까지 강사 발화/그림이 다 끝난 후 "종료" UI).
+        // 강의 종료 — 강사 측은 즉시, 학생 측은 lifecycle queue 통해 큐 잔여
+        // sentence 다 재생된 뒤 적용. sessionId 도 lifecycle apply 시점에 세팅 —
+        // 다운로드 모달이 강의 중 (잔여 발화 재생 중) 에 떠서 "강의 중에 종료
+        // 됐다" 는 인상을 주지 않게 마지막 자막/음성 끝난 후에 모달 노출.
         if (role === 'lecturer') {
           setLectureStarted(false)
           setPaused(false)
@@ -281,12 +324,12 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
           if (data.session_id) setSessionId(data.session_id as string)
           console.log('[WebSocket] 강의 종료')
         } else {
-          const sessionId = data.session_id as string | undefined
+          const sessionIdToSet = data.session_id as string | undefined
           const apply = () => {
+            if (sessionIdToSet) setSessionId(sessionIdToSet)
             setLectureStarted(false)
             setPaused(false)
             setCurrentScreen(null)
-            if (sessionId) setSessionId(sessionId)
             console.log('[WebSocket] 강의 종료')
           }
           if (unitPlayerRef.current && onLifecycleRef.current) {
@@ -302,14 +345,20 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
           setPaused(true)
           console.log('[WebSocket] 강의 일시정지')
         } else {
+          // 강사 시계 ts 저장 — resume 도착 시 정확한 pause duration 계산.
+          const pauseTs = (data.lecturerTimestamp as number | undefined) ?? Date.now()
+          pauseLectureTsRef.current = pauseTs
           const apply = () => {
             setPaused(true)
+            // pause 가 학생측에서 실제 적용된 wall time — resume sleep elapsed 기준.
+            pauseAppliedAtRef.current = Date.now()
             console.log('[WebSocket] 강의 일시정지')
           }
           if (unitPlayerRef.current && onLifecycleRef.current) {
             onLifecycleRef.current(apply, 'lecture_pause')
           } else {
             apply()
+            pauseAppliedAtRef.current = Date.now()
           }
         }
         break
@@ -319,13 +368,35 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
           setPaused(false)
           console.log('[WebSocket] 강의 재개')
         } else {
-          const apply = () => {
+          // 강사 pause 시간 = resume.ts - pause.ts. 학생측 pause UI 도 같은 시간 유지.
+          const resumeTs = (data.lecturerTimestamp as number | undefined) ?? Date.now()
+          const pauseTs = pauseLectureTsRef.current
+          const lecturerPauseDuration = pauseTs !== null ? Math.max(0, resumeTs - pauseTs) : 0
+          const apply = async () => {
+            // 학생측에서 이미 elapsed 만큼 paused 였으면 그만큼 빼고 sleep.
+            //   unit-stretch: 큐 자연 마무리 후 pause 적용 → elapsed ≈ ε → 거의 전체 시간 sleep.
+            //   delay-buffer: scheduled timer 로 pause/resume 둘 다 +delayMs 후 fire →
+            //                 elapsed ≈ lecturerPauseDuration → remaining ≈ 0 (자연스레 일치).
+            const pauseAppliedAt = pauseAppliedAtRef.current
+            if (pauseAppliedAt !== null && lecturerPauseDuration > 0) {
+              const elapsed = Date.now() - pauseAppliedAt
+              const remaining = Math.max(0, lecturerPauseDuration - elapsed)
+              if (remaining > 0) {
+                console.log(
+                  `[WebSocket] 강사 pause ${lecturerPauseDuration}ms — 학생측 ${remaining}ms 추가 대기`,
+                )
+                await new Promise<void>((r) => setTimeout(r, remaining))
+              }
+            }
             setPaused(false)
+            pauseAppliedAtRef.current = null
+            pauseLectureTsRef.current = null
             console.log('[WebSocket] 강의 재개')
           }
           if (unitPlayerRef.current && onLifecycleRef.current) {
             onLifecycleRef.current(apply, 'lecture_resume')
           } else {
+            // unit player 없는 비정상 경로 — 일단 즉시 unpause.
             apply()
           }
         }
@@ -432,7 +503,10 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
 
       case 'cursor':
         // 강의자 커서 상태 수신 (수강자 전용, callback으로 DOM 직접 업데이트)
+        // page 가드: cursor 의 page 와 학생 currentPage 가 다르면 hide.
+        // 페이지 전환 직후 잔여 cursor 가 새 페이지에 잘못 표시되는 것 방지.
         if (role === 'student') {
+          const cursorPage = data.page as number | undefined
           const cursor: CursorMessage = {
             x: data.x as number,
             y: data.y as number,
@@ -440,11 +514,19 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
             color: data.color as string,
           }
           const ts = data.lecturerTimestamp as number | undefined
-          if (unitPlayerRef.current && typeof ts === 'number') {
-            // closure 안에서 onCursorRef 다시 dereference — apply 시점의 latest 콜백 사용
-            unitPlayerRef.current.enqueueVisual(ts, () => onCursorRef.current?.(cursor), 'cursor')
-          } else {
+          const apply = () => {
+            const currentPage = useLectureStore.getState().currentPage
+            if (typeof cursorPage === 'number' && cursorPage !== currentPage) {
+              // 다른 페이지의 cursor — visible=false 로 숨김
+              onCursorRef.current?.({ ...cursor, visible: false })
+              return
+            }
             onCursorRef.current?.(cursor)
+          }
+          if (unitPlayerRef.current && typeof ts === 'number') {
+            unitPlayerRef.current.enqueueVisual(ts, apply, 'cursor')
+          } else {
+            apply()
           }
         }
         break
@@ -483,6 +565,23 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
               }
             }
           }
+        }
+        break
+
+      case 'speech_start':
+        // 강사 발화 시작 신호 — 학생측 unit player 의 silent watchdog 정지.
+        // 발화 중에 그림/커서가 들어와도 sentence 도착까지 pending 에 안전히 보관.
+        if (role === 'student') {
+          unitPlayerRef.current?.markSpeechActive()
+        }
+        break
+
+      case 'speech_end':
+        // 강사 발화 종료 신호 — ASR transcription 도착 대기 모드.
+        // transcription 이 도착할 때까지 watchdog 가 더 길게 (POST_SPEECH_ASR_TIMEOUT_MS)
+        // 기다려서 그 sentence 와 visual 이 함께 묶이도록.
+        if (role === 'student') {
+          unitPlayerRef.current?.markSpeechEnded()
         }
         break
 

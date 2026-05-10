@@ -46,7 +46,7 @@ interface Options {
     text: string,
     lang: TranslationLang,
     subtitleId?: string,
-  ) => Promise<{ audioStartedAt: number; durationMs: number; ended: Promise<void> }>
+  ) => Promise<{ audioStartedAt: number; durationMs: number; ended: Promise<void>; ttsMs: number }>
   isAudioUnlocked: () => boolean
   getAudioLang: () => TranslationLang
   /** 학생 wall - 강사 wall offset (ms). 미설정 시 0 으로 가정 (네트워크 latency 무시).
@@ -128,7 +128,7 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
 
   const enqueueSentence = useCallback((params: {
     text: string
-    subtitleId: string
+    commitSubtitle: (ttsMs?: number) => void
     speechStartAt: number
     sentAt: number
   }) => {
@@ -156,25 +156,35 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
     )
 
     // 예약 시간에 audio 큐에 push — sequential 재생 보장.
+    // 자막은 audio 가 실제 시작될 때 표시 → 자막↔TTS 동기화. audio off 면 schedule
+    // 시점에 즉시 표시 (audio 가 anchor 가 없으니 wall-clock 시점에 맞춰 등장).
     scheduleAt(targetWall, () => {
       const opts = optionsRef.current
       if (opts.getAudioLang() === 'off' || !opts.isAudioUnlocked()) {
-        // audio 미사용 — sentence 자체는 자막 store 에 이미 추가된 상태이므로 no-op.
+        try { params.commitSubtitle() } catch (err) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', err) }
         return
       }
       audioQueueRef.current.push(async () => {
         try {
-          const result = await opts.playSentence(params.text, opts.getAudioLang(), params.subtitleId)
+          const result = await opts.playSentence(params.text, opts.getAudioLang())
+          // audio 시작 시점에 자막 표시 — 이전 audio 가 큐에서 대기 중이었더라도
+          // 실제 재생 시작 시각 (audioStartedAt) 에 맞춰 등장.
+          const subtitleDelay = Math.max(0, result.audioStartedAt - Date.now())
+          setTimeout(() => {
+            try { params.commitSubtitle(result.ttsMs) } catch (err) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', err) }
+          }, subtitleDelay)
           await result.ended
         } catch (err) {
           console.error('[DelayBufferPlayer] playSentence 실패:', err)
+          // 합성 실패해도 자막은 보여줘야 — 즉시 표시.
+          try { params.commitSubtitle() } catch (e) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', e) }
         }
       })
       processAudioQueue()
     })
   }, [studentWallFor, scheduleAt, processAudioQueue])
 
-  const enqueueLifecycle = useCallback((apply: () => void, label: string) => {
+  const enqueueLifecycle = useCallback((apply: () => void | Promise<void>, label: string) => {
     // lifecycle 은 wall-clock timestamp 가 명시적으로 안 오는 경우가 있음 (sentAt 없음).
     // → 도착 시점 기준 +delayMs 로 적용. 강사가 lecture_pause 누른 시점은 학생측에선
     //   delayMs 후에 일시정지되는 게 맞음.
@@ -194,5 +204,20 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
   const getQueueLength = useCallback(() => audioQueueRef.current.length, [])
   const getPendingVisualCount = useCallback(() => 0, []) // setTimeout 기반이라 pending 개념 없음
 
-  return { enqueueVisual, enqueueSentence, enqueueLifecycle, reset, getQueueLength, getPendingVisualCount }
+  // Branch B: speech_start / speech_end 신호는 unit-stretch 모드 (silent watchdog)
+  // 만 사용. delay-buffer 모드는 wall-clock + 고정 lag 라서 watchdog 자체가 없음.
+  // 인터페이스 호환을 위해 no-op 으로 제공.
+  const markSpeechActive = useCallback(() => {}, [])
+  const markSpeechEnded = useCallback(() => {}, [])
+
+  return {
+    enqueueVisual,
+    enqueueSentence,
+    enqueueLifecycle,
+    markSpeechActive,
+    markSpeechEnded,
+    reset,
+    getQueueLength,
+    getPendingVisualCount,
+  }
 }
