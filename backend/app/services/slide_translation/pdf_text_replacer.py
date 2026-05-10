@@ -9,6 +9,7 @@ PDF 텍스트 교체 모듈 (Production Level)
 """
 import fitz
 import os
+import re
 from typing import Optional
 from dataclasses import dataclass, field, asdict
 import logging
@@ -48,87 +49,175 @@ def _render_multi_color_text(
     bg_color: tuple
 ) -> float:
     """
-    다중 색상 텍스트 렌더링
-    
-    전략:
-    1. "Term: Definition" 패턴 감지 시 분리 렌더링 시도
-    2. 인라인으로 가능하면 term=첫색상, definition=둘째색상
-    3. 불가능하면 전체를 둘째 색상(보통 검정)으로 fallback
+    Term: Definition 전용 다중 색상 렌더러
+
+    Fallback 순서 (Layout Plan 먼저, 성공 시에만 렌더링):
+    A. 같은 줄 multi-color
+    B. 두 줄 multi-color
+    C. bbox 아래 확장 후 두 줄 multi-color
+    D. 폰트 축소 후 재시도 (0.95, 0.9, 0.85)
+    E. 단색 textbox fallback
+    F. 그래도 안 되면 -1 반환 (review_needed)
+
+    핵심: definition이 반드시 보여야 함. 색상은 그 다음 문제.
     """
     translated = trans.get('translated', '')
     line_colors = trans.get('line_colors', [])
-    line_texts = trans.get('line_texts', [])
+    page_rect = page.rect
 
-    if not line_colors or len(line_colors) < 2:
-        return -1
+    # 색상 준비
+    first_color = (0, 0, 0)
+    second_color = (0, 0, 0)
+    has_multi_color = False
 
-    # 색상 변환
-    colors = []
-    for c in line_colors:
-        if isinstance(c, int):
-            colors.append(int_color_to_rgb(c))
-        elif isinstance(c, (list, tuple)) and len(c) == 3:
-            colors.append(tuple(c))
-        else:
-            colors.append((0, 0, 0))
+    if line_colors and len(line_colors) >= 2:
+        colors = []
+        for c in line_colors:
+            if isinstance(c, int):
+                colors.append(int_color_to_rgb(c))
+            elif isinstance(c, (list, tuple)) and len(c) == 3:
+                colors.append(tuple(c))
+            else:
+                colors.append((0, 0, 0))
 
-    # 고유 색상과 비율 계산
-    first_color = colors[0]
-    second_color = None
-    first_color_chars = len(line_texts[0]) if line_texts else 0
-    second_color_chars = 0
-    
-    for i, c in enumerate(colors[1:], 1):
-        if c != first_color:
-            if second_color is None:
+        first_color = colors[0]
+        for c in colors[1:]:
+            if c != first_color:
                 second_color = c
-            if c == second_color:
-                second_color_chars += len(line_texts[i]) if i < len(line_texts) else 0
-    
-    if second_color is None:
-        return -1  # 단일 색상이면 fallback
-    
-    # 주요 색상 결정 (더 많은 텍스트를 차지하는 색상)
-    primary_color = first_color if first_color_chars >= second_color_chars else second_color
-    
-    # "Term: Definition" 패턴 감지
-    colon_idx = translated.find(':')
-    if colon_idx > 0 and colon_idx < len(translated) - 1:
-        term = translated[:colon_idx + 1]
-        definition = translated[colon_idx + 1:].strip()
-        
-        if term and definition:
-            # 인라인 렌더링 가능 여부 확인
-            term_width = fitz.get_text_length(term + " ", fontname=font, fontsize=size)
-            total_text = term + " " + definition
-            
-            # 전체 텍스트를 textbox로 렌더링 시도
-            # term 부분만 다른 색상으로 오버레이
-            
-            # 먼저 definition을 검정색으로 전체 영역에 렌더링
+                has_multi_color = True
+                break
+
+    # "Term[구분자] Definition" 패턴 감지
+    # 구분자: 한글, 영문, 숫자, 공백을 제외한 모든 기호
+    match = re.search(r'^([A-Za-z가-힣0-9\s]+?)([^A-Za-z가-힣0-9\s])\s*', translated)
+
+    if not match:
+        # 패턴 없으면 단색 textbox
+        return page.insert_textbox(
+            rect, translated, fontname=font, fontsize=size,
+            color=first_color, align=fitz.TEXT_ALIGN_LEFT
+        )
+
+    term = match.group(1).strip() + match.group(2)
+    definition = translated[match.end():].strip()
+
+    if not definition:
+        # definition 없으면 term만 렌더링
+        page.insert_text(
+            (rect.x0, rect.y0 + size), term,
+            fontname=font, fontsize=size, color=first_color
+        )
+        return 0
+
+    # ===== Fallback 전략들 (Layout Plan → 렌더링) =====
+    term_color = first_color if has_multi_color else (0, 0, 0)
+    def_color = second_color if has_multi_color else (0, 0, 0)
+
+    # 시도할 폰트 스케일
+    font_scales = [1.0, 0.95, 0.9, 0.85]
+    # bbox 아래 확장 비율
+    expand_ratios = [0, 0.3, 0.5, 0.8]
+
+    for font_scale in font_scales:
+        current_size = size * font_scale
+        line_height = current_size * 1.2
+
+        for expand_ratio in expand_ratios:
+            # 확장된 rect 계산
+            expanded_y1 = min(
+                rect.y1 + rect.height * expand_ratio,
+                page_rect.height - 5
+            )
+            expanded_rect = fitz.Rect(rect.x0, rect.y0, rect.x1, expanded_y1)
+
+            if expanded_rect.is_empty or expanded_rect.height < current_size:
+                continue
+
+            # === Strategy A: 같은 줄 multi-color ===
+            term_with_space = term + " "
+            term_width = fitz.get_text_length(term_with_space, fontname=font, fontsize=current_size)
+            full_width = fitz.get_text_length(term_with_space + definition, fontname=font, fontsize=current_size)
+
+            if full_width <= expanded_rect.width:
+                # Layout Plan 성공 → 렌더링
+                baseline_y = expanded_rect.y0 + current_size
+                page.insert_text(
+                    (expanded_rect.x0, baseline_y), term_with_space,
+                    fontname=font, fontsize=current_size, color=term_color
+                )
+                page.insert_text(
+                    (expanded_rect.x0 + term_width, baseline_y), definition,
+                    fontname=font, fontsize=current_size, color=def_color
+                )
+                return 0  # 성공
+
+            # === Strategy B/C: 두 줄 multi-color ===
+            def_rect = fitz.Rect(
+                expanded_rect.x0, expanded_rect.y0 + line_height,
+                expanded_rect.x1, expanded_rect.y1
+            )
+
+            if def_rect.is_empty or def_rect.height < current_size:
+                continue
+
+            # Definition이 들어갈 수 있는지 시뮬레이션
+            char_width = current_size * 0.55  # 보수적 추정
+            chars_per_line = max(1, int(def_rect.width / char_width))
+            lines_needed = (len(definition) + chars_per_line - 1) // chars_per_line
+            height_needed = lines_needed * line_height
+
+            # 여유 있게 체크 (약간의 overflow 허용)
+            if height_needed <= def_rect.height + line_height * 0.3:
+                # Layout Plan 성공 → 렌더링
+                baseline_y = expanded_rect.y0 + current_size
+                page.insert_text(
+                    (expanded_rect.x0, baseline_y), term,
+                    fontname=font, fontsize=current_size, color=term_color
+                )
+                page.insert_textbox(
+                    def_rect, definition,
+                    fontname=font, fontsize=current_size, color=def_color,
+                    align=fitz.TEXT_ALIGN_LEFT
+                )
+                return 0  # 성공
+
+    # === Strategy E: 단색 textbox fallback ===
+    # multi-color 포기, 전체 문장을 단색으로
+    for font_scale in [1.0, 0.9, 0.8, 0.7]:
+        current_size = size * font_scale
+        for expand_ratio in [0, 0.5, 1.0]:
+            expanded_y1 = min(
+                rect.y1 + rect.height * expand_ratio,
+                page_rect.height - 5
+            )
+            expanded_rect = fitz.Rect(rect.x0, rect.y0, rect.x1, expanded_y1)
+
+            if expanded_rect.is_empty:
+                continue
+
             result = page.insert_textbox(
-                rect,
-                total_text,
-                fontname=font,
-                fontsize=size,
-                color=second_color,  # 검정 또는 두번째 색상
+                expanded_rect, translated,
+                fontname=font, fontsize=current_size, color=(0, 0, 0),
                 align=fitz.TEXT_ALIGN_LEFT
             )
-            
             if result >= 0:
-                # term 부분만 첫번째 색상으로 덮어쓰기 (첫 줄만)
-                y_baseline = rect.y0 + size
-                page.insert_text(
-                    (rect.x0, y_baseline),
-                    term + " ",
-                    fontname=font,
-                    fontsize=size,
-                    color=first_color
-                )
-                return result
-    
-    # 패턴 없으면 주요 색상으로 fallback
-    return -1
+                return result  # 성공
+
+    # === Strategy F: 최후의 수단 ===
+    # 최대 확장 + 최소 폰트로 시도
+    max_rect = fitz.Rect(
+        rect.x0, rect.y0, rect.x1,
+        min(rect.y1 + rect.height * 1.5, page_rect.height - 5)
+    )
+    result = page.insert_textbox(
+        max_rect, translated,
+        fontname=font, fontsize=size * 0.6, color=(0, 0, 0),
+        align=fitz.TEXT_ALIGN_LEFT
+    )
+    if result >= 0:
+        return result
+
+    return -1  # review_needed (모든 전략 실패)
 
 
 
@@ -381,28 +470,15 @@ def _replace_single_block(
     result.expanded_bbox = (final_rect.x0, final_rect.y0, final_rect.x1, final_rect.y1)
     result.final_size = final_size
 
-    # 5. 텍스트 삽입 (redaction으로 이미 배경 처리됨) (다중 색상 또는 단색)
+    # 5. 텍스트 삽입 (redaction으로 이미 배경 처리됨)
     if has_multi_color:
+        # multi-color 렌더러가 모든 fallback을 내부적으로 처리
+        # (같은 줄 → 두 줄 → bbox 확장 → 폰트 축소 → 단색 fallback)
         insert_result = _render_multi_color_text(
             page, trans, final_rect, english_font, final_size, bg_info["color"]
         )
-        # 다중 색상 렌더링 실패 시 두번째 색상(검정)으로 fallback
-        if insert_result < 0:
-            line_colors = trans.get("line_colors", [])
-            fallback_color = text_color
-            for c in line_colors[1:]:
-                if c != line_colors[0]:
-                    fallback_color = int_color_to_rgb(c) if isinstance(c, int) else (0, 0, 0)
-                    break
-            insert_result = page.insert_textbox(
-                final_rect,
-                translated,
-                fontname=english_font,
-                fontsize=final_size,
-                color=fallback_color,
-                align=fitz.TEXT_ALIGN_LEFT
-            )
     else:
+        # 단색 텍스트
         insert_result = page.insert_textbox(
             final_rect,
             translated,
@@ -413,18 +489,15 @@ def _replace_single_block(
         )
     result.insert_result = insert_result
 
-    # overflow 발생 시 재시도
-    if insert_result < 0:
-        retry_rect = final_rect  # 기본적으로 현재 rect 사용
+    # 단색 텍스트의 overflow 처리 (multi-color는 이미 내부에서 처리됨)
+    if insert_result < 0 and not has_multi_color:
+        retry_rect = final_rect
 
-        # expand_allowed=True일 때만 rect 확장 시도
         if expand_allowed:
-            # 번역이 원본보다 훨씬 긴 경우 (예: "구분"→"Classification") 더 공격적 확장
             orig_len = len(original) if original else 1
             trans_len = len(translated) if translated else 1
             expansion_factor = max(0.5, min(2.0, trans_len / orig_len - 1))
 
-            # 추가 확장: 오른쪽과 아래로 더 확장
             retry_rect = fitz.Rect(
                 final_rect.x0,
                 final_rect.y0,
@@ -432,54 +505,37 @@ def _replace_single_block(
                 min(final_rect.y1 + final_rect.height * 0.3, page_rect.height - 5)
             )
 
-            # 재시도 (다중 색상이면 다시 시도)
-            if has_multi_color:
-                insert_result = _render_multi_color_text(
-                    page, trans, retry_rect, english_font, final_size, bg_info["color"]
-                )
-                if insert_result < 0:
-                    insert_result = page.insert_textbox(
-                        retry_rect,
-                        translated,
-                        fontname=english_font,
-                        fontsize=final_size,
-                        color=text_color,
-                        align=fitz.TEXT_ALIGN_LEFT
-                    )
-            else:
-                insert_result = page.insert_textbox(
-                    retry_rect,
-                    translated,
-                    fontname=english_font,
-                    fontsize=final_size,
-                    color=text_color,
-                    align=fitz.TEXT_ALIGN_LEFT
-                )
-            result.insert_result = insert_result
-            result.expanded_bbox = (retry_rect.x0, retry_rect.y0, retry_rect.x1, retry_rect.y1)
-
-        # 여전히 overflow면 폰트를 더 줄여서 시도 (확장 여부와 관계없이)
-        if insert_result < 0 and final_size > 8.0:
-            smaller_size = max(8.0, final_size * 0.7)
+            # 재시도 - 확장된 rect로 렌더링
             insert_result = page.insert_textbox(
                 retry_rect,
                 translated,
                 fontname=english_font,
-                fontsize=smaller_size,
+                fontsize=final_size,
                 color=text_color,
                 align=fitz.TEXT_ALIGN_LEFT
             )
             result.insert_result = insert_result
-            result.final_size = smaller_size
+            result.expanded_bbox = (retry_rect.x0, retry_rect.y0, retry_rect.x1, retry_rect.y1)
+
+            # 여전히 overflow면 폰트를 더 줄여서 시도
+            if insert_result < 0 and final_size > 8.0:
+                smaller_size = max(8.0, final_size * 0.7)
+                insert_result = page.insert_textbox(
+                    retry_rect,
+                    translated,
+                    fontname=english_font,
+                    fontsize=smaller_size,
+                    color=text_color,
+                    align=fitz.TEXT_ALIGN_LEFT
+                )
+                result.insert_result = insert_result
+                result.final_size = smaller_size
 
     if insert_result >= 0:
         result.status = "replaced"
-    elif final_size <= min_size:
-        # 최소 크기에서도 안 들어가면 그래도 replaced로 (일부라도 보이게)
-        result.status = "replaced"
-        result.error = f"Text overflow at min size {min_size}"
     else:
-        result.status = "replaced"  # 일단 삽입은 됨
+        result.status = "review_needed"
+        result.error = "insert_textbox_overflow"
 
     return result
 

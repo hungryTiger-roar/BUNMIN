@@ -30,10 +30,12 @@ class PDFLayerPipeline:
         llm_client: Optional[BaseLLMClient] = None,
         output_dir: Optional[str] = None,
         on_page_complete: Optional[callable] = None,
+        glossary: Optional[dict] = None,
     ):
         self.llm_client = llm_client or get_default_llm_client()
         self.output_dir = output_dir
         self.on_page_complete = on_page_complete  # 페이지 완료 시 콜백 (page_num: int)
+        self.glossary = glossary or {}  # {한글: 영어} 용어집
         self.log_lines = []
 
     def _log(self, message: str):
@@ -245,8 +247,16 @@ class PDFLayerPipeline:
         # LLM 호출
         response = self.llm_client.complete(prompt)
 
+        # 디버그: LLM 응답 로깅 (첫 500자)
+        logger.debug(f"LLM response (first 500 chars): {response[:500] if response else 'EMPTY'}")
+
         # 응답 파싱
         translations = self._parse_translation_response(response, items)
+
+        # 파싱 결과 검증
+        parsed_count = len([t for t in translations if t.get("translated") != t.get("original")])
+        if parsed_count < len(items):
+            logger.warning(f"Only {parsed_count}/{len(items)} blocks were translated. Check LLM response format.")
 
         return translations
 
@@ -258,27 +268,54 @@ class PDFLayerPipeline:
         """번역 프롬프트 생성 (role 기반 차별화)"""
         prompt_parts = [
             f"Translate the following Korean texts to {target_lang.upper()}.",
+        ]
+
+        # Glossary 먼저 (가장 중요)
+        if self.glossary:
+            prompt_parts.append("")
+            prompt_parts.append("=== MANDATORY TERMINOLOGY (YOU MUST USE THESE EXACT WORDS) ===")
+            for ko, en in self.glossary.items():
+                prompt_parts.append(f"  {ko} = {en}")
+            prompt_parts.append("=== END TERMINOLOGY ===")
+
+        # 현재 배치에서 반복되는 한국어 단어 감지
+        from collections import Counter
+        all_text = " ".join(item.get("text_for_translation", item["text"]) for item in items)
+        # 2글자 이상 한글 단어 추출
+        import re
+        korean_words = re.findall(r'[가-힣]{2,}', all_text)
+        word_counts = Counter(korean_words)
+        repeated_words = [word for word, count in word_counts.items() if count >= 2]
+
+        if repeated_words:
+            prompt_parts.append("")
+            prompt_parts.append(f"WARNING: These Korean words appear multiple times. Use the SAME English word for each:")
+            prompt_parts.append(f"  {', '.join(repeated_words)}")
+
+        prompt_parts.extend([
             "",
             "Rules by text type:",
             "- TITLE: Keep concise and impactful (max 8 words)",
             "- HEADING: Clear section header (max 6 words)",
             "- BODY: Natural, flowing translation",
-            "- BULLET: Keep concise (bullet symbols preserved separately)",
+            "- BULLET: Sentence case (capitalize first word only), keep concise (bullet symbols preserved separately)",
             "- CAPTION: Brief description (max 10 words)",
             "- FOOTER/SOURCE: Keep as brief as possible",
             "",
             "General rules:",
-            "1. Translate naturally and fluently",
+            "1. Translate to fit the overall context and flow of the document",
             "2. Keep proper nouns as-is if uncertain",
-            "3. Keep numbers as digits, do NOT spell them out (10 → 10, not Ten)",
-            "4. NEVER add ANY bullet symbols (-, *, •, ■, etc.) - they are preserved from original",
+            "3. Keep numbers as digits (10 → 10, not Ten)",
+            "4. NEVER add bullet symbols (-, *, •, ■) - preserved from original",
             "5. Do NOT add extra punctuation or quotes",
-            "6. If text contains symbols (⇒, →, ·, etc.), keep them exactly in place",
-            "7. ALWAYS preserve and translate parentheses and their contents",
-            "8. Output format: [BLOCK_ID]: translated text",
-            "",
-            "Texts to translate:",
-        ]
+            "6. Keep symbols (⇒, →, ·) exactly in place",
+            "7. ALWAYS translate parentheses and their contents",
+            "8. If Korean has English in parentheses, keep ONLY the English",
+            "9. Output format: [BLOCK_ID]: translated text",
+        ])
+
+        prompt_parts.append("")
+        prompt_parts.append("Texts to translate:")
 
         for item in items:
             block_id = item["block_id"]
@@ -307,8 +344,21 @@ class PDFLayerPipeline:
 
         # 응답 파싱 (패턴: [block_id]: translated text)
         import re
-        pattern = r'\[([^\]]+)\]:\s*(.+?)(?=\[|$)'
+
+        # 1차 시도: 정규식 파싱
+        pattern = r'\[([^\]]+)\]:\s*(.+?)(?=\n\[|\Z)'
         matches = re.findall(pattern, response, re.DOTALL)
+
+        # 2차 시도: 라인별 파싱 (1차 실패 시)
+        if not matches:
+            for line in response.strip().split('\n'):
+                line = line.strip()
+                if line.startswith('[') and ']:' in line:
+                    bracket_end = line.index(']:')
+                    block_id = line[1:bracket_end]
+                    translated = line[bracket_end + 2:].strip()
+                    if block_id and translated:
+                        matches.append((block_id, translated))
 
         for block_id, translated in matches:
             block_id = block_id.strip()
@@ -339,6 +389,9 @@ class PDFLayerPipeline:
         matched_ids = {m[0].strip() for m in matches}
         for item in items:
             if item["block_id"] not in matched_ids:
+                # 파싱 실패 로깅
+                logger.warning(f"Translation parsing failed for {item['block_id']}: '{item['text'][:50]}...'")
+                logger.debug(f"LLM response was: {response[:500]}...")
                 translations.append({
                     "page_num": item["page_num"],
                     "block_id": item["block_id"],

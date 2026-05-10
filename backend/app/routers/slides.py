@@ -538,11 +538,11 @@ async def get_pages(slide_id: str):
 
     pages = [
         PageData(
-            pageNumber=page["page_number"] + 1,  # 1-indexed for frontend
-            imageUrl=f"/slides/image/{slide_id}/{page['page_number']}",
+            pageNumber=page.get("page_number", idx) + 1,  # 1-indexed for frontend
+            imageUrl=f"/slides/image/{slide_id}/{page.get('page_number', idx)}",
             ocrText=page.get("ocr_text"),
         )
-        for page in slide_data[slide_id]
+        for idx, page in enumerate(slide_data[slide_id])
     ]
     filename = slide_status.get(slide_id, {}).get("filename")
     return {"pages": pages, "filename": filename}
@@ -1095,9 +1095,15 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
                 _page_completed(slide_id, current_page)
                 slide_status[slide_id]["processed_pages"] = current_page
 
+            # 슬라이드 용어집 가져오기
+            glossary = slide_glossary.get(slide_id, {})
+            if glossary:
+                print(f"[Slides] 용어집 {len(glossary)}개 용어 적용")
+
             pipeline = PDFLayerPipeline(
                 output_dir=str(TRANSLATED_DIR),
-                on_page_complete=on_page_done
+                on_page_complete=on_page_done,
+                glossary=glossary
             )
             result = await asyncio.to_thread(
                 pipeline.run,

@@ -529,12 +529,21 @@ def _parse_translations(raw_output: str, blocks: list[dict]) -> dict:
     valid_prompt_ids = {block.get("prompt_id") for block in blocks if block.get("prompt_id")}
 
     translations_by_id = {}
+    invalid_ids = []
 
     matches = pattern_prompt_id.findall(raw_output)
     for prompt_id, translation in matches:
         translation = _clean_translation_output(translation)
         if prompt_id in valid_prompt_ids:
-            translations_by_id[prompt_id] = translation
+            # 무효 번역 체크 (???, ... 등)
+            if _is_invalid_translation(translation):
+                invalid_ids.append(prompt_id)
+                print(f"  [Parse] {prompt_id}: 무효 번역 감지 '{translation[:30]}' → 재시도 대상")
+            else:
+                translations_by_id[prompt_id] = translation
+
+    if invalid_ids:
+        print(f"  [Parse] 무효 번역 {len(invalid_ids)}개 필터링됨")
 
     return translations_by_id
 
@@ -572,6 +581,47 @@ def _clean_translation_output(text: str) -> str:
     text = re.sub(r"<[a-zA-Z]+\s*/?\s*>", "", text)
 
     return text.strip()
+
+
+def _is_invalid_translation(text: str) -> bool:
+    """무효한 번역인지 확인 (재시도 필요)
+
+    무효 케이스:
+    - "???" 또는 "??" 등 물음표만 있는 경우
+    - "..." 또는 ".." 등 마침표만 있는 경우
+    - "[untranslatable]", "[unknown]" 등 메타 텍스트
+    - 빈 문자열 또는 공백만
+    - 영문자/숫자가 전혀 없는 경우 (기호만)
+    """
+    import re
+
+    if not text or not text.strip():
+        return True
+
+    text = text.strip()
+
+    # 물음표/마침표만 있는 경우
+    if re.match(r'^[\?\.\!\s]+$', text):
+        return True
+
+    # 메타 텍스트 패턴
+    invalid_patterns = [
+        r'^\[.*\]$',  # [anything]
+        r'^untranslat',  # untranslatable, untranslated
+        r'^unknown$',
+        r'^n/?a$',
+        r'^\?+$',
+        r'^\.+$',
+    ]
+    for pattern in invalid_patterns:
+        if re.match(pattern, text, re.IGNORECASE):
+            return True
+
+    # 영문자나 숫자가 전혀 없으면 무효 (기호/구두점만)
+    if not re.search(r'[A-Za-z0-9가-힣]', text):
+        return True
+
+    return False
 
 
 def _find_visual_predecessor(
