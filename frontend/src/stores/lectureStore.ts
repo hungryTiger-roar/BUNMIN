@@ -124,11 +124,6 @@ interface LectureState {
   sessionId: string | null
   setSessionId: (id: string | null) => void
 
-  // streaming ASR 모드 — backend 의 register ack 로 수신. true 면 강의자측이
-  // 200ms PCM frame 을 연속 송신하는 모드로 동작.
-  asrStreaming: boolean
-  setAsrStreaming: (enabled: boolean) => void
-
   // 전체 초기화
   reset: () => void
 }
@@ -158,7 +153,6 @@ const initialState = {
   lectureTitle: '',
   slideFilename: '',
   sessionId: null,
-  asrStreaming: false,
 }
 
 export const useLectureStore = create<LectureState>((set, get) => ({
@@ -248,9 +242,6 @@ export const useLectureStore = create<LectureState>((set, get) => ({
 
   // 자막 세션 ID
   setSessionId: (id) => set({ sessionId: id }),
-
-  // streaming ASR 모드
-  setAsrStreaming: (enabled) => set({ asrStreaming: enabled }),
 
   // 전체 초기화
   reset: () => set(initialState),

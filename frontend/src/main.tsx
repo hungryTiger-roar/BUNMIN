@@ -10,11 +10,10 @@ import './styles/index.css'
 // 와 프로덕션 SPA fallback 이 어떤 path 로 접근해도 index.html 반환하면 동작.
 const Router = isElectron ? HashRouter : BrowserRouter
 
-// [Sync Debug] .env 의 VITE_SYNC_DEBUG=true 면 페이지 로드 시 자동 활성화.
-// 콘솔에서 수동 토글: window.__SYNC_DEBUG = true / false
-if (typeof window !== 'undefined' && import.meta.env.VITE_SYNC_DEBUG === 'true') {
+// [Sync Debug] 진단 로그 ([L→S] / [S←L] / [Diag]) 항상 활성화.
+// 끄고 싶으면 콘솔에서 window.__SYNC_DEBUG = false.
+if (typeof window !== 'undefined') {
   ;(window as unknown as { __SYNC_DEBUG?: boolean }).__SYNC_DEBUG = true
-  console.log('[Sync Debug] VITE_SYNC_DEBUG=true — 진단 로그 자동 활성화 ([L→S] / [S←L] / [Diag])')
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
