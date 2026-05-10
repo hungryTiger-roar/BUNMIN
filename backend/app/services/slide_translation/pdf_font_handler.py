@@ -1,8 +1,16 @@
 """
 PDF 폰트 핸들러
 
-한글 폰트 → 영어 폰트 매핑
-폰트 크기 계산 및 조정
+[역할]
+- 한글 폰트 → 영어 폰트 매핑
+- 색상 변환 (int → RGB tuple)
+
+[호출 경로]
+pdf_text_replacer.py → pdf_font_handler.py (이 파일)
+
+[주요 함수]
+- map_korean_to_english_font(): 한글 폰트명을 영어 폰트로 매핑
+- int_color_to_rgb(): 정수 색상을 RGB tuple로 변환
 """
 from dataclasses import dataclass
 from typing import Optional

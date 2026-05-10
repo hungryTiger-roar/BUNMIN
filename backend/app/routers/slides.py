@@ -886,7 +886,7 @@ async def process_slide(slide_id: str, pdf_path: Path):
 
         # VLM 번역 함수 임포트
         try:
-            from translate_slide_v3 import (
+            from app.services.slide_translation.image_pipeline import (
                 stage_ocr_surya, stage_translate, stage_overlay,
                 unload_vlm_model,
                 build_glossary_from_ocr_results
@@ -1023,7 +1023,7 @@ async def process_slide(slide_id: str, pdf_path: Path):
         print(f"[Slides] {slide_id} 처리 실패: {e}")
         # 예외 발생 시에도 VLM 언로드 보장
         try:
-            from translate_slide_v3 import unload_vlm_model
+            from app.services.slide_translation.image_pipeline import unload_vlm_model
             await asyncio.to_thread(unload_vlm_model)
         except Exception:
             pass
@@ -1056,7 +1056,7 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
     - 텍스트 레이어가 없거나 이미지 기반 텍스트: OCR/VLM 방식 fallback
     """
     import fitz
-    from app.services.slide_translation.pdf_layer_pipeline import PDFLayerPipeline
+    from app.services.slide_translation.pdf_pipeline import PDFLayerPipeline
     from app.services.slide_translation.pdf_text_extractor import extract_korean_texts_for_translation
 
     try:
@@ -1120,7 +1120,7 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
 
             # VLM 모듈 로드
             try:
-                from translate_slide_v3 import (
+                from app.services.slide_translation.image_pipeline import (
                     stage_ocr_surya, stage_translate, stage_overlay,
                     unload_vlm_model,
                 )
@@ -1194,7 +1194,7 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
 
             # VLM 모듈 로드 (아직 안 되어있으면)
             try:
-                from translate_slide_v3 import (
+                from app.services.slide_translation.image_pipeline import (
                     stage_ocr_surya, stage_translate, stage_overlay,
                     unload_vlm_model,
                 )
@@ -1395,7 +1395,7 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
         slide_status[slide_id]["error"] = str(e)
         # VLM 모델 언로드 보장
         try:
-            from translate_slide_v3 import unload_vlm_model
+            from app.services.slide_translation.image_pipeline import unload_vlm_model
             await asyncio.to_thread(unload_vlm_model)
         except Exception:
             pass

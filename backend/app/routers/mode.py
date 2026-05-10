@@ -45,7 +45,7 @@ def get_current_mode() -> Mode:
 def _unload_vlm():
     """VLM 모델 언로드 (GPU 메모리 해제)"""
     try:
-        from translate_slide_v3 import unload_vlm_model
+        from app.services.slide_translation.image_pipeline import unload_vlm_model
         unload_vlm_model()
         print("[Mode] VLM 모델 언로드 완료")
         return True
@@ -95,7 +95,7 @@ async def get_mode():
         models_loaded.append("ocr")
 
     try:
-        from translate_slide_v3 import is_vlm_loaded
+        from app.services.slide_translation.image_pipeline import is_vlm_loaded
         if is_vlm_loaded():
             models_loaded.append("vlm")
     except Exception:

@@ -1,11 +1,37 @@
 """
 PDF 텍스트 교체 모듈 (Production Level)
 
-핵심 전략:
+[역할]
+- PDF에서 원본 텍스트를 번역된 텍스트로 교체
+- Multi-color Term: Definition 렌더링 (핵심!)
+- bbox 확장, 폰트 축소 등 자동 fallback
+
+[호출 경로]
+pdf_layer_pipeline.py → pdf_text_replacer.py (이 파일)
+                        └── pdf_font_handler.py
+
+[핵심 전략]
 1. bbox 확장: 영어가 안 들어가면 주변 여백으로 rect 확장
-2. fit 기반 폰트: TextWriter로 실제 들어가는지 시뮬레이션
-3. role별 정책: title/body/caption별 최소 폰트 크기 다르게
+2. fit 기반 폰트: 실제 들어가는지 시뮬레이션
+3. role별 정책: title/body/caption별 최소 폰트 크기
 4. redaction 전략: 배경 유형에 따라 다른 처리
+
+[주요 함수]
+- replace_texts_in_pdf(): 메인 교체 함수
+- _render_multi_color_text(): Term: Definition 다중 색상 렌더링
+- _replace_single_block(): 단일 블록 교체
+
+[Multi-color 렌더링 Fallback 순서]
+A. 같은 줄 multi-color (term 빨강 + definition 검정)
+B. 두 줄 multi-color (term 첫 줄, definition 둘째 줄)
+C. bbox 아래 확장 후 재시도
+D. 폰트 축소 (0.95, 0.9, 0.85)
+E. 단색 textbox fallback
+F. review_needed 처리
+
+[주의]
+- 이 파일의 multi-color 로직이 현재 가장 안정적
+- translation.py와 독립적으로 동작
 """
 import fitz
 import os

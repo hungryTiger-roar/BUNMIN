@@ -1,18 +1,17 @@
 """
-PDF 레이어 기반 번역 파이프라인 (메인 오케스트레이터)
+PDF 텍스트 레이어 기반 번역 파이프라인
 
 [역할]
 - 전체 번역 파이프라인 조율
 - PDF 텍스트 레이어 직접 수정 (한글 → 영어)
 - 이미지 기반 방식보다 품질이 높고 벡터 텍스트 유지
 
-[호출 흐름]
-slides.py (router)
-└── pdf_layer_pipeline.py (이 파일)
-    ├── pdf_text_extractor.py (텍스트 추출)
-    ├── pdf_text_replacer.py (텍스트 교체)
-    ├── llm_client.py (LLM 호출)
-    └── bbox_analyzer.py (VLM 레이아웃 분석)
+[호출 경로]
+slides.py (router) → pdf_pipeline.py (이 파일)
+  ├── pdf_text_extractor.py (텍스트 추출)
+  ├── pdf_text_replacer.py (텍스트 교체)
+  ├── llm_client.py (LLM 호출)
+  └── bbox_analyzer.py (VLM 레이아웃 분석)
 
 [주요 메서드]
 - run(): 전체 파이프라인 실행
@@ -21,7 +20,6 @@ slides.py (router)
 - _parse_translation_response(): LLM 응답 파싱
 
 [주의]
-- translation.py와 별개로 자체 번역 로직 보유
 - multi-color 렌더링은 pdf_text_replacer.py에서 처리
 """
 import os

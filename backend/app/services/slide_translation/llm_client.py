@@ -1,12 +1,21 @@
 """
 LLM Client Integration
 
-LLM 클라이언트 통합 래퍼
-
-역할:
-- 다양한 LLM 백엔드 지원 (OpenAI, 로컬 모델 등)
+[역할]
+- 다양한 LLM 백엔드 지원 (OpenAI, Gemini 등)
 - 통일된 인터페이스 제공
 - 에러 핸들링 및 재시도 로직
+
+[호출 경로]
+pdf_layer_pipeline.py → llm_client.py (이 파일)
+
+[주요 클래스]
+- BaseLLMClient: 추상 기본 클래스
+- OpenAIClient: OpenAI GPT 클라이언트
+- GeminiClient: Google Gemini 클라이언트
+
+[주요 함수]
+- get_default_llm_client(): 환경변수 기반 기본 클라이언트 반환
 """
 import os
 from abc import ABC, abstractmethod

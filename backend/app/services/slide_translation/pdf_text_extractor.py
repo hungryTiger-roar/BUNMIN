@@ -1,8 +1,27 @@
 """
 PDF 텍스트 레이어 추출기
 
-PDF에서 텍스트 레이어를 직접 추출하여 정확한 위치/폰트/스타일 정보 획득
-OCR 방식보다 훨씬 정확한 텍스트 추출 가능
+[역할]
+- PDF에서 텍스트 레이어를 직접 추출
+- 정확한 위치/폰트/스타일/색상 정보 획득
+- OCR 방식보다 정확한 텍스트 추출
+
+[호출 경로]
+pdf_layer_pipeline.py → pdf_text_extractor.py (이 파일)
+
+[주요 함수]
+- check_pdf_has_text_layer(): PDF 텍스트 레이어 존재 여부 확인
+- extract_korean_texts_for_translation(): 번역용 한글 텍스트 추출
+
+[주요 클래스]
+- TextSpan: 단일 스타일 텍스트 조각
+- TextLine: 같은 줄의 스팬들
+- TextBlock: 논리적 텍스트 블록
+
+[출력 데이터]
+- block_id, page_num, text, bbox, font, size, color
+- role (title/heading/body/bullet/caption)
+- prefix_width, line_colors, has_multi_color
 """
 import fitz  # PyMuPDF
 from typing import Optional

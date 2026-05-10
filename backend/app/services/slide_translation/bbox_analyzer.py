@@ -1,18 +1,24 @@
 """
 VLM 기반 Bbox 분석 모듈
 
-페이지 이미지와 텍스트 블록 정보를 VLM에 전달하여:
-1. 이미지/다이어그램 위 텍스트 감지 (확장 금지)
-2. 병합해야 할 텍스트 블록 판단
-3. 기호/prefix 처리 방식 결정
+[역할]
+- VLM으로 페이지 레이아웃 분석
+- 이미지/다이어그램 위 텍스트 감지 (확장 금지)
+- 병합해야 할 텍스트 블록 판단
+- 기호/prefix 처리 방식 결정
 
-사용법:
-    from .bbox_analyzer import analyze_page_layout
+[호출 경로]
+pdf_layer_pipeline.py → bbox_analyzer.py (이 파일)
 
-    analysis = analyze_page_layout(
-        page_image,  # PIL Image or numpy array
-        text_blocks  # list of {block_id, text, bbox, ...}
-    )
+[주요 함수]
+- analyze_page_layout(): 페이지 레이아웃 분석
+  - page_image: PIL Image or numpy array
+  - text_blocks: list of {block_id, text, bbox, ...}
+
+[출력]
+- on_image_background: 이미지 배경 위 여부
+- expand_allowed: bbox 확장 허용 여부
+- keep_prefix: prefix 유지 여부
 """
 import os
 import json
@@ -27,17 +33,15 @@ _vlm_processor = None
 
 
 def get_vlm_for_analysis():
-    """VLM 모델 로드 (translate_slide_v3와 공유)"""
+    """VLM 모델 로드 (image_pipeline과 공유)"""
     global _vlm_model, _vlm_processor
 
     if _vlm_model is not None:
         return _vlm_model, _vlm_processor
 
     try:
-        # translate_slide_v3의 VLM 모델 재사용 시도
-        import sys
-        sys.path.insert(0, str(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))))
-        from translate_slide_v3 import get_vlm_model
+        # image_pipeline의 VLM 모델 재사용
+        from .image_pipeline import get_vlm_model
         _vlm_model, _vlm_processor = get_vlm_model()
         return _vlm_model, _vlm_processor
     except Exception as e:
