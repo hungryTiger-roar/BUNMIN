@@ -139,7 +139,6 @@ function Lecturer() {
   const lectureTitle = useLectureStore((s) => s.lectureTitle)
   const slideFilename = useLectureStore((s) => s.slideFilename)
   const sessionId = useLectureStore((s) => s.sessionId)
-  const asrStreaming = useLectureStore((s) => s.asrStreaming)
   const setLectureTitle = useLectureStore((s) => s.setLectureTitle)
   const setMicOn = useLectureStore((s) => s.setMicOn)
   const setLectureStarted = useLectureStore((s) => s.setLectureStarted)
@@ -200,23 +199,6 @@ function Lecturer() {
     send({ type: 'audio', audio: base64, sample_rate: 16000, sentAt: Date.now() })
   }, [send, isPaused])
 
-  // streaming 모드 — VAD 가 'speaking' 상태일 때만 200ms PCM frame 이 도착함.
-  // worklet → ArrayBuffer.byteLength = 6400 (3200 samples * 2 bytes).
-  const handleAudioFrame = useCallback((pcm: Int16Array, sentAt: number) => {
-    if (isPaused) return
-    // Int16Array → base64. Uint8Array view 로 byte-level 인코딩.
-    const bytes = new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)
-    let binary = ''
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
-    const base64 = btoa(binary)
-    send({ type: 'audio_frame', pcm: base64, sample_rate: 16000, sentAt })
-  }, [send, isPaused])
-
-  const handleSpeechEndFlush = useCallback(() => {
-    if (isPaused) return
-    send({ type: 'audio_frame_flush', sentAt: Date.now() })
-  }, [send, isPaused])
-
   const {
     startCapture: startAudioCapture,
     stopCapture: stopAudioCapture,
@@ -224,9 +206,6 @@ function Lecturer() {
     setGain,
   } = useAudioCapture({
     onAudioData: handleAudioData,
-    streamingMode: asrStreaming,
-    onAudioFrame: handleAudioFrame,
-    onSpeechEndFlush: handleSpeechEndFlush,
   })
 
   const [micGainPct, setMicGainPct] = useState(100)
@@ -587,6 +566,9 @@ function Lecturer() {
   const endLecture = () => {
     stopAudioCapture()
     stopScreenCapture()
+    // 이전 강의의 필기 잔류 제거 — DrawingCanvas pageActionsRef 가 page 번호로만 keying
+    // 되어 새 강의자료 선택 / 같은 슬라이드 재시작 시 옛 stroke 가 그대로 노출됨.
+    drawingCanvasRef.current?.clearAllPages()
     setLectureStarted(false)
     setPaused(false)
     send({ type: 'lecture_end', slide_id: slideId })

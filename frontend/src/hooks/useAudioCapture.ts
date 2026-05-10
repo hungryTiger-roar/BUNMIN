@@ -9,20 +9,10 @@ declare global {
 
 interface UseAudioCaptureOptions {
   onAudioData: (audioBlob: Blob) => void
-  /** streaming 모드 — backend ASR_STREAMING=true 시 register ack 로 ON.
-   *  활성 시 발화 중 200ms 단위 PCM int16 frame 을 onAudioFrame 으로 흘려보내고,
-   *  VAD onSpeechEnd 시 onSpeechEndFlush 1회 호출. 비활성 시 기존 onSpeechEnd → onAudioData 동작.
-   */
-  streamingMode?: boolean
-  onAudioFrame?: (pcm: Int16Array, sentAt: number) => void
-  onSpeechEndFlush?: () => void
 }
 
 export function useAudioCapture({
   onAudioData,
-  streamingMode = false,
-  onAudioFrame,
-  onSpeechEndFlush,
 }: UseAudioCaptureOptions) {
   const [isCapturing, setIsCapturing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -33,20 +23,23 @@ export function useAudioCapture({
   const gainValueRef = useRef<number>(1)  // 0 = mute, 1 = unity, 2 = +6dB
   const keepAliveRef = useRef<NodeJS.Timeout | null>(null)
   const audioContextRef = useRef<AudioContext | null>(null)
-  // streaming 모드 전용 — AudioWorklet 으로 PCM frame 을 추출.
-  // streamingMode=false 면 worklet 자체를 만들지 않아 비활성과 동일 비용.
+  // AudioWorklet — 200ms PCM int16 frame 추출. force-split 시 누적 프레임을 chunk 로 송출.
   const workletNodeRef = useRef<AudioWorkletNode | null>(null)
   const muteSinkRef = useRef<GainNode | null>(null)
   const isSpeakingRef = useRef(false)
+  // 한 발화의 최대 지속 시간 watchdog. 호흡 없이 길게 말하는 화자가
+  // VAD 의 자연 onSpeechEnd 트리거 없이 한 덩어리 chunk 로 ASR 들어가는 걸 방지.
+  const maxDurationTimerRef = useRef<number | null>(null)
+  // 워크렛이 캡처한 프레임 누적 버퍼들. VAD 의 pause/start 가 발화 중간을 끊으면
+  // 그 이후 음성을 놓치는 문제 (force-split 후 새 onSpeechStart 가 안 트리거되는 경우)
+  // 를 우회하기 위해 워크렛 PCM 프레임을 우리가 직접 누적해 chunk 송출.
+  //   prerollRef:    400ms 롤링 윈도우. 발화 시작 직전 음성 보존 (단어 첫 자모 자름 방지).
+  //   chunkAccumRef: 현재 발화 누적 프레임. VAD onSpeechEnd 또는 force-split 시점에 송출 후 리셋.
+  const prerollRef = useRef<Int16Array[]>([])
+  const chunkAccumRef = useRef<Int16Array[]>([])
 
   const onAudioDataRef = useRef(onAudioData)
   onAudioDataRef.current = onAudioData
-  const onAudioFrameRef = useRef(onAudioFrame)
-  onAudioFrameRef.current = onAudioFrame
-  const onSpeechEndFlushRef = useRef(onSpeechEndFlush)
-  onSpeechEndFlushRef.current = onSpeechEndFlush
-  const streamingModeRef = useRef(streamingMode)
-  streamingModeRef.current = streamingMode
 
   // AudioContext가 suspend되면 자동 resume (Chrome 무음 정책 대응)
   const startKeepAlive = (vad: any) => {
@@ -114,6 +107,40 @@ export function useAudioCapture({
       })
 
       const { MicVAD } = window.vad
+      // 한 발화의 최대 지속 시간 — 이를 넘으면 강제 분할 (chunk 송출).
+      // 강사가 호흡 없이 길게 말해도 worklet 누적 프레임을 직접 chunk 로 송출
+      // (VAD 는 그대로 둠 → pause/start 사이 음성 손실 차단). 정상 강의에선 거의 발동 안 됨.
+      const MAX_SPEECH_DURATION_MS = 20000
+      // 발동 시 chunk 송출 헬퍼. 발화 도중 호출 시 누적 프레임만 송출, VAD 는 계속 듣는 중.
+      const flushChunkAccum = (label: string) => {
+        const frames = chunkAccumRef.current
+        if (frames.length === 0) return
+        chunkAccumRef.current = []  // 다음 chunk 누적 시작
+        // 프레임 합산 — 너무 짧으면 노이즈 버스트 가드
+        const totalSamples = frames.reduce((acc, f) => acc + f.length, 0)
+        if (totalSamples < 4800) {  // 16kHz × 0.3s = 4800
+          console.log(`[VAD] ${label} → 너무 짧음 (${totalSamples} samples), 스킵`)
+          return
+        }
+        const float32 = new Float32Array(totalSamples)
+        let off = 0
+        for (const frame of frames) {
+          for (let i = 0; i < frame.length; i++) {
+            const s = frame[i]
+            float32[off + i] = s < 0 ? s / 0x8000 : s / 0x7fff
+          }
+          off += frame.length
+        }
+        // RMS 에너지 가드 — 빈 구간이 흘러들어왔으면 스킵
+        const rms = Math.sqrt(float32.reduce((sum: number, s: number) => sum + s * s, 0) / float32.length)
+        if (rms < 0.005) {
+          console.log(`[VAD] ${label} → 에너지 너무 낮음 (rms=${rms.toFixed(4)}), 스킵`)
+          return
+        }
+        const wavBlob = float32ToWav(float32, 16000)
+        console.log(`[VAD] ${label} → chunk 송출 (${(totalSamples / 16000).toFixed(2)}s)`)
+        onAudioDataRef.current(wavBlob)
+      }
       const vad = await MicVAD.new({
         stream,
         baseAssetPath: '/',
@@ -126,36 +153,37 @@ export function useAudioCapture({
         redemptionMs: 300,
         // 발화 감지 직전 프레임 2개 포함 (발화 시작 잘림 방지, 1프레임 ≈ 96ms)
         preSpeechPadFrames: 2,
+        // false: 우리는 vad.pause() 안 부름. force-split 은 worklet 누적 프레임 직접 송출.
+        // VAD 는 발화 중에도 끊김 없이 계속 들음 → 강제 분할 후 음성 손실 없음.
         submitUserSpeechOnPause: false,
         onSpeechStart: () => {
           console.log('[VAD] 발화 시작')
           isSpeakingRef.current = true
+          // 발화 시작 직전 preroll 을 chunk 누적에 미리 넣음 — 단어 첫 자모 잘림 방지
+          chunkAccumRef.current = [...prerollRef.current]
+          // 20s 마다 chunk 강제 송출 (worklet 누적 프레임 사용, VAD 는 그대로 둠)
+          const scheduleForceSplit = () => {
+            maxDurationTimerRef.current = window.setTimeout(() => {
+              if (!isSpeakingRef.current) return
+              flushChunkAccum(`${MAX_SPEECH_DURATION_MS}ms 초과`)
+              if (isSpeakingRef.current) scheduleForceSplit()  // 다음 chunk 도 같은 주기로
+            }, MAX_SPEECH_DURATION_MS)
+          }
+          if (maxDurationTimerRef.current !== null) {
+            window.clearTimeout(maxDurationTimerRef.current)
+          }
+          scheduleForceSplit()
         },
-        onSpeechEnd: (audio: Float32Array) => {
+        onSpeechEnd: (_audio: Float32Array) => {
           isSpeakingRef.current = false
-          // streaming 모드: blob 합성 안 하고, frame 송신은 worklet 이 isSpeakingRef
-          // false 시 자동 중단되므로 여기선 flush 신호만 보내면 됨.
-          if (streamingModeRef.current) {
-            console.log('[VAD] 발화 끝 (streaming) → flush 신호')
-            onSpeechEndFlushRef.current?.()
-            return
+          // max-duration timer 정리
+          if (maxDurationTimerRef.current !== null) {
+            window.clearTimeout(maxDurationTimerRef.current)
+            maxDurationTimerRef.current = null
           }
-
-          // 최소 발화 길이: 0.3초 미만은 노이즈 버스트 (16000Hz * 0.3s = 4800)
-          if (audio.length < 4800) {
-            console.log('[VAD] 발화 너무 짧음 → 노이즈로 판단, 스킵')
-            return
-          }
-
-          // RMS 에너지: 너무 조용하면 빈 구간이 VAD를 통과한 것
-          const rms = Math.sqrt(audio.reduce((sum: number, s: number) => sum + s * s, 0) / audio.length)
-          if (rms < 0.005) {
-            console.log(`[VAD] 에너지 너무 낮음 (rms=${rms.toFixed(4)}) → 스킵`)
-            return
-          }
-
-          const wavBlob = float32ToWav(audio, 16000)
-          onAudioDataRef.current(wavBlob)
+          // 누적 worklet 프레임을 chunk 로 송출. VAD 의 _audio 는 무시
+          // (force-split 으로 이미 일부 전송됐을 수 있어 중복 위험). 가드는 flushChunkAccum 안에서 처리.
+          flushChunkAccum('발화 끝')
         },
         onVADMisfire: () => {
           console.log('[VAD] 오발화 감지 — 무시')
@@ -184,25 +212,20 @@ export function useAudioCapture({
       analyserRef.current = analyser
       gainNode.connect(analyser)
 
-      // Streaming 모드: 200ms PCM int16 frame 추출용 AudioWorklet.
-      // chunk 모드에서는 worklet 자체를 만들지 않아 기존 동작과 비용 동일.
-      if (streamingMode) {
-        try {
-          await setupStreamingWorklet(audioContext, gainNode)
-          console.log('[AudioCapture] streaming worklet 초기화 완료')
-        } catch (err) {
-          // worklet 미지원/실패 시 streaming flag 를 즉시 끔.
-          // 안 그러면 onSpeechEnd 가 flush 신호만 보내고 chunk blob 송신 안 해서 자막 0건.
-          console.error('[AudioCapture] streaming worklet 실패 → chunk 모드로 폴백:', err)
-          streamingModeRef.current = false
-        }
+      // AudioWorklet 셋업 — force-split 시 누적 프레임 송출에 사용.
+      try {
+        await setupStreamingWorklet(audioContext, gainNode)
+        console.log('[AudioCapture] worklet 초기화 완료')
+      } catch (err) {
+        // worklet 실패하면 force-split 작동 안 함 — VAD 자연 onSpeechEnd 로 폴백.
+        console.error('[AudioCapture] worklet 실패:', err)
       }
 
       vadRef.current = vad
       vad.start()
       startKeepAlive(vad)
       setIsCapturing(true)
-      console.log(`[AudioCapture] Silero VAD 캡처 시작 (mode=${streamingMode ? 'streaming' : 'chunk'})`)
+      console.log('[AudioCapture] Silero VAD 캡처 시작')
       return true
     } catch (err) {
       console.error('[AudioCapture] 시작 실패:', err)
@@ -211,10 +234,8 @@ export function useAudioCapture({
     }
   }, [])
 
-  // streaming 모드 전용 — AudioWorklet 으로 200ms PCM int16 frame 추출 후
-  // isSpeakingRef true 일 때만 onAudioFrame 콜백 호출 (silence 시 GPU/네트워크 절약).
-  // useCallback 으로 빼서 외부 useEffect 에서도 호출 가능 — register ack 가 마이크 시작
-  // 후 늦게 도착하는 race 케이스 fix 용. ref 만 캡처하므로 deps 빈 배열로 stable.
+  // AudioWorklet 셋업 — 200ms PCM int16 frame 추출. prerollRef + chunkAccumRef 에 누적,
+  // force-split / VAD onSpeechEnd 시점에 chunk 송출. ref 만 캡처하므로 deps 빈 배열로 stable.
   const setupStreamingWorklet = useCallback(async (audioContext: AudioContext, gainNode: GainNode) => {
     // worklet processor 인라인 정의 — 별도 파일/Vite 설정 없이 동작.
     // 16kHz mono 입력, 3200 sample(200ms) 마다 Int16 변환 후 main thread 로 postMessage.
@@ -254,12 +275,20 @@ registerProcessor('aunion-stream-processor', StreamProcessor)
       URL.revokeObjectURL(url)
     }
     const workletNode = new AudioWorkletNode(audioContext, 'aunion-stream-processor')
+    // force-split 발동 시 즉시 송출할 수 있도록 preroll 윈도우 크기.
+    // 2 * 200ms = 400ms — 발화 시작 직전 음성 보존 (VAD preSpeechPadFrames 보완).
+    const PREROLL_FRAMES_MAX = 2
     workletNode.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
-      // VAD 가 'speaking' 으로 표시한 동안만 backend 로 송신 — silence 절약.
-      if (!isSpeakingRef.current) return
-      if (!streamingModeRef.current) return
       const pcm = new Int16Array(e.data)
-      onAudioFrameRef.current?.(pcm, Date.now())
+      // preroll 항상 갱신 (롤링 윈도우) — 발화 안 할 때도 직전 200~400ms 보관.
+      prerollRef.current.push(pcm)
+      if (prerollRef.current.length > PREROLL_FRAMES_MAX) {
+        prerollRef.current.shift()
+      }
+      // 발화 중이면 chunk 누적 — onSpeechEnd 또는 force-split 시점에 일괄 송출.
+      if (isSpeakingRef.current) {
+        chunkAccumRef.current.push(pcm)
+      }
     }
     // worklet 의 process() 가 audio engine 에 의해 pull 되도록 destination 까지 연결.
     // 단, audio echo 방지를 위해 muted gain sink 경유.
@@ -271,22 +300,6 @@ registerProcessor('aunion-stream-processor', StreamProcessor)
     workletNodeRef.current = workletNode
     muteSinkRef.current = muteSink
   }, [])
-
-  // race condition fix — startCapture 시점에 streamingMode=false 였다가 register ack
-  // 으로 true 로 바뀌는 케이스. capture 가 이미 도는 상태에서 streamingMode 가 true 가
-  // 되면 worklet 만 동적으로 add. 첫 mount 에 register ack 늦게 도착해 mode=chunk 로
-  // 시작했어도 이 useEffect 가 메꿔줌.
-  useEffect(() => {
-    if (!isCapturing || !streamingMode) return
-    if (workletNodeRef.current) return  // 이미 add 됨
-    if (!audioContextRef.current || !gainNodeRef.current) return
-    setupStreamingWorklet(audioContextRef.current, gainNodeRef.current)
-      .then(() => console.log('[AudioCapture] streaming worklet 동적 add (race fix)'))
-      .catch((err) => {
-        console.error('[AudioCapture] streaming worklet 동적 add 실패 → chunk 모드 유지:', err)
-        streamingModeRef.current = false
-      })
-  }, [streamingMode, isCapturing, setupStreamingWorklet])
 
   const stopCapture = useCallback(() => {
     if (workletNodeRef.current) {
@@ -319,6 +332,14 @@ registerProcessor('aunion-stream-processor', StreamProcessor)
     }
 
     stopKeepAlive()
+    // max-duration watchdog 정리 — leftover timer 가 destroy 후 발동 방지.
+    if (maxDurationTimerRef.current !== null) {
+      window.clearTimeout(maxDurationTimerRef.current)
+      maxDurationTimerRef.current = null
+    }
+    // worklet 누적 / preroll 버퍼 비움 — 다음 캡처 세션에 leftover 영향 없음.
+    prerollRef.current = []
+    chunkAccumRef.current = []
     // pause가 아닌 destroy로 완전 정리 — 발화 중에도 즉시 마이크 OFF 보장
     vadRef.current?.destroy()
     vadRef.current = null

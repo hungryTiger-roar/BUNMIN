@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLectureStore } from '@/stores/lectureStore'
 import { usePreferencesStore } from '@/stores/preferencesStore'
 import { API_BASE } from '@/lib/api'
-import type { UnitPlayer } from './useUnitPlayer'
+import type { UnitPlayer } from './useDelayBufferPlayer'
 
 interface WebSocketMessage {
   type: string
@@ -32,12 +32,6 @@ export type DrawMessage =
 interface UseWebSocketOptions {
   /** 커서 메시지 수신 시 콜백 (React 상태 대신 DOM 직접 업데이트용) */
   onCursor?: (cursor: CursorMessage) => void
-  /** 번역 텍스트 수신 시 콜백 (TTS 합성 등). subtitleId 로 TTS 시작 시점에
-   *  store 에 ttsMs 를 patch 할 수 있게 한다.
-   *  lecturerTimestamp: 강사 sentence END 시점 (sentAt) — offset 측정용.
-   *  speechStartAt: 강사 sentence START 시점 — audio.start 가 시각 events 와
-   *    동일 시간선에 정렬되도록 useTTS 가 sync 기준으로 사용. */
-  onTranslation?: (text: string, subtitleId: string, lecturerTimestamp?: number, speechStartAt?: number) => void
   /** 강의자 필기 이벤트 수신 (수강자 전용) — DOM 직접 업데이트용, 리렌더 없음 */
   onDraw?: (draw: DrawMessage) => void
   /** WebRTC offer 수신 (수강자 전용) */
@@ -70,7 +64,7 @@ interface UseWebSocketOptions {
 }
 
 export function useWebSocket(url: string, role: Role = 'student', options: UseWebSocketOptions = {}) {
-  const { onCursor, onTranslation, onDraw, onWebRtcOffer, onWebRtcAnswer, onWebRtcIce, unitPlayer, onTranscription, onLifecycle, onAsrBlocked, onAsrOverloaded } = options
+  const { onCursor, onDraw, onWebRtcOffer, onWebRtcAnswer, onWebRtcIce, unitPlayer, onTranscription, onLifecycle, onAsrBlocked, onAsrOverloaded } = options
   const socketRef = useRef<WebSocket | null>(null)
   const [isConnected, setIsConnected] = useState(false)
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>()
@@ -83,8 +77,7 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
   // pause ↔ resume 시간 동등 반영용.
   //   pauseLectureTsRef: 강사 시계 기준 pause ts (resume 도착 시 duration 계산).
   //   pauseAppliedAtRef: 학생측에서 setPaused(true) 가 실제로 적용된 시각 — resume sleep
-  //     의 elapsed 계산 기준. unit-stretch 모드에선 큐가 다 빠진 후, delay-buffer 모드
-  //     에선 scheduled timer 가 fire 한 시점.
+  //     의 elapsed 계산 기준. delay-buffer 모드에서 scheduled timer 가 fire 한 시점.
   const pauseLectureTsRef = useRef<number | null>(null)
   const pauseAppliedAtRef = useRef<number | null>(null)
 
@@ -106,7 +99,6 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
   const setLectureTitle = useLectureStore((s) => s.setLectureTitle)
   const setSlideFilename = useLectureStore((s) => s.setSlideFilename)
   const setSessionId = useLectureStore((s) => s.setSessionId)
-  const setAsrStreaming = useLectureStore((s) => s.setAsrStreaming)
   const studentName = useLectureStore((s) => s.studentName)
 
   const lecturerName = usePreferencesStore((s) => s.lecturerName)
@@ -116,12 +108,9 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     registerNameRef.current = role === 'lecturer' ? lecturerName : studentName
   }, [role, lecturerName, studentName])
 
-  // onCursor / onTranslation callback refs (stale closure 방지)
+  // onCursor / onDraw callback refs (stale closure 방지)
   const onCursorRef = useRef(onCursor)
   useEffect(() => { onCursorRef.current = onCursor }, [onCursor])
-
-  const onTranslationRef = useRef(onTranslation)
-  useEffect(() => { onTranslationRef.current = onTranslation }, [onTranslation])
 
   const onDrawRef = useRef(onDraw)
   useEffect(() => { onDrawRef.current = onDraw }, [onDraw])
@@ -166,8 +155,8 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
 
   const handleMessage = useCallback((data: WebSocketMessage) => {
     // [Diag] 학생측 receive 로그 — sync 진단용. cursor / draw_point 는 매 10번째.
-    // window.__SYNC_DEBUG = true 로 활성화. 강사 보낸 시각 (lecturerTimestamp) 과
-    // 학생 도착 시각 (Date.now()) 차이로 네트워크+서버 지연 측정.
+    // 기본 활성 (main.tsx 에서 window.__SYNC_DEBUG=true). 끄려면 콘솔에서 false.
+    // 강사 보낸 시각 (lecturerTimestamp) 과 학생 도착 시각 차이로 네트워크+서버 지연 측정.
     if (role === 'student' && (window as unknown as { __SYNC_DEBUG?: boolean }).__SYNC_DEBUG) {
       const t = data.type
       const lecTs = data.lecturerTimestamp as number | undefined
@@ -208,7 +197,7 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
 
         if (role === 'lecturer') {
           // 강사는 unit player 가 없으므로 즉시 자막 표시.
-          const subtitleId = addSubtitle({
+          addSubtitle({
             original,
             translated,
             timestamp: outputTime,
@@ -216,9 +205,6 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
             asrMs,
             nmtMs,
           })
-          if (data.translated) {
-            onTranslationRef.current?.(translated, subtitleId, inputTime, speechStartAt)
-          }
         } else if (data.translated && onTranscriptionRef.current) {
           // 학생측 — 자막 표시는 TTS 시작 시점까지 지연 (commitSubtitle 콜백).
           // 이전엔 transcription 도착 즉시 addSubtitle 했으나 큐 대기 + TTS 합성으로
@@ -374,9 +360,8 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
           const lecturerPauseDuration = pauseTs !== null ? Math.max(0, resumeTs - pauseTs) : 0
           const apply = async () => {
             // 학생측에서 이미 elapsed 만큼 paused 였으면 그만큼 빼고 sleep.
-            //   unit-stretch: 큐 자연 마무리 후 pause 적용 → elapsed ≈ ε → 거의 전체 시간 sleep.
-            //   delay-buffer: scheduled timer 로 pause/resume 둘 다 +delayMs 후 fire →
-            //                 elapsed ≈ lecturerPauseDuration → remaining ≈ 0 (자연스레 일치).
+            // delay-buffer: scheduled timer 로 pause/resume 둘 다 +delayMs 후 fire →
+            //               elapsed ≈ lecturerPauseDuration → remaining ≈ 0 (자연스레 일치).
             const pauseAppliedAt = pauseAppliedAtRef.current
             if (pauseAppliedAt !== null && lecturerPauseDuration > 0) {
               const elapsed = Date.now() - pauseAppliedAt
@@ -494,11 +479,8 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
         break
 
       case 'registered':
-        // 역할 등록 확인. backend 의 ASR_STREAMING flag 도 함께 수신.
-        console.log('[WebSocket] 역할 등록 완료:', data.role, 'asr_streaming:', data.asr_streaming)
-        if (typeof data.asr_streaming === 'boolean') {
-          setAsrStreaming(data.asr_streaming)
-        }
+        // 역할 등록 확인.
+        console.log('[WebSocket] 역할 등록 완료:', data.role)
         break
 
       case 'cursor':
@@ -568,23 +550,6 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
         }
         break
 
-      case 'speech_start':
-        // 강사 발화 시작 신호 — 학생측 unit player 의 silent watchdog 정지.
-        // 발화 중에 그림/커서가 들어와도 sentence 도착까지 pending 에 안전히 보관.
-        if (role === 'student') {
-          unitPlayerRef.current?.markSpeechActive()
-        }
-        break
-
-      case 'speech_end':
-        // 강사 발화 종료 신호 — ASR transcription 도착 대기 모드.
-        // transcription 이 도착할 때까지 watchdog 가 더 길게 (POST_SPEECH_ASR_TIMEOUT_MS)
-        // 기다려서 그 sentence 와 visual 이 함께 묶이도록.
-        if (role === 'student') {
-          unitPlayerRef.current?.markSpeechEnded()
-        }
-        break
-
       case 'asr_blocked':
         // 환각 가드 차단 — 강사 측에 알림. 정상 발화가 잘못 차단됐을 수 있어
         // 사용자가 인지하고 다시 말할 수 있게.
@@ -608,7 +573,7 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
       default:
         console.log('[WebSocket] 알 수 없는 메시지:', data.type)
     }
-  }, [role, addSubtitle, setSlideId, setSlideStatus, setCurrentPage, setLectureStarted, setPaused, setPresentationMode, setCurrentScreen, setStudentCount, addChatMessage, setParticipants, setLectureTitle, setSessionId, setAsrStreaming, loadSlidePages])
+  }, [role, addSubtitle, setSlideId, setSlideStatus, setCurrentPage, setLectureStarted, setPaused, setPresentationMode, setCurrentScreen, setStudentCount, addChatMessage, setParticipants, setLectureTitle, setSessionId, loadSlidePages])
 
   // handleMessage를 ref로 분리 → connect의 deps에서 제거해 어떤 selector 흔들림에도 socket이 재생성되지 않게 한다.
   const handleMessageRef = useRef(handleMessage)
@@ -623,7 +588,7 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
         ? { ...data, lecturerTimestamp: Date.now() }
         : data
       // [Diag] 강사측 send 로그 — sync 진단용. cursor / draw_point 는 고빈도라 매 10번째.
-      // window.__SYNC_DEBUG = true 로 활성화. 비활성 기본 (성능).
+      // 기본 활성 (main.tsx 에서 window.__SYNC_DEBUG=true). 끄려면 콘솔에서 false.
       if (role === 'lecturer' && (window as unknown as { __SYNC_DEBUG?: boolean }).__SYNC_DEBUG) {
         const t = (data as { type?: string }).type
         if (t === 'cursor' || t === 'draw_point') {

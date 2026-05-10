@@ -123,8 +123,19 @@ class ASRService:
             )
 
     def transcribe(self, audio_bytes: bytes, language: str = "ko") -> str:
+        """기존 호환 — 텍스트만 반환. 내부적으로 transcribe_with_words 호출."""
+        text, _ = self.transcribe_with_words(audio_bytes, language)
+        return text
+
+    def transcribe_with_words(
+        self, audio_bytes: bytes, language: str = "ko"
+    ) -> tuple[str, list[dict]]:
+        """텍스트 + 단어별 시간 정보 함께 반환.
+        words = [{'text': str, 'start': float, 'end': float}, ...]  (start/end: chunk 시작 기준 초)
+        chunk 안 multi-sentence 의 정확한 sub-sentence 시간 분배에 사용.
+        word_timestamps=True 로 ASR 5~10% 느려짐 (Whisper 가 단어별 alignment 수행)."""
         if self.model is None:
-            return ""
+            return ("", [])
         try:
             audio_array = self._bytes_to_array(audio_bytes)
             segments, _ = self.model.transcribe(
@@ -133,8 +144,10 @@ class ASRService:
                 beam_size=5,                       # 측정 결과 beam=1 대비 WER 1.9%p 우위, 속도 차이는 노이즈 안
                 condition_on_previous_text=False,  # 이전 발화 컨텍스트 무시 → hallucination 차단
                 vad_filter=True,                   # 무음 구간 자동 필터
+                word_timestamps=True,              # 단어별 시간 정보 — sub-sentence sync 용
             )
             texts = []
+            all_words: list[dict] = []
             for seg in segments:
                 # 환각 차단 4중 필터 (메타정보 3 + 텍스트 패턴 1):
                 # ① compression_ratio: 반복 환각 ("교통과 교통과 교통과...") 잡음. Whisper 권장 컷오프 2.4
@@ -172,6 +185,23 @@ class ASRService:
                 if not trimmed:
                     continue
                 texts.append(trimmed)
+
+                # 단어별 시간 정보 수집 — trim 으로 잘려나간 꼬리 단어는 제외.
+                # trimmed 의 공백 제외 길이만큼 단어를 누적해 그 안에 들어가는 단어만 keep.
+                seg_words = getattr(seg, "words", None) or []
+                if seg_words:
+                    target_chars = len(trimmed.replace(" ", ""))
+                    accumulated = 0
+                    for w in seg_words:
+                        word_text = (w.word or "").replace(" ", "")
+                        if accumulated >= target_chars:
+                            break
+                        all_words.append({
+                            "text": w.word,
+                            "start": float(w.start),
+                            "end": float(w.end),
+                        })
+                        accumulated += len(word_text)
             final_text = "".join(texts).strip()
 
             # ⑦ 짧은 인사 중복 차단 — 진짜 강의 끝 "감사합니다" 1번은 통과,
@@ -183,15 +213,15 @@ class ASRService:
                     and now - self._last_polite_at < _POLITE_DEDUP_WINDOW_SEC
                 ):
                     print(f"[ASR] 짧은 인사 중복 차단 ({_POLITE_DEDUP_WINDOW_SEC:.0f}s 윈도우): {final_text!r}")
-                    return ""
+                    return ("", [])
                 self._last_polite_text = final_text
                 self._last_polite_at = now
-            return final_text
+            return (final_text, all_words)
         except Exception as e:
             import traceback
             print(f"[ASR] 오류: {e}")
             print(traceback.format_exc())
-            return ""
+            return ("", [])
 
     def _bytes_to_array(self, audio_bytes: bytes) -> np.ndarray:
         try:

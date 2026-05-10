@@ -10,7 +10,6 @@ import {
 } from '@/stores/preferencesStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { useTTS } from '@/hooks/useTTS'
-import { useUnitPlayer } from '@/hooks/useUnitPlayer'
 import { useDelayBufferPlayer } from '@/hooks/useDelayBufferPlayer'
 import ParticipantsPanel from '@/components/common/ParticipantsPanel'
 import MaterialViewToggle from '@/components/common/MaterialViewToggle'
@@ -130,16 +129,15 @@ function Student() {
     toggleTheme,
   } = usePreferencesStore()
 
-  // TTS — Student 전용, audioLang 변경 시 엔진 재생성
+  // TTS — Student 전용, audioLang 변경 시 엔진 재생성.
+  // ttsMs 는 player 가 playSentence return 에서 받아 commitSubtitle 에 전달 → 자막
+  // 표시 시점에 함께 store 에 기록 (별도 patch 경로 없음).
   const {
     playSentence,
     unlockAudio: unlockTTS,
     status: ttsStatus,
     setVolume: setTTSVolume,
   } = useTTS(true, audioLang)
-  // ttsMs 는 player 가 playSentence return 값에서 직접 받아 commitSubtitle 에 전달
-  // (setOnTtsStart 콜백 경로 우회). 자막은 TTS 시작 시점에 처음 store 에 추가되므로
-  // 그 add 호출에 ttsMs 를 같이 넣음 → 별도 patch 불필요.
 
   const audioLangRef = useRef(audioLang)
   useEffect(() => { audioLangRef.current = audioLang }, [audioLang])
@@ -156,35 +154,24 @@ function Student() {
     console.log('[Audio] 재생 잠금 해제됨 (WASM TTS)')
   }, [unlockTTS])
 
-  // 학생측 player — sync mode 에 따라 둘 중 하나 선택.
-  //   delay-buffer (default): wall-clock + 15초 delay 로 강사 박자 그대로 재현.
-  //                            visual 자연스러움 ↑, lag 일정 (15초).
-  //   unit-stretch:           legacy option-f. visual 을 audio 길이에 stretch.
-  //                            긴 ASR / 환각 차단 케이스에서 stretch 비정상.
-  // env: VITE_SYNC_MODE=delay-buffer | unit-stretch
-  //      VITE_SYNC_DELAY_MS=15000  (delay-buffer 전용)
+  // 학생측 player — wall-clock + 고정 lag (delay-buffer) 로 강사 박자 그대로 재현.
+  // VITE_SYNC_DELAY_MS env 로 lag 조정 가능 (기본 15초).
   const playSentenceRef = useRef(playSentence)
   useEffect(() => { playSentenceRef.current = playSentence }, [playSentence])
 
-  const syncMode = (import.meta.env.VITE_SYNC_MODE as string) || 'delay-buffer'
   const delayMs = Number(import.meta.env.VITE_SYNC_DELAY_MS) || 15000
 
-  const playerOptions = {
-    playSentence: (text: string, lang: TranslationLang, subtitleId?: string) =>
-      playSentenceRef.current(text, lang, subtitleId),
+  const unitPlayer = useDelayBufferPlayer({
+    playSentence: (text: string, lang: TranslationLang) =>
+      playSentenceRef.current(text, lang),
     isAudioUnlocked: () => isAudioUnlockedRef.current,
     getAudioLang: () => audioLangRef.current,
-  }
-
-  // 두 hook 모두 항상 호출 (React Hooks rules) — 사용 안 하는 쪽은 idle 상태.
-  const unitStretchPlayer = useUnitPlayer(playerOptions)
-  const delayBufferPlayer = useDelayBufferPlayer({ ...playerOptions, delayMs })
-
-  const unitPlayer = syncMode === 'unit-stretch' ? unitStretchPlayer : delayBufferPlayer
+    delayMs,
+  })
 
   useEffect(() => {
-    console.log(`[SyncMode] ${syncMode}${syncMode === 'delay-buffer' ? ` (delay=${delayMs}ms)` : ''}`)
-  }, [syncMode, delayMs])
+    console.log(`[SyncMode] delay-buffer (delay=${delayMs}ms)`)
+  }, [delayMs])
 
   // ref 기반 커서 오버레이 (React 상태 없이 DOM 직접 조작)
   // slideRef를 전달해서 컨테이너 크기 기준으로 px 변환
@@ -343,6 +330,17 @@ function Student() {
     }
     prevSessionIdRef.current = sessionId
   }, [sessionId])
+
+  // 강의 종료 시 캔버스 잔류 제거 — DrawingCanvas pageActionsRef 가 page 번호로만
+  // keying 되어 다음 강의에서 옛 강의의 stroke 가 그대로 노출되는 것 차단.
+  // isLectureStarted true→false 전환 (lecture_end lifecycle apply 적용 후) 시점에 정리.
+  const prevIsLectureStartedRef = useRef<boolean>(false)
+  useEffect(() => {
+    if (prevIsLectureStartedRef.current && !isLectureStarted) {
+      drawingCanvasRef.current?.clearAllPages()
+    }
+    prevIsLectureStartedRef.current = isLectureStarted
+  }, [isLectureStarted])
 
   useEffect(() => {
     let cancelled = false

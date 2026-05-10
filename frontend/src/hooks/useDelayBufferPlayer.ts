@@ -1,5 +1,5 @@
 /**
- * useDelayBufferPlayer — Wall-clock delay buffer (Sync Mode B).
+ * useDelayBufferPlayer — Wall-clock delay buffer.
  *
  * 모델 — 모든 events 를 강사 시계 + DELAY 에 그대로 재현.
  *
@@ -25,27 +25,36 @@
  *
  *   late event:
  *     - target_wall < now 면 setTimeout(0) 으로 즉시 apply (사라지지 않음).
- *
- * Trade-off vs option-f (useUnitPlayer):
- *   + 시각이 강사 속도 그대로 — stretch 0.05x ~ 5746x 같은 비정상 케이스 없음
- *   + audio 안 와도 시각은 자기 속도로 흘러감 (anchor 의존 X)
- *   + 모든 모달리티가 같은 시간선에 — 자연스러움
- *   - 항상 DELAY (예: 15초) lag — 라이브 감 ↓
- *   - audio 길이 > 강사 발화 길이일 때 audio 가 visual 보다 뒤로 drift
- *
- * 권장 설정:
- *   VITE_SYNC_MODE=delay-buffer  (default)
- *   VITE_SYNC_DELAY_MS=15000     (95%ile ASR+NMT+TTS latency 커버)
  */
 import { useCallback, useEffect, useRef } from 'react'
 import type { TranslationLang } from '@/stores/preferencesStore'
-import type { UnitPlayer } from './useUnitPlayer'
+
+/** 학생측 player 인터페이스 — useWebSocket 가 incoming event 를 라우팅하는 표면. */
+export interface UnitPlayer {
+  /** visual event (그림/커서/페이지) 등록. */
+  enqueueVisual: (ts: number, apply: () => void, kind?: string) => void
+  /** transcription 도착 시 호출 — sentence audio + commitSubtitle 예약.
+   *  commitSubtitle 은 audio 시작 시점에 호출돼 자막↔TTS 동기화. */
+  enqueueSentence: (params: {
+    text: string
+    commitSubtitle: (ttsMs?: number) => void
+    speechStartAt: number
+    sentAt: number
+  }) => void
+  /** lecture_end / pause / resume 같은 lifecycle event. */
+  enqueueLifecycle: (apply: () => void | Promise<void>, label: string) => void
+  /** 강의 시작 / 종료 boundary 에서 큐 비움. */
+  reset: () => void
+  /** 진단용 — 현재 audio 큐 길이. */
+  getQueueLength: () => number
+  /** 진단용 — pending visual 수. */
+  getPendingVisualCount: () => number
+}
 
 interface Options {
   playSentence: (
     text: string,
     lang: TranslationLang,
-    subtitleId?: string,
   ) => Promise<{ audioStartedAt: number; durationMs: number; ended: Promise<void>; ttsMs: number }>
   isAudioUnlocked: () => boolean
   getAudioLang: () => TranslationLang
@@ -204,18 +213,10 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
   const getQueueLength = useCallback(() => audioQueueRef.current.length, [])
   const getPendingVisualCount = useCallback(() => 0, []) // setTimeout 기반이라 pending 개념 없음
 
-  // Branch B: speech_start / speech_end 신호는 unit-stretch 모드 (silent watchdog)
-  // 만 사용. delay-buffer 모드는 wall-clock + 고정 lag 라서 watchdog 자체가 없음.
-  // 인터페이스 호환을 위해 no-op 으로 제공.
-  const markSpeechActive = useCallback(() => {}, [])
-  const markSpeechEnded = useCallback(() => {}, [])
-
   return {
     enqueueVisual,
     enqueueSentence,
     enqueueLifecycle,
-    markSpeechActive,
-    markSpeechEnded,
     reset,
     getQueueLength,
     getPendingVisualCount,

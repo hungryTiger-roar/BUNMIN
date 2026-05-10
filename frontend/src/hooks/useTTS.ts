@@ -422,13 +422,6 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
     if (gainRef.current) gainRef.current.gain.value = v
   }, [])
 
-  // TTS 시작 시점 콜백 등록 — Student.tsx 가 subtitle store 의 ttsMs 패치에 사용.
-  // ref 로 보관해 useTTS deps 가 흔들려도 안정.
-  const onTtsStartRef = useRef<((subtitleId: string, ttsMs: number) => void) | null>(null)
-  const setOnTtsStart = useCallback((cb: ((subtitleId: string, ttsMs: number) => void) | null) => {
-    onTtsStartRef.current = cb
-  }, [])
-
   /** Unit player 가 호출하는 Promise 기반 재생 — sentence 1개를 합성 + 재생.
    *  resolve 시점: source.start 호출 직후 (audio 재생 시작).
    *  반환값:
@@ -441,7 +434,6 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
   const playSentence = useCallback(async (
     text: string,
     lang: TranslationLang = 'en',
-    subtitleId?: string,
   ): Promise<{ audioStartedAt: number; durationMs: number; ended: Promise<void>; ttsMs: number }> => {
     const voice = resolveVoice(lang)
     if (!voice) throw new Error('TTS 음성 끄기 상태')
@@ -478,11 +470,6 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
     source.start(startCtxTime)
 
     const ttsMs = Math.max(0, Math.round(performance.now() - requestedAt))
-    if (subtitleId && onTtsStartRef.current) {
-      try { onTtsStartRef.current(subtitleId, ttsMs) } catch (err) {
-        console.warn('[TTS] onTtsStart 콜백 오류:', err)
-      }
-    }
 
     const newTask: CurrentTask = { source, gain: sourceGain, endTime: startCtxTime + audioBuffer.duration }
     currentTaskRef.current = newTask
@@ -507,5 +494,5 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
     return { audioStartedAt, durationMs: audioBuffer.duration * 1000, ended, ttsMs }
   }, [])
 
-  return { status, loadingProgress, error, mode, playSentence, unlockAudio, setVolume, setOnTtsStart }
+  return { status, loadingProgress, error, mode, playSentence, unlockAudio, setVolume }
 }
