@@ -489,12 +489,6 @@ def _load_models_sync():
             dtype=ModelConfig.ASR_DTYPE,
         )
         ws.set_asr_service(asr_service)
-        # ASR_STREAMING=true 일 때만 streaming wrapper 도 함께 주입.
-        # WhisperModel + chunk path 의 GPU semaphore 둘 다 공유 — 추가 VRAM 부담 없고
-        # 두 path 가 동일 GPU 로 동시 transcribe 들어가지 않게 직렬화.
-        if ws.ASR_STREAMING_ENABLED:
-            ws.init_streaming_asr_service(asr_service.model)
-            print("[ASR] streaming layer 활성 (ASR_STREAMING=true)", flush=True)
         _model_status["models"]["asr"]["status"] = "done"
         _model_status["models"]["asr"]["progress"] = 100
         _set_status("ASR 완료 ✓ (1/3)", progress=40)
@@ -580,14 +574,100 @@ async def _load_models():
         _emit_status()
 
 
+# ─── 부모 프로세스 (Electron .exe) 종료 감지 + 학생 다운로드 5분 grace ──────
+# 강사가 .exe 를 닫으면 백엔드는 5분 더 살면서 학생들이 자막 다운로드 받을 시간을 줌.
+# .exe 가 다시 켜지면 startBackend() 의 taskkill 이 이 grace 도중 강제 kill 함 (의도된 동작).
+_PARENT_GRACE_SECONDS = 5 * 60
+
+
+def _is_parent_alive_windows(pid: int) -> bool:
+    """Windows: PID 의 프로세스가 살아 있는지 OpenProcess + WaitForSingleObject 로 확인.
+    psutil 의존성 없이 표준 라이브러리(ctypes) 만으로 구현."""
+    import ctypes
+    SYNCHRONIZE = 0x00100000
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+    if not handle:
+        return False
+    try:
+        # WaitForSingleObject(handle, 0): 0ms 타임아웃으로 즉시 체크.
+        # WAIT_OBJECT_0 (0)  = signaled (프로세스 종료됨)
+        # WAIT_TIMEOUT (258) = still running
+        result = kernel32.WaitForSingleObject(handle, 0)
+        return result != 0
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+async def _graceful_shutdown_for_parent_exit():
+    """학생 자막 다운로드 5분 grace 후 백엔드 자살.
+    부모 (.exe) 가 죽었음을 watchdog 가 감지했을 때만 호출."""
+    # 1. 진행 중 강의가 있으면 lecture_end + transcripts 정리.
+    #    disconnect_lecturer 의 30초 grace 와 race 가능 — 둘 다 같은 정리를 하지만
+    #    is_lecture_started 가드로 중복 broadcast 차단.
+    try:
+        manager = ws.manager
+        # disconnect_lecturer 의 30초 grace task 가 진행 중이면 cancel
+        # (우리가 즉시 lecture_end 해주므로 그 task 가 또 broadcast 할 필요 없음).
+        if manager._lecturer_grace_task and not manager._lecturer_grace_task.done():
+            manager._lecturer_grace_task.cancel()
+        if manager.is_lecture_started and manager.current_session_id:
+            ended_id = transcripts.end_session(manager.current_session_id)
+            try:
+                await manager.broadcast_to_students({
+                    "type": "lecture_end",
+                    "session_id": ended_id,
+                })
+                print(f"[Watchdog] lecture_end broadcast (session={ended_id})", flush=True)
+            except Exception as e:
+                print(f"[Watchdog] lecture_end broadcast 실패: {e}", flush=True)
+            manager.is_lecture_started = False
+            manager.is_paused = False
+            manager.current_session_id = None
+    except Exception as e:
+        print(f"[Watchdog] 강의 정리 중 오류: {e}", flush=True)
+
+    # 2. 5분 grace — HTTP 다운로드 엔드포인트 그대로 살아 있음.
+    print(f"[Watchdog] {_PARENT_GRACE_SECONDS}초 grace 시작 — 학생 자막 다운로드 대기", flush=True)
+    await asyncio.sleep(_PARENT_GRACE_SECONDS)
+
+    # 3. 자살 — orphan 백엔드 영구 잔류 차단.
+    print("[Watchdog] grace 종료 → 백엔드 종료", flush=True)
+    os._exit(0)
+
+
+async def _watch_parent_pid(parent_pid: int):
+    """부모 프로세스 PID 를 2초마다 체크. 죽으면 graceful shutdown 트리거."""
+    print(f"[Watchdog] 부모 프로세스 감시 시작 (PID={parent_pid})", flush=True)
+    while True:
+        await asyncio.sleep(2)
+        if not _is_parent_alive_windows(parent_pid):
+            print(f"[Watchdog] 부모 프로세스 (PID={parent_pid}) 종료 감지", flush=True)
+            await _graceful_shutdown_for_parent_exit()
+            return
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _start_health_thread()
     ensure_firewall_rule(SERVER_PORT)
     print(f"[Network] LAN 접속 주소: http://{get_lan_ip()}:{SERVER_PORT}", flush=True)
     task = asyncio.create_task(_load_models())
+
+    # Electron 이 spawn 시 AUNION_PARENT_PID 를 env 로 넘김. 미설정이면 standalone 실행으로 간주.
+    parent_watch_task = None
+    parent_pid_str = os.environ.get("AUNION_PARENT_PID")
+    if parent_pid_str:
+        try:
+            parent_pid = int(parent_pid_str)
+            parent_watch_task = asyncio.create_task(_watch_parent_pid(parent_pid))
+        except ValueError:
+            print(f"[Watchdog] AUNION_PARENT_PID 파싱 실패: {parent_pid_str!r}", flush=True)
+
     yield
     task.cancel()
+    if parent_watch_task:
+        parent_watch_task.cancel()
     print("서버 종료 중...")
 
 
