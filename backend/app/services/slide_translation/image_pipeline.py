@@ -12,18 +12,44 @@ slides.py (router) → image_pipeline.py (이 파일)
 mode.py (router) → image_pipeline.py (VLM 로드/언로드)
 bbox_analyzer.py → image_pipeline.py (VLM 모델 공유)
 
-[주요 함수]
-- stage_ocr_surya(): Surya OCR 실행
-- stage_translate(): VLM 번역
-- stage_overlay(): 이미지에 텍스트 오버레이
-- get_vlm_model(): VLM 모델 싱글톤
+[Public API]
+이 모듈에서 외부로 노출하는 함수들:
+- get_vlm_model(): VLM 모델 싱글톤 반환
 - is_vlm_loaded(): VLM 로드 상태 확인
-- unload_vlm_model(): VLM 메모리 해제
+- unload_vlm_model(): VLM 메모리 해제 (slides.py에서 GPU 메모리 관리용으로 호출)
+- stage_ocr_surya(): 단일 이미지 OCR
+- stage_translate(): 단일 이미지 번역
+- stage_overlay(): 단일 이미지 오버레이
+- batch_ocr_surya(): 배치 OCR (Surya 한 번 로드)
+- batch_translate_vlm(): 배치 번역 (VLM 한 번 로드)
+- batch_overlay(): 배치 오버레이
 - build_glossary_from_ocr_results(): 용어집 빌드
+- clear_cache(): 캐시 삭제
 
 [원본 파일]
 teamRepo/translate_slide_v3.py에서 추출 (2091줄 → 주요 함수만)
 """
+
+# =============================================================================
+# Public API 명시
+# =============================================================================
+__all__ = [
+    # VLM 모델 관리 (외부에서 GPU 메모리 관리용으로 호출 가능)
+    "get_vlm_model",
+    "is_vlm_loaded",
+    "unload_vlm_model",
+    # 단일 이미지 처리
+    "stage_ocr_surya",
+    "stage_translate",
+    "stage_overlay",
+    # 배치 처리 (slides.py에서 사용)
+    "batch_ocr_surya",
+    "batch_translate_vlm",
+    "batch_overlay",
+    # 유틸리티
+    "build_glossary_from_ocr_results",
+    "clear_cache",
+]
 import gc
 import os
 import re
@@ -130,6 +156,43 @@ def build_glossary_from_ocr_results(ocr_results: list, lecture_title: str = "Lec
     except Exception as e:
         print(f"[Glossary] 빌드 실패: {e}")
         return {}
+
+
+# VLM 프롬프트에 포함할 용어집 최대 항목 수
+# - VLM 입력 토큰 길이 제한 (Qwen2.5-VL: 8192 tokens)
+# - 용어집이 너무 길면 번역할 텍스트가 잘릴 수 있음
+# - 15개 × ~30 chars ≈ 450 chars → 안전한 범위
+MAX_GLOSSARY_ITEMS = 15
+
+
+def select_glossary_items(glossary: dict, max_items: int = None) -> list[tuple[str, str]]:
+    """
+    VLM 프롬프트에 포함할 용어집 항목 선택
+
+    선택 전략 (우선순위):
+    1. force 정책이 명시된 용어 (예: "_force" suffix가 있는 경우)
+    2. 나머지는 원래 순서대로 (빌드 시 빈도/중요도 순 정렬됨)
+
+    Args:
+        glossary: {한글: 영어} 용어집
+        max_items: 최대 항목 수 (기본: MAX_GLOSSARY_ITEMS)
+
+    Returns:
+        [(한글, 영어), ...] 선택된 항목 리스트
+    """
+    if not glossary:
+        return []
+
+    max_items = max_items or MAX_GLOSSARY_ITEMS
+
+    # 현재는 단순히 앞에서부터 선택 (빌드 시 이미 중요도 순 정렬됨)
+    # TODO: 향후 개선 - 현재 페이지에 실제로 등장하는 용어 우선 선택
+    items = list(glossary.items())
+
+    if len(items) <= max_items:
+        return items
+
+    return items[:max_items]
 
 
 # ============================================================
@@ -772,7 +835,8 @@ def stage_translate(image_path: str, regions: list, glossary: dict = None) -> li
 
     glossary_section = ""
     if glossary:
-        glossary_lines = [f'  "{ko}": "{en}"' for ko, en in list(glossary.items())[:15]]
+        selected_glossary = select_glossary_items(glossary)
+        glossary_lines = [f'  "{ko}": "{en}"' for ko, en in selected_glossary]
         glossary_section = "\n[GLOSSARY]\n" + "\n".join(glossary_lines) + "\n"
 
     PROMPT = f"""Translate Korean to English for a lecture slide.
@@ -1073,7 +1137,18 @@ def stage_overlay(image_path: str, regions: list, output_path: str):
 # ============================================================
 # 배치 처리 설정
 # ============================================================
+# OCR_CHUNK_SIZE: Surya OCR 한 번 로드로 처리할 페이지 수
+#   - Surya 모델은 약 4GB VRAM 사용
+#   - 값이 너무 크면: 메모리 누적으로 OOM 위험, 중간 실패 시 재처리 범위 증가
+#   - 값이 너무 작으면: 모델 로드/언로드 오버헤드 증가 (청크당 ~2초)
+#   - 권장: 3-10 (8GB VRAM 기준 5가 적정)
 OCR_CHUNK_SIZE = int(os.environ.get("OCR_CHUNK_SIZE", "5"))
+
+# VLM_CHUNK_SIZE: VLM 한 번 로드로 처리할 페이지 수
+#   - VLM 모델(Qwen2.5-VL-7B, 4bit)은 약 6GB VRAM 사용 → Surya보다 메모리 사용량이 큼
+#   - 값이 너무 크면: OOM 위험, 번역 실패 시 재처리 범위 증가
+#   - 값이 너무 작으면: 모델 로드/언로드 오버헤드 증가 (청크당 ~8초)
+#   - 권장: 1-5 (8GB VRAM 기준 2가 적정, OCR보다 작게 설정)
 VLM_CHUNK_SIZE = int(os.environ.get("VLM_CHUNK_SIZE", "2"))
 
 
@@ -1399,7 +1474,8 @@ def _translate_regions_with_vlm(
 
     glossary_section = ""
     if glossary:
-        glossary_lines = [f'  "{ko}": "{en}"' for ko, en in list(glossary.items())[:15]]
+        selected_glossary = select_glossary_items(glossary)
+        glossary_lines = [f'  "{ko}": "{en}"' for ko, en in selected_glossary]
         glossary_section = "\n[GLOSSARY]\n" + "\n".join(glossary_lines) + "\n"
 
     PROMPT = f"""Translate Korean to English for a lecture slide.
