@@ -193,7 +193,7 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
   const showAILoading = slideStatus === 'processing' && etaReachedZero
 
   return (
-    <div className="text-onSurface">
+    <div className="text-onSurface min-h-[140px]">
       <input
         ref={inputRef}
         type="file"
