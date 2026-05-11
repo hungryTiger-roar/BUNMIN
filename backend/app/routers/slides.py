@@ -1202,6 +1202,12 @@ async def process_slide(slide_id: str, pdf_path: Path):
         except Exception as e:
             print(f"[Slides] {slide_id} PDF 생성 실패: {e}")
 
+        # 취소된 경우 메타데이터 저장하지 않음 (해시 매핑 재생성 방지)
+        if _is_cancelled(slide_id):
+            print(f"[Slides] {slide_id} 처리 완료 전 취소됨 - 메타데이터 저장 스킵")
+            await _cleanup_cancelled(slide_id)
+            return
+
         slide_status[slide_id]["status"] = "completed"
         slide_status[slide_id]["stage"] = "completed"
         # 라이브러리 영속화 — 서버 재시작 후에도 자료 유지
@@ -1602,6 +1608,12 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
                         img.close()
             except Exception as e:
                 print(f"  Hybrid PDF 생성 실패: {e}")
+
+        # 취소된 경우 메타데이터 저장하지 않음 (해시 매핑 재생성 방지)
+        if _is_cancelled(slide_id):
+            print(f"[Slides] {slide_id} 처리 완료 전 취소됨 - 메타데이터 저장 스킵")
+            await _cleanup_cancelled(slide_id)
+            return
 
         # 완료
         slide_status[slide_id]["status"] = "completed"
