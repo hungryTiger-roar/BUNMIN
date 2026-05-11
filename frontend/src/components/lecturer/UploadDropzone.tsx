@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLectureStore } from '@/stores/lectureStore'
-import { API_BASE, switchToRealtimeMode } from '@/lib/api'
+import { API_BASE } from '@/lib/api'
 
 type Stage = 'pending' | 'ocr' | 'translate' | 'bundling' | 'completed' | 'failed'
 
@@ -41,8 +41,6 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
   const slideStatus = useLectureStore((s) => s.slideStatus)
   const setSlideId = useLectureStore((s) => s.setSlideId)
   const setSlideStatus = useLectureStore((s) => s.setSlideStatus)
-  const modelMode = useLectureStore((s) => s.modelMode)
-  const setModelMode = useLectureStore((s) => s.setModelMode)
 
   useEffect(() => {
     if (displayEta !== null && displayEta <= 1 && slideStatus === 'processing') {
@@ -150,20 +148,11 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
           setStage('completed')
           setEtaAnchor(null)
           setDisplayEta(0)
-          setSlideStatus('ready')
+          setSlideId(null)
+          setSlideStatus('none')
           slideIdRef.current = null
           clientTokenRef.current = null
-          // 라이브러리 새로고침 (새로 추가된 항목 노출)
           onUploadComplete?.()
-          // 즉시 실시간 모드로 전환
-          setModelMode('switching')
-          try {
-            await switchToRealtimeMode()
-            setModelMode('realtime')
-          } catch (err) {
-            console.error('[UploadDropzone] 모드 전환 실패:', err)
-            setModelMode('idle')
-          }
           return
         }
 
@@ -243,12 +232,10 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
     if (file) handleFileSelect(file)
   }
 
-  const showAILoading =
-    (slideStatus === 'processing' && etaReachedZero) ||
-    (slideStatus === 'ready' && modelMode === 'switching')
+  const showAILoading = slideStatus === 'processing' && etaReachedZero
 
   return (
-    <div className="text-onSurface">
+    <div className="text-onSurface min-h-[140px]">
       <input
         ref={inputRef}
         type="file"
