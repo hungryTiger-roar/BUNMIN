@@ -155,7 +155,7 @@ export default function SlideLibrary({ refreshKey = 0 }: Props) {
       </div>
 
       {/* 목록 / 빈 상태 / 로딩 / 에러 */}
-      {loading ? (
+      {loading && items.length === 0 ? (
         <p className="text-sm text-onSurface/60 text-center py-8">로딩 중...</p>
       ) : error ? (
         <p className="text-sm text-error text-center py-8">{error}</p>

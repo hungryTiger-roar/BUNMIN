@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -53,6 +53,49 @@ slide_status: dict[str, dict] = {}
 slide_data: dict[str, list[dict]] = {}
 # 슬라이드별 한↔영 도메인 용어집 (실시간 NMT 환각 억제 — ws.py 가 lecture_start 시 가져감)
 slide_glossary: dict[str, dict[str, str]] = {}
+
+# slide_id 발급 전 취소된 client_token 보류 — {token: expires_at_monotonic}.
+# 업로드 응답이 도착해 add_task 직전에 검사하면 즉시 폐기. 응답이 안 오는 케이스를 위해 TTL 청소.
+_PENDING_CANCEL_TOKEN_TTL = 300.0  # 5분
+pending_cancel_tokens: dict[str, float] = {}
+
+
+def _gc_pending_cancel_tokens() -> None:
+    """만료된 보류 토큰 제거 — 호출 시점마다 한 번씩 청소."""
+    now = time.monotonic()
+    expired = [t for t, exp in pending_cancel_tokens.items() if exp <= now]
+    for t in expired:
+        pending_cancel_tokens.pop(t, None)
+
+
+def _consume_pending_cancel_token(token: Optional[str]) -> bool:
+    """토큰이 보류 셋에 있으면 제거하고 True. 부수효과로 만료 청소도 수행."""
+    _gc_pending_cancel_tokens()
+    if not token:
+        return False
+    return pending_cancel_tokens.pop(token, None) is not None
+
+
+def _is_cancelled(slide_id: str) -> bool:
+    return slide_status.get(slide_id, {}).get("cancelled", False)
+
+
+async def _cleanup_cancelled(slide_id: str) -> None:
+    """취소된 슬라이드 정리 — VLM 언로드 + 파일/메모리/dedup 맵 일체 제거.
+    save_metadata() 는 호출 안 되므로 meta.json 은 자연히 생성되지 않음."""
+    try:
+        from app.services.slide_translation.image_pipeline import unload_vlm_model
+        await asyncio.to_thread(unload_vlm_model)
+    except Exception as e:
+        print(f"[Slides] {slide_id} 취소 정리 중 VLM 언로드 실패 (무시): {e}")
+    ch = slide_status.get(slide_id, {}).get("content_hash")
+    token = slide_status.get(slide_id, {}).get("client_token")
+    _delete_slide_files(slide_id)
+    if ch:
+        _hash_to_slide_id.pop(ch, None)
+    if token:
+        pending_cancel_tokens.pop(token, None)
+    print(f"[Slides] {slide_id} 취소 정리 완료")
 
 
 def get_slide_glossary(slide_id: str) -> dict[str, str]:
@@ -425,10 +468,12 @@ def get_page_overlay(slide_id: str, page_number: int) -> list[dict]:
 async def upload_slide(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    client_token: Optional[str] = Form(None),
 ):
     """
     PDF 슬라이드 업로드
     백그라운드에서 OCR + 번역 전처리 수행
+    client_token: 응답 전 abort 케이스에서 프론트가 보낸 보류 토큰. 매칭되면 즉시 폐기.
     """
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "PDF 파일만 업로드 가능합니다")
@@ -439,11 +484,14 @@ async def upload_slide(
     content_hash = hashlib.sha256(content).hexdigest()
     existing_id = _hash_to_slide_id.get(content_hash)
     if existing_id and (UPLOAD_DIR / f"{existing_id}.pdf").exists():
+        # 재사용 경로에서도 토큰이 있으면 그냥 소비 — 어차피 추가 처리는 없으니 정리만
+        _consume_pending_cancel_token(client_token)
         print(f"[Slides] 동일 파일 재업로드 감지 → 기존 slide_id 재사용: {existing_id} (filename={file.filename})")
         return {
             "slide_id": existing_id,
             "message": "동일 파일이 이미 처리되어 있어 재사용합니다",
             "reused": True,
+            "cancelled": False,
         }
 
     # 고유 ID 생성
@@ -470,12 +518,25 @@ async def upload_slide(
         "filename": file.filename or f"{slide_id}.pdf",
         "uploaded_at": datetime.now().isoformat(timespec="seconds"),
         "content_hash": content_hash,
+        "cancelled": False,
+        "client_token": client_token,
     }
+
+    # 응답 전 취소된 케이스 — 보류 토큰 매칭 시 add_task 생략 + 즉시 정리
+    if _consume_pending_cancel_token(client_token):
+        print(f"[Slides] {slide_id} 업로드 응답 전 취소 토큰 매칭 → 처리 스킵")
+        _delete_slide_files(slide_id)
+        return {
+            "slide_id": slide_id,
+            "message": "업로드 직후 취소 신호가 있어 처리하지 않았습니다",
+            "reused": False,
+            "cancelled": True,
+        }
 
     # 백그라운드 처리 시작
     background_tasks.add_task(process_slide, slide_id, save_path)
 
-    return {"slide_id": slide_id, "message": "업로드 완료, 처리 시작", "reused": False}
+    return {"slide_id": slide_id, "message": "업로드 완료, 처리 시작", "reused": False, "cancelled": False}
 
 
 @router.get("/list")
@@ -762,11 +823,40 @@ def _delete_slide_files(slide_id: str) -> list[str]:
         translated_pdf.unlink()
         deleted.append("translated")
 
+    # 보류 토큰 누수 방지 — slide_status pop 전에 token 추출
+    token = slide_status.get(slide_id, {}).get("client_token")
+    if token:
+        pending_cancel_tokens.pop(token, None)
+
     slide_status.pop(slide_id, None)
     slide_data.pop(slide_id, None)
     slide_glossary.pop(slide_id, None)
 
     return deleted
+
+
+@router.post("/cancel-pending")
+async def cancel_pending(client_token: str = Query(...)):
+    """slide_id 발급 전 취소된 토큰 보류.
+    upload_slide 가 응답 직전에 이 토큰을 발견하면 add_task 를 생략하고 즉시 정리."""
+    _gc_pending_cancel_tokens()
+    pending_cancel_tokens[client_token] = time.monotonic() + _PENDING_CANCEL_TOKEN_TTL
+    return {"mode": "pending_token", "client_token": client_token}
+
+
+@router.post("/{slide_id}/cancel")
+async def cancel_slide(slide_id: str):
+    """업로드/처리 중인 슬라이드 취소.
+    flag 만 set — 정리는 process_slide() 자신이 다음 체크포인트에서 수행.
+    완료/실패된 자료는 noop (라이브러리에 이미 등록됨, 영구삭제는 DELETE 사용)."""
+    if slide_id not in slide_status:
+        raise HTTPException(404, "슬라이드를 찾을 수 없습니다")
+    status = slide_status[slide_id].get("status")
+    if status in ("completed", "failed"):
+        return {"slide_id": slide_id, "mode": "already_finalized"}
+    slide_status[slide_id]["cancelled"] = True
+    print(f"[Slides] {slide_id} 취소 플래그 set (status={status})")
+    return {"slide_id": slide_id, "mode": "flag_set"}
 
 
 @router.delete("/delete/{slide_id}")
@@ -857,6 +947,11 @@ async def process_slide(slide_id: str, pdf_path: Path):
     try:
         slide_status[slide_id]["status"] = "processing"
 
+        # 체크포인트 ①: processing 진입 직후
+        if _is_cancelled(slide_id):
+            await _cleanup_cancelled(slide_id)
+            return
+
         # PDF 텍스트 레이어 확인
         try:
             from app.services.slide_translation.pdf_text_extractor import check_pdf_has_text_layer
@@ -882,6 +977,11 @@ async def process_slide(slide_id: str, pdf_path: Path):
         total_pages = len(images)
         slide_status[slide_id]["total_pages"] = total_pages
 
+        # 체크포인트 ②: pdf_to_images 완료 후 (OCR 진입 직전)
+        if _is_cancelled(slide_id):
+            await _cleanup_cancelled(slide_id)
+            return
+
         slide_data[slide_id] = []
 
         # VLM 번역 함수 임포트
@@ -901,6 +1001,11 @@ async def process_slide(slide_id: str, pdf_path: Path):
         _set_stage(slide_id, "ocr", total_pages)
         ocr_results = []  # [(image_path, regions), ...]
         for i, image_bytes in enumerate(images):
+            # 체크포인트 ③: OCR 루프 각 페이지 시작
+            if _is_cancelled(slide_id):
+                await _cleanup_cancelled(slide_id)
+                return
+
             image_path = IMAGES_DIR / f"{slide_id}_{i}.png"
             with open(image_path, "wb") as f:
                 f.write(image_bytes)
@@ -918,6 +1023,11 @@ async def process_slide(slide_id: str, pdf_path: Path):
                 ocr_results.append((image_path, None))
 
             _page_completed(slide_id, i + 1)
+
+        # 체크포인트 ④: OCR 루프 종료 후 — 용어집 빌드 전
+        if _is_cancelled(slide_id):
+            await _cleanup_cancelled(slide_id)
+            return
 
         # ========== 용어집 빌드 (전체 슬라이드 1회) ==========
         glossary = {}
@@ -942,6 +1052,11 @@ async def process_slide(slide_id: str, pdf_path: Path):
         # ========== 2단계: 모든 페이지 번역 (VLM) ==========
         _set_stage(slide_id, "translate", total_pages)
         for i, (image_path, regions) in enumerate(ocr_results):
+            # 체크포인트 ⑤: VLM 번역 루프 각 페이지 시작 (가장 무거운 50s/page 진입 직전)
+            if _is_cancelled(slide_id):
+                await _cleanup_cancelled(slide_id)
+                return
+
             translated_path = TRANSLATED_DIR / f"{slide_id}_{i}.png"
             overlay_items = []
 
@@ -949,6 +1064,12 @@ async def process_slide(slide_id: str, pdf_path: Path):
                 try:
                     print(f"[Slides] {slide_id} 페이지 {i + 1}/{total_pages} VLM 번역 중...")
                     regions = await asyncio.to_thread(stage_translate, str(image_path), regions, glossary)
+
+                    # 체크포인트 ⑥: stage_translate(~50s) 끝난 직후 — overlay/save/다음 페이지 진입을 건너뜀
+                    if _is_cancelled(slide_id):
+                        await _cleanup_cancelled(slide_id)
+                        return
+
                     await asyncio.to_thread(stage_overlay, str(image_path), regions, str(translated_path))
 
                     for region in regions:
@@ -975,6 +1096,11 @@ async def process_slide(slide_id: str, pdf_path: Path):
 
             slide_status[slide_id]["processed_pages"] = i + 1
             _page_completed(slide_id, i + 1)
+
+        # 체크포인트 ⑦: 번역 루프 종료 후 — bundling 진입 직전
+        if _is_cancelled(slide_id):
+            await _cleanup_cancelled(slide_id)
+            return
 
         # VLM 모델 언로드 (GPU 메모리 해제 — ASR과 VRAM 경합 방지)
         if vlm_available:
@@ -1109,6 +1235,12 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
         slide_status[slide_id]["total_pages"] = total_pages
         slide_data[slide_id] = [{} for _ in range(total_pages)]
 
+        # 체크포인트: 페이지 분석 완료 후 — PDF 레이어 파이프라인 진입 직전
+        if _is_cancelled(slide_id):
+            await _cleanup_cancelled(slide_id)
+            return
+
+        # 출력 경로
         translated_pdf_path = TRANSLATED_DIR / f"{slide_id}_translated.pdf"
 
         # ========== Stage 2: PDF Layer 처리 ==========
@@ -1130,16 +1262,29 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
             pipeline = PDFLayerPipeline(
                 output_dir=str(TRANSLATED_DIR),
                 on_page_complete=on_page_done,
-                glossary=glossary
+                glossary=glossary,
+                should_cancel=lambda sid=slide_id: _is_cancelled(sid),
             )
             result = await asyncio.to_thread(
                 pipeline.run,
                 str(pdf_path),
                 str(translated_pdf_path)
             )
+
+            # 파이프라인이 내부 체크포인트에서 취소 감지하고 빠져나왔으면 즉시 정리
+            if result.get("cancelled"):
+                print(f"[Slides] {slide_id} PDF 레이어 파이프라인 내부 취소 감지")
+                await _cleanup_cancelled(slide_id)
+                return
+
             print(f"  결과: replaced={result.get('replaced', 0)}, "
                   f"review_needed={result.get('review_needed', 0)}, "
                   f"failed={result.get('failed', 0)}")
+
+        # 체크포인트: PDF 레이어 파이프라인 종료 후 — OCR 배치 진입 직전
+        if _is_cancelled(slide_id):
+            await _cleanup_cancelled(slide_id)
+            return
 
         # ========== Stage 3: OCR 배치 (Surya 한 번 로드) ==========
         # OCR 대상: ocr_pages (텍스트 레이어 없음) + image_region_pages (이미지 영역)
@@ -1206,6 +1351,11 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
                 print(f"  OCR 배치 실패: {e}")
                 import traceback
                 traceback.print_exc()
+
+        # 체크포인트: OCR 배치 완료 후 — VLM 번역 진입 직전
+        if _is_cancelled(slide_id):
+            await _cleanup_cancelled(slide_id)
+            return
 
         # ========== Stage 4: VLM 번역 배치 (VLM 한 번 로드) ==========
         translate_results = {}
@@ -1310,6 +1460,11 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
                     "has_translation": trans_img.exists(),
                     "method": "ocr",
                 }
+
+        # 체크포인트: bundling 진입 직전
+        if _is_cancelled(slide_id):
+            await _cleanup_cancelled(slide_id)
+            return
 
         # ========== Stage 6: 이미지 추출 및 PDF 합성 ==========
         print("\n" + "=" * 60)

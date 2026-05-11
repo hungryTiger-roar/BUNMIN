@@ -560,7 +560,7 @@ function Lecturer() {
 
   const startLecture = () => {
     if (presentationMode === 'slide' && slideStatus !== 'ready') {
-      alert('강의자료를 먼저 업로드하세요.')
+      alert('강의자료를 먼저 선택하세요.')
       return
     }
     // 모델 전환 중이면 보류 — 전환 완료 시 useEffect가 자동으로 강의 시작 트리거
@@ -999,7 +999,7 @@ function Lecturer() {
 
       {/* 자막 다운로드 모달 */}
       {showTranscriptModal && sessionId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="bg-surface rounded-2xl shadow-2xl p-6 w-[min(90%,400px)] flex flex-col gap-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-onSurface">강의 자막 저장</h2>
@@ -1405,21 +1405,22 @@ function Lecturer() {
                     </button>
                     <div className="relative">
                       {showEndConfirm && (
-                        <div className="absolute bottom-full mb-2 right-0 z-50 bg-surface sidebar-card text-onSurface border border-primaryContainer/60 rounded-xl shadow-2xl p-3 w-60">
-                          <div className="flex justify-end mb-1">
+                        <div className="absolute bottom-full mb-2 right-0 z-[70] bg-surface sidebar-card text-onSurface border border-primaryContainer/60 rounded-xl shadow-2xl p-3 w-60">
+                          <div className="flex justify-between mb-1">
+                            <p className="text-sm font-bold mb-2.5">강의 종료</p>
                             <button
                               type="button"
                               onClick={() => setShowEndConfirm(false)}
                               className="w-5 h-5 flex items-center justify-center text-onSurface/50 hover:text-onSurface transition-colors text-xs"
                             >✕</button>
                           </div>
-                          <p className="text-sm font-bold mb-2.5">강의를 종료하시겠습니까?</p>
+                          <p className="text-sm mb-2.5">강의를 종료하시겠습니까?</p>
                           <button
                             type="button"
                             onClick={() => { setShowEndConfirm(false); endLecture() }}
                             className="w-full py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors"
                           >
-                            강의 종료
+                            종료
                           </button>
                         </div>
                       )}
