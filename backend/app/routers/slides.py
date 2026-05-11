@@ -794,11 +794,20 @@ async def load_slide(slide_id: str):
     }
 
 
-def _delete_slide_files(slide_id: str) -> list[str]:
-    """단일 슬라이드의 모든 관련 파일/메모리 정리. 삭제된 항목 종류 리스트 반환 (없으면 빈 리스트)."""
+def _delete_slide_files(slide_id: str, clear_memory: bool = True) -> list[str]:
+    """단일 슬라이드의 모든 관련 파일/메모리 정리.
+
+    Args:
+        slide_id: 슬라이드 ID
+        clear_memory: True면 slide_status/data/glossary도 삭제 (기본값)
+                      False면 파일만 삭제 (취소 시 cancelled 플래그 유지용)
+
+    Returns:
+        삭제된 항목 종류 리스트 (없으면 빈 리스트)
+    """
     deleted: list[str] = []
     skipped: list[str] = []
-    print(f"[Slides] _delete_slide_files 시작: {slide_id}")
+    print(f"[Slides] _delete_slide_files 시작: {slide_id} (clear_memory={clear_memory})")
 
     pdf_path = UPLOAD_DIR / f"{slide_id}.pdf"
     if pdf_path.exists():
@@ -858,6 +867,10 @@ def _delete_slide_files(slide_id: str) -> list[str]:
     else:
         print(f"[Slides] _delete_slide_files 완료: {slide_id} → {deleted}")
 
+    # clear_memory=False면 여기서 종료 (cancelled 플래그 유지)
+    if not clear_memory:
+        return deleted
+
     # 보류 토큰 누수 방지 — slide_status pop 전에 token 추출
     token = slide_status.get(slide_id, {}).get("client_token")
     if token:
@@ -899,12 +912,15 @@ async def cancel_slide(slide_id: str):
     slide_status[slide_id]["cancelled"] = True
     print(f"[Slides] {slide_id} 취소 플래그 set (status={status})")
 
-    # 2. 즉시 파일 삭제 (VLM 블로킹 중에도 파일은 먼저 정리)
+    # 2. 즉시 파일 삭제 (clear_memory=False로 cancelled 플래그 유지)
+    #    → 체크포인트에서 _is_cancelled() 감지 가능
+    deleted = _delete_slide_files(slide_id, clear_memory=False)
+    print(f"[Slides] {slide_id} 즉시 파일 삭제: {deleted}")
+
+    # 3. 해시 매핑은 삭제 (재업로드 허용)
     content_hash = slide_status.get(slide_id, {}).get("content_hash")
-    deleted = _delete_slide_files(slide_id)
     if content_hash:
         _hash_to_slide_id.pop(content_hash, None)
-    print(f"[Slides] {slide_id} 즉시 파일 삭제: {deleted}")
 
     return {"slide_id": slide_id, "mode": "cancelled_and_cleaned", "deleted": deleted}
 
