@@ -626,6 +626,14 @@ def stage_ocr_surya(image_path: str) -> list:
     print("[1/3] OCR: 텍스트 영역 감지 (Surya OCR)")
     print("=" * 60)
 
+    # GPU 메모리 정리 (VLM 등 이전 모델 해제)
+    print("  GPU 메모리 정리 중...")
+    unload_vlm_model()
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
     from surya.foundation import FoundationPredictor
     from surya.detection import DetectionPredictor
     from surya.recognition import RecognitionPredictor
@@ -678,10 +686,14 @@ def stage_ocr_surya(image_path: str) -> list:
 
     print(f"\n  총 {len(regions)}개 영역 감지")
 
+    # Surya 모델 메모리 해제 (VLM 로드 준비)
     del foundation_predictor, det_predictor, rec_predictor
+    del image
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    print("  Surya 모델 메모리 해제 완료")
 
     return regions
 
@@ -1056,3 +1068,448 @@ def stage_overlay(image_path: str, regions: list, output_path: str):
     img.save(output_path)
     img.close()
     print(f"\n  저장됨: {output_path}")
+
+
+# ============================================================
+# 배치 처리 설정
+# ============================================================
+OCR_CHUNK_SIZE = int(os.environ.get("OCR_CHUNK_SIZE", "5"))
+VLM_CHUNK_SIZE = int(os.environ.get("VLM_CHUNK_SIZE", "2"))
+
+
+# ============================================================
+# 중간 결과 캐시 (재시작 지원)
+# ============================================================
+def get_cache_dir(slide_id: str) -> Path:
+    """슬라이드별 캐시 디렉토리"""
+    cache_dir = Path(os.environ.get("CACHE_DIR", "uploads/cache")) / slide_id
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def save_ocr_cache(slide_id: str, page_idx: int, regions: list) -> Path:
+    """OCR 결과 캐시 저장"""
+    import json
+    cache_path = get_cache_dir(slide_id) / f"ocr_{page_idx:03d}.json"
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(regions, f, ensure_ascii=False, indent=2)
+    return cache_path
+
+
+def load_ocr_cache(slide_id: str, page_idx: int) -> list | None:
+    """OCR 결과 캐시 로드"""
+    import json
+    cache_path = get_cache_dir(slide_id) / f"ocr_{page_idx:03d}.json"
+    if cache_path.exists():
+        with open(cache_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+
+def save_translate_cache(slide_id: str, page_idx: int, regions: list) -> Path:
+    """번역 결과 캐시 저장"""
+    import json
+    cache_path = get_cache_dir(slide_id) / f"translate_{page_idx:03d}.json"
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(regions, f, ensure_ascii=False, indent=2)
+    return cache_path
+
+
+def load_translate_cache(slide_id: str, page_idx: int) -> list | None:
+    """번역 결과 캐시 로드"""
+    import json
+    cache_path = get_cache_dir(slide_id) / f"translate_{page_idx:03d}.json"
+    if cache_path.exists():
+        with open(cache_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return None
+
+
+def clear_cache(slide_id: str):
+    """슬라이드 캐시 삭제"""
+    import shutil
+    cache_dir = get_cache_dir(slide_id)
+    if cache_dir.exists():
+        shutil.rmtree(cache_dir)
+
+
+# ============================================================
+# 배치 OCR (Surya 한 번 로드)
+# ============================================================
+def batch_ocr_surya(
+    image_paths: list[tuple[int, str]],
+    slide_id: str = None,
+    chunk_size: int = None
+) -> dict[int, list]:
+    """
+    여러 이미지를 배치로 OCR 처리
+
+    Args:
+        image_paths: [(page_idx, image_path), ...]
+        slide_id: 캐시 저장용 슬라이드 ID
+        chunk_size: 청크 크기 (None이면 전체를 한 번에)
+
+    Returns:
+        {page_idx: regions, ...}
+    """
+    if not image_paths:
+        return {}
+
+    chunk_size = chunk_size or OCR_CHUNK_SIZE
+    results = {}
+
+    # 캐시된 결과 먼저 로드
+    pending_pages = []
+    for page_idx, img_path in image_paths:
+        if slide_id:
+            cached = load_ocr_cache(slide_id, page_idx)
+            if cached is not None:
+                print(f"  [OCR] 페이지 {page_idx+1}: 캐시 사용")
+                results[page_idx] = cached
+                continue
+        pending_pages.append((page_idx, img_path))
+
+    if not pending_pages:
+        print("[OCR Batch] 모든 페이지 캐시 히트")
+        return results
+
+    print("\n" + "=" * 60)
+    print(f"[OCR Batch] {len(pending_pages)}개 페이지 처리 (Surya)")
+    print("=" * 60)
+
+    # GPU 메모리 정리 (VLM 등 이전 모델 해제)
+    print("  GPU 메모리 정리 중...")
+    unload_vlm_model()
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+
+    # Surya 모델 로드 (한 번만)
+    from surya.foundation import FoundationPredictor
+    from surya.detection import DetectionPredictor
+    from surya.recognition import RecognitionPredictor
+
+    print("  Surya 모델 로드 중...")
+    foundation_predictor = FoundationPredictor()
+    det_predictor = DetectionPredictor()
+    rec_predictor = RecognitionPredictor(foundation_predictor)
+    print("  Surya 모델 로드 완료")
+
+    # 청크 단위로 처리
+    for chunk_start in range(0, len(pending_pages), chunk_size):
+        chunk = pending_pages[chunk_start:chunk_start + chunk_size]
+        chunk_end = min(chunk_start + chunk_size, len(pending_pages))
+        print(f"\n  [Chunk {chunk_start//chunk_size + 1}] 페이지 {chunk_start+1}-{chunk_end}/{len(pending_pages)}")
+
+        for page_idx, img_path in chunk:
+            try:
+                image = Image.open(img_path).convert("RGB")
+                print(f"    페이지 {page_idx+1}: {image.size[0]}x{image.size[1]}px")
+
+                rec_results = rec_predictor([image], det_predictor=det_predictor)
+
+                regions = []
+                for page_result in rec_results:
+                    for line in page_result.text_lines:
+                        text = normalize_ocr_text(line.text.strip())
+                        confidence = line.confidence
+
+                        if not text or confidence < 0.2:
+                            continue
+
+                        bbox = [float(line.bbox[0]), float(line.bbox[1]),
+                                float(line.bbox[2]), float(line.bbox[3])]
+
+                        regions.append({
+                            "bbox": bbox,
+                            "ocr_text": text,
+                            "confidence": float(confidence),
+                            "skip_translate": is_number_or_english_only(text),
+                            "has_math": contains_math_markup(text),
+                            "is_code": is_code_block(text),
+                            "is_chinese": is_chinese_garbage(text),
+                        })
+
+                image.close()
+                results[page_idx] = regions
+                print(f"    → {len(regions)}개 영역 감지")
+
+                # 캐시 저장
+                if slide_id:
+                    save_ocr_cache(slide_id, page_idx, regions)
+
+            except Exception as e:
+                print(f"    페이지 {page_idx+1} OCR 실패: {e}")
+                results[page_idx] = []
+
+    # Surya 모델 해제
+    print("\n  Surya 모델 메모리 해제 중...")
+    del foundation_predictor, det_predictor, rec_predictor
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    print("  Surya 모델 메모리 해제 완료")
+
+    return results
+
+
+# ============================================================
+# 배치 번역 (VLM 한 번 로드)
+# ============================================================
+def batch_translate_vlm(
+    ocr_results: dict[int, list],
+    image_paths: dict[int, str],
+    slide_id: str = None,
+    glossary: dict = None,
+    chunk_size: int = None
+) -> dict[int, list]:
+    """
+    여러 페이지를 배치로 VLM 번역
+
+    Args:
+        ocr_results: {page_idx: regions, ...}
+        image_paths: {page_idx: image_path, ...}
+        slide_id: 캐시 저장용 슬라이드 ID
+        glossary: 용어집
+        chunk_size: 청크 크기
+
+    Returns:
+        {page_idx: translated_regions, ...}
+    """
+    if not ocr_results:
+        return {}
+
+    chunk_size = chunk_size or VLM_CHUNK_SIZE
+    glossary = glossary or {}
+    results = {}
+
+    # 캐시된 결과 먼저 로드
+    pending_pages = []
+    for page_idx, regions in ocr_results.items():
+        if slide_id:
+            cached = load_translate_cache(slide_id, page_idx)
+            if cached is not None:
+                print(f"  [VLM] 페이지 {page_idx+1}: 캐시 사용")
+                results[page_idx] = cached
+                continue
+        if regions:  # OCR 결과가 있는 경우만
+            pending_pages.append((page_idx, regions))
+
+    if not pending_pages:
+        print("[VLM Batch] 모든 페이지 캐시 히트 또는 OCR 결과 없음")
+        return results
+
+    print("\n" + "=" * 60)
+    print(f"[VLM Batch] {len(pending_pages)}개 페이지 번역")
+    print("=" * 60)
+
+    # VLM 모델 로드 (한 번만)
+    print("  VLM 모델 로드 중...")
+    model, processor = get_vlm_model()
+    print("  VLM 모델 로드 완료")
+
+    # 청크 단위로 처리
+    for chunk_start in range(0, len(pending_pages), chunk_size):
+        chunk = pending_pages[chunk_start:chunk_start + chunk_size]
+        chunk_end = min(chunk_start + chunk_size, len(pending_pages))
+        print(f"\n  [Chunk {chunk_start//chunk_size + 1}] 페이지 {chunk_start+1}-{chunk_end}/{len(pending_pages)}")
+
+        for page_idx, regions in chunk:
+            try:
+                img_path = image_paths.get(page_idx)
+                if not img_path:
+                    print(f"    페이지 {page_idx+1}: 이미지 경로 없음")
+                    results[page_idx] = regions
+                    continue
+
+                print(f"    페이지 {page_idx+1}: {len(regions)}개 영역 번역 중...")
+
+                # 기존 stage_translate 로직 재사용 (모델 로드 제외)
+                translated = _translate_regions_with_vlm(
+                    regions, img_path, model, processor, glossary
+                )
+
+                results[page_idx] = translated
+                print(f"    → 번역 완료")
+
+                # 캐시 저장
+                if slide_id:
+                    save_translate_cache(slide_id, page_idx, translated)
+
+            except Exception as e:
+                print(f"    페이지 {page_idx+1} 번역 실패: {e}")
+                results[page_idx] = regions  # 원본 유지
+
+    print("\n[VLM Batch] 번역 완료")
+    return results
+
+
+def _translate_regions_with_vlm(
+    regions: list,
+    image_path: str,
+    model,
+    processor,
+    glossary: dict
+) -> list:
+    """VLM으로 영역 번역 (내부 함수)"""
+    original_image = Image.open(image_path).convert("RGB")
+    image_size = original_image.size
+    regions = merge_adjacent_regions(regions)
+    regions = classify_text_regions(regions, image_size)
+
+    to_translate = []
+    for i, region in enumerate(regions):
+        if region.get("skip_translate", False):
+            region["english"] = region["ocr_text"]
+            continue
+        bbox = region["bbox"]
+        x_min, y_min, x_max, y_max = bbox
+        width = x_max - x_min
+        height = y_max - y_min
+        min_area = cfg('ocr.min_area', 500)
+        if width * height < min_area:
+            region["english"] = region["ocr_text"]
+            continue
+        to_translate.append((i, region))
+
+    if not to_translate:
+        original_image.close()
+        return regions
+
+    # 번역 대상 텍스트 수집
+    text_lines = []
+    line_mapping = []
+    prefix_mapping = {}
+
+    for idx, (orig_idx, region) in enumerate(to_translate):
+        line_num = len(text_lines) + 1
+        ocr_text = strip_html_tags(region['ocr_text'])
+        prefix, content = extract_prefix_symbol(ocr_text)
+        if prefix:
+            prefix_mapping[line_num] = prefix
+        text_lines.append(f"{line_num}. {content}")
+        line_mapping.append(orig_idx)
+
+    text_list = "\n".join(text_lines)
+    total_lines = len(text_lines)
+    page_context_items = [r["ocr_text"] for r in regions if r.get("ocr_text")]
+    page_context = ", ".join(page_context_items[:20])
+
+    glossary_section = ""
+    if glossary:
+        glossary_lines = [f'  "{ko}": "{en}"' for ko, en in list(glossary.items())[:15]]
+        glossary_section = "\n[GLOSSARY]\n" + "\n".join(glossary_lines) + "\n"
+
+    PROMPT = f"""Translate Korean to English for a lecture slide.
+
+[PAGE CONTEXT]
+{page_context}
+{glossary_section}
+[TRANSLATE]
+{text_list}
+
+RULES:
+1. Output EXACTLY {total_lines} lines, format: "1. translation"
+2. Use PAGE CONTEXT to disambiguate ambiguous/short terms
+3. Use GLOSSARY translations for technical terms if provided
+4. Standard academic terminology
+5. Never romanize - translate to English
+6. KEEP: emails, URLs, filenames, code syntax
+7. SHORT labels → CONCISE translation
+
+Translate:"""
+
+    messages = [{"role": "user", "content": [{"type": "text", "text": PROMPT}]}]
+
+    try:
+        text_input = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        inputs = processor(text=[text_input], return_tensors="pt").to(model.device)
+
+        with torch.no_grad():
+            output_ids = model.generate(
+                **inputs,
+                max_new_tokens=2048,
+                do_sample=False,
+                pad_token_id=processor.tokenizer.pad_token_id,
+            )
+
+        response = processor.batch_decode(output_ids[:, inputs.input_ids.shape[1]:], skip_special_tokens=True)[0]
+
+        # 응답 파싱
+        translated_lines = {}
+        for line in response.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            match = re.match(r'^(\d+)\.\s*(.+)$', line)
+            if match:
+                line_num = int(match.group(1))
+                translation = match.group(2).strip()
+                translated_lines[line_num] = translation
+
+        # 결과 매핑
+        for idx, (orig_idx, region) in enumerate(to_translate):
+            line_num = idx + 1
+            if line_num in translated_lines:
+                prefix = prefix_mapping.get(line_num, "")
+                translation = translated_lines[line_num]
+                if prefix:
+                    regions[orig_idx]["english"] = f"{prefix} {translation}"
+                else:
+                    regions[orig_idx]["english"] = translation
+            else:
+                regions[orig_idx]["english"] = region["ocr_text"]
+
+    except Exception as e:
+        print(f"      VLM 번역 오류: {e}")
+        for _, (orig_idx, region) in enumerate(to_translate):
+            regions[orig_idx]["english"] = region["ocr_text"]
+
+    original_image.close()
+    return regions
+
+
+# ============================================================
+# 배치 오버레이 (CPU)
+# ============================================================
+def batch_overlay(
+    translate_results: dict[int, list],
+    image_paths: dict[int, str],
+    output_dir: str,
+    slide_id: str
+) -> dict[int, str]:
+    """
+    여러 페이지를 배치로 오버레이
+
+    Args:
+        translate_results: {page_idx: regions, ...}
+        image_paths: {page_idx: image_path, ...}
+        output_dir: 출력 디렉토리
+        slide_id: 슬라이드 ID
+
+    Returns:
+        {page_idx: output_path, ...}
+    """
+    print("\n" + "=" * 60)
+    print(f"[Overlay Batch] {len(translate_results)}개 페이지 렌더링")
+    print("=" * 60)
+
+    output_paths = {}
+
+    for page_idx, regions in translate_results.items():
+        img_path = image_paths.get(page_idx)
+        if not img_path:
+            continue
+
+        output_path = os.path.join(output_dir, f"{slide_id}_{page_idx}.png")
+
+        try:
+            stage_overlay(img_path, regions, output_path)
+            output_paths[page_idx] = output_path
+            print(f"  페이지 {page_idx+1}: 완료")
+        except Exception as e:
+            print(f"  페이지 {page_idx+1}: 실패 - {e}")
+
+    return output_paths
