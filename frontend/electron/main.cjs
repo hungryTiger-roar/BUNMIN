@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, session } = require('electron')
+const { app, BrowserWindow, ipcMain, desktopCapturer, session, Tray, Menu, nativeImage } = require('electron')
 const { spawn } = require('child_process')
 const path = require('path')
 const http = require('http')
@@ -57,6 +57,10 @@ function getLanIp() {
 
 let mainWindow = null
 let backendProcess = null
+let tray = null
+// 사용자가 트레이 "종료" 클릭, 설치 마법사 quit-app IPC, 또는 OS 셧다운 등 진짜 종료
+// 의사를 표명한 경우만 true. close 핸들러가 이 플래그를 보고 hide vs 종료 분기.
+let isQuitting = false
 
 const isDev = process.env.NODE_ENV === 'development'
 const BACKEND_PORT = 8000
@@ -324,6 +328,10 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
+      // 트레이로 hide 시에도 OCR 업로드 등 background fetch/timer 가 throttle 되지
+      // 않게. Chromium 의 hidden window throttling 기본값은 활성화돼 있어,
+      // 이를 끄지 않으면 창 hide 후 진행 중인 fetch/setInterval 이 지연됨.
+      backgroundThrottling: false,
     },
     show: false,
   })
@@ -383,6 +391,51 @@ function createWindow() {
     devLog('ready-to-show → window.show()')
     mainWindow.show()
   })
+
+  // 창 X 버튼 → 종료 대신 트레이로 hide (백그라운드 OCR/업로드 유지).
+  // 실제 종료는 isQuitting=true 일 때만 (트레이 "종료" 메뉴, before-quit, quit-app IPC).
+  mainWindow.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault()
+      mainWindow.hide()
+      devLog('창 닫기 가로채기 → 트레이로 hide')
+    }
+  })
+}
+
+// ─── 트레이 아이콘 + 컨텍스트 메뉴 ────────────────────────────────────
+function createTray() {
+  const iconPath = path.join(__dirname, 'assets', 'tray-icon-32.png')
+  const icon = nativeImage.createFromPath(iconPath)
+  if (icon.isEmpty()) {
+    devLog(`[경고] 트레이 아이콘 로드 실패: ${iconPath}`)
+  }
+  tray = new Tray(icon)
+  tray.setToolTip('Aunion AI')
+
+  const showWindow = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    if (!mainWindow.isVisible()) mainWindow.show()
+    mainWindow.focus()
+  }
+
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: '열기', click: showWindow },
+      { type: 'separator' },
+      {
+        label: '종료',
+        click: () => {
+          devLog('트레이 종료 클릭 → app.quit()')
+          isQuitting = true
+          app.quit()
+        },
+      },
+    ]),
+  )
+  tray.on('double-click', showWindow)
+  devLog('트레이 아이콘 생성 완료')
 }
 
 // ─── 두 번째 인스턴스 실행 시도 → 기존 창 활성화 ───────────────────
@@ -398,8 +451,9 @@ app.on('second-instance', (_event, commandLine) => {
 })
 
 app.whenReady().then(() => {
-  devLog('app.whenReady → createWindow + startBackend')
+  devLog('app.whenReady → createWindow + createTray + startBackend')
   createWindow()
+  createTray()
   startBackend()
 
   ipcMain.handle('get-lan-ip', () => getLanIp())
@@ -408,9 +462,11 @@ app.whenReady().then(() => {
     return _lastState
   })
 
-  // 앱 종료 — 설치 마법사의 "취소" / "앱 종료" 버튼에서 호출
+  // 앱 종료 — 설치 마법사의 "취소" / "앱 종료" 버튼에서 호출.
+  // 트레이 hide 분기를 우회하도록 isQuitting 먼저 set.
   ipcMain.on('quit-app', () => {
     devLog('renderer quit-app 요청 → app.quit()')
+    isQuitting = true
     app.quit()
   })
 
@@ -449,9 +505,18 @@ app.whenReady().then(() => {
   }
 })
 
+// OS 셧다운/Cmd-Q 등으로 들어오는 진짜 종료 경로 — close 핸들러 우회.
+app.on('before-quit', () => {
+  isQuitting = true
+})
+
 // .exe 종료 시 backend 는 일부러 안 죽임 — backend 가 부모 PID 감시해 자체적으로
 // 5분 grace (학생 자막 다운로드 시간) 후 자살. 재실행 시 startBackend() 의 taskkill
 // 이 이 grace 중인 backend 도 강제 kill 해 새 인스턴스로 깨끗하게 시작.
+//
+// 트레이 도입 후엔 X 로 모든 창이 hide 되면 window-all-closed 가 발화하지 않음
+// (창은 hide 상태일 뿐 destroy 되지 않음). 따라서 이 핸들러는 거의 발화하지 않고,
+// 발화하더라도 isQuitting 기준으로 정상 종료 흐름을 따름.
 app.on('window-all-closed', () => {
-  app.quit()
+  if (isQuitting) app.quit()
 })
