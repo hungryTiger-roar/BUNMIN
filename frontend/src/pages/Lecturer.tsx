@@ -96,7 +96,7 @@ function Lecturer() {
   const [copied, setCopied] = useState(false)
   const [chatInput, setChatInput] = useState('')
   const [showParticipants, setShowParticipants] = useState(false)
-  const [ccEnabled, setCcEnabled] = useState(true)
+  const [ccEnabled, setCcEnabled] = useState(false)
   const [settingsPanel, setSettingsPanel] = useState<null | 'main' | 'aspect' | 'language' | 'fontSize' | 'style'>(null)
   const [primaryLang, setPrimaryLang] = useState<LecturerLang>('en')
   const [secondaryLang, setSecondaryLang] = useState<LecturerLang>('ko')
@@ -212,7 +212,9 @@ function Lecturer() {
     analyserRef,
     setGain,
     micStream,
-  } = useAudioCapture({ onAudioData: handleAudioData })
+  } = useAudioCapture({
+    onAudioData: handleAudioData,
+  })
 
   const micStreamRef = useRef<MediaStream | null>(null)
   useEffect(() => { micStreamRef.current = micStream }, [micStream])
@@ -344,12 +346,19 @@ function Lecturer() {
     connect()
   }, [connect])
 
+  // 강사 기본값 — 원본 PDF 보기. lectureStore 의 default 는 'translated' (수강자 기준).
+  // 강사 페이지 mount 시 강사용으로 override. 이후 강사가 토글로 변경 가능.
+  useEffect(() => {
+    useLectureStore.getState().setMaterialMode('original')
+  }, [])
+
   useEffect(() => {
     fetch(`${API_BASE}/network/info`)
       .then((res) => res.json())
       .then((data) => {
         const port = window.location.port || data.port
-        setShareUrl(`http://${data.lan_ip}:${port}/#/student/start`)
+        // 수강자는 BrowserRouter 사용 — # 없는 깨끗한 URL 로 공유.
+        setShareUrl(`http://${data.lan_ip}:${port}/student/start`)
       })
       .catch(() => {})
   }, [])
@@ -561,7 +570,7 @@ function Lecturer() {
     }
     setLectureStarted(true)
     setPaused(false)
-    send({ type: 'lecture_start', slide_id: slideId, mode: presentationMode })
+    send({ type: 'lecture_start', slide_id: slideId, page: currentPage, mode: presentationMode })
   }
 
   // 보류된 강의 시작이 있고 모델 전환이 끝났으면 자동으로 강의 시작
@@ -570,9 +579,9 @@ function Lecturer() {
       setPendingStart(false)
       setLectureStarted(true)
       setPaused(false)
-      send({ type: 'lecture_start', slide_id: slideId, mode: presentationMode })
+      send({ type: 'lecture_start', slide_id: slideId, page: currentPage, mode: presentationMode })
     }
-  }, [pendingStart, modelMode, slideId, presentationMode, send, setLectureStarted, setPaused])
+  }, [pendingStart, modelMode, slideId, currentPage, presentationMode, send, setLectureStarted, setPaused])
 
   const togglePause = () => {
     const newPaused = !isPaused
@@ -583,6 +592,9 @@ function Lecturer() {
   const endLecture = () => {
     stopAudioCapture()
     stopScreenCapture()
+    // 이전 강의의 필기 잔류 제거 — DrawingCanvas pageActionsRef 가 page 번호로만 keying
+    // 되어 새 강의자료 선택 / 같은 슬라이드 재시작 시 옛 stroke 가 그대로 노출됨.
+    drawingCanvasRef.current?.clearAllPages()
     setLectureStarted(false)
     setPaused(false)
     send({ type: 'lecture_end', slide_id: slideId })
@@ -695,8 +707,9 @@ function Lecturer() {
   ) : null
 
   // 슬라이드 박스 내부 하단 컨트롤 바 (CC / 설정 / 전체화면)
+  // z-40 — DrawingCanvas (z-30) 위에 두어 필기 모드 활성 시에도 버튼 클릭 가로채이지 않게.
   const bottomControlBar = (
-    <div className={`absolute left-3 right-3 bottom-3 z-30 flex items-center justify-end gap-2 transition-opacity duration-200 ${
+    <div className={`absolute left-3 right-3 bottom-3 z-40 flex items-center justify-end gap-2 transition-opacity duration-200 ${
       settingsPanel !== null
         ? 'opacity-100 pointer-events-auto'
         : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
@@ -1209,14 +1222,14 @@ function Lecturer() {
                       />
                       <button
                         onClick={stopScreenCapture}
-                        className="absolute top-3 right-3 z-30 flex items-center gap-2 px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors text-sm font-medium shadow-lg"
+                        className="absolute top-3 right-3 z-40 flex items-center gap-2 px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors text-sm font-medium shadow-lg"
                       >
                         <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
                         공유 중지
                       </button>
                     </>
                   ) : (
-                    <div className="text-center text-white/70">
+                    <div className="relative z-40 text-center text-white/70">
                       <svg className="w-16 h-16 mx-auto mb-3 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                       </svg>

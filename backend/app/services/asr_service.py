@@ -14,23 +14,40 @@ import numpy as np
 
 # 모델이 학습 데이터에서 본 정치 뉴스/방송/YouTube 정형구 — 강의에서 등장 확률 ~0
 # 실제 production 로그에서 관측된 패턴 + 알려진 Whisper 환각 정형구
-_HALLUCINATION_PATTERNS = re.compile("|".join([
-    r"국감장",                  # 국정감사장 (정치 뉴스 빈출)
-    r"조정식",                  # 특정 정치인 (관측됨)
-    r"홍\s*사장",               # 특정 인물 (관측됨)
-    r"용재진",                  # 환각으로 등장한 이름 (관측됨)
-    r"국토교[통토]위원",        # "국토교토위원회/장" — Whisper 오타 포함 (관측됨)
-    r"기관\s*증인",             # 국감 전용 용어 (관측됨)
-    r"발언에\s*국감",           # "발언에 국감장이 술렁이자" (관측됨)
-    r"술렁이자",                # 뉴스 정형 동사 (관측됨, 강의 등장 거의 없음)
-    r"시청해\s*주셔서",         # YouTube outro
-    r"구독과\s*좋아요",         # YouTube outro
-    r"MBC\s*뉴스",              # 방송 intro
-    r"SBS\s*뉴스",
-    r"KBS\s*뉴스",
-    r"특파원\s*입니다",         # 방송 outro
-    r"기자입니다",              # 방송 outro
-]))
+_HALLUCINATION_PATTERNS = re.compile(
+    "|".join([
+        r"국감장",                  # 국정감사장 (정치 뉴스 빈출)
+        r"조정식",                  # 특정 정치인 (관측됨)
+        r"홍\s*사장",               # 특정 인물 (관측됨)
+        r"용재진",                  # 환각으로 등장한 이름 (관측됨)
+        r"국토교[통토]위원",        # "국토교토위원회/장" — Whisper 오타 포함 (관측됨)
+        r"기관\s*증인",             # 국감 전용 용어 (관측됨)
+        r"발언에\s*국감",           # "발언에 국감장이 술렁이자" (관측됨)
+        r"술렁이자",                # 뉴스 정형 동사 (관측됨, 강의 등장 거의 없음)
+        r"시청해\s*주셔서",         # YouTube outro
+        r"구독과\s*좋아요",         # YouTube outro
+        r"영상\s*편집",             # "영상편집 및 자막 제공..." (streaming 에서 관측됨)
+        r"자막\s*제공",             # "자막 제공" — YouTube/방송 정형구
+        r"광고\s*를?\s*포함",       # "광고를 포함하고 있습니다" — YouTube 정형구
+        # "다음 영상에서 만나요" 류 — 작별 동사 (만나/뵙/봐) 붙은 형태만 매칭해
+        # 강사의 정상 예고 ("다음 시간에는 미적분") 는 보존.
+        r"다음\s*(?:화|편|영상|시간)\s*에\s*(?:서)?\s*(?:만나|뵙|봐|봬)",
+        # 영어 YouTube outro — Whisper 가 language=ko 에서도 토하는 학습 잔재.
+        # 한국어 강의에 진짜 영어 인사가 등장할 가능성 거의 없어 false positive 위험 작음.
+        r"\bthank\s*you\b",
+        r"\bthanks?\s*for\s*watching\b",
+        r"\bsee\s*you\s*(?:next|in|soon|later)?\b",
+        r"\bsubscribe\b",
+        r"\blike\s*and\s*subscribe\b",
+        r"MBC\s*뉴스",              # 방송 intro
+        r"SBS\s*뉴스",
+        r"KBS\s*뉴스",
+        r"특파원\s*입니다",         # 방송 outro
+        r"기자입니다",              # 방송 outro
+    ]),
+    # 영어 패턴은 대소문자 구분 안 함. 한국어 패턴엔 영향 없음.
+    re.IGNORECASE,
+)
 
 # Whisper 가 침묵/노이즈에서 자주 토하는 짧은 한국어 정형 인사구 — YouTube 영상 끝마다
 # 등장하는 표현들이 학습 데이터에 누적된 결과. 단독으로 등장하면 환각일 가능성 높음.
@@ -106,8 +123,19 @@ class ASRService:
             )
 
     def transcribe(self, audio_bytes: bytes, language: str = "ko") -> str:
+        """기존 호환 — 텍스트만 반환. 내부적으로 transcribe_with_words 호출."""
+        text, _ = self.transcribe_with_words(audio_bytes, language)
+        return text
+
+    def transcribe_with_words(
+        self, audio_bytes: bytes, language: str = "ko"
+    ) -> tuple[str, list[dict]]:
+        """텍스트 + 단어별 시간 정보 함께 반환.
+        words = [{'text': str, 'start': float, 'end': float}, ...]  (start/end: chunk 시작 기준 초)
+        chunk 안 multi-sentence 의 정확한 sub-sentence 시간 분배에 사용.
+        word_timestamps=True 로 ASR 5~10% 느려짐 (Whisper 가 단어별 alignment 수행)."""
         if self.model is None:
-            return ""
+            return ("", [])
         try:
             audio_array = self._bytes_to_array(audio_bytes)
             segments, _ = self.model.transcribe(
@@ -116,8 +144,10 @@ class ASRService:
                 beam_size=5,                       # 측정 결과 beam=1 대비 WER 1.9%p 우위, 속도 차이는 노이즈 안
                 condition_on_previous_text=False,  # 이전 발화 컨텍스트 무시 → hallucination 차단
                 vad_filter=True,                   # 무음 구간 자동 필터
+                word_timestamps=True,              # 단어별 시간 정보 — sub-sentence sync 용
             )
             texts = []
+            all_words: list[dict] = []
             for seg in segments:
                 # 환각 차단 4중 필터 (메타정보 3 + 텍스트 패턴 1):
                 # ① compression_ratio: 반복 환각 ("교통과 교통과 교통과...") 잡음. Whisper 권장 컷오프 2.4
@@ -155,6 +185,23 @@ class ASRService:
                 if not trimmed:
                     continue
                 texts.append(trimmed)
+
+                # 단어별 시간 정보 수집 — trim 으로 잘려나간 꼬리 단어는 제외.
+                # trimmed 의 공백 제외 길이만큼 단어를 누적해 그 안에 들어가는 단어만 keep.
+                seg_words = getattr(seg, "words", None) or []
+                if seg_words:
+                    target_chars = len(trimmed.replace(" ", ""))
+                    accumulated = 0
+                    for w in seg_words:
+                        word_text = (w.word or "").replace(" ", "")
+                        if accumulated >= target_chars:
+                            break
+                        all_words.append({
+                            "text": w.word,
+                            "start": float(w.start),
+                            "end": float(w.end),
+                        })
+                        accumulated += len(word_text)
             final_text = "".join(texts).strip()
 
             # ⑦ 짧은 인사 중복 차단 — 진짜 강의 끝 "감사합니다" 1번은 통과,
@@ -166,15 +213,15 @@ class ASRService:
                     and now - self._last_polite_at < _POLITE_DEDUP_WINDOW_SEC
                 ):
                     print(f"[ASR] 짧은 인사 중복 차단 ({_POLITE_DEDUP_WINDOW_SEC:.0f}s 윈도우): {final_text!r}")
-                    return ""
+                    return ("", [])
                 self._last_polite_text = final_text
                 self._last_polite_at = now
-            return final_text
+            return (final_text, all_words)
         except Exception as e:
             import traceback
             print(f"[ASR] 오류: {e}")
             print(traceback.format_exc())
-            return ""
+            return ("", [])
 
     def _bytes_to_array(self, audio_bytes: bytes) -> np.ndarray:
         try:

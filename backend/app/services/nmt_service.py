@@ -55,6 +55,12 @@ _HALLUCINATION_PATTERNS = [
     re.compile(r'\bplease\s+subscribe\b', re.IGNORECASE),
     re.compile(r'\blike\s+and\s+subscribe\b', re.IGNORECASE),
 
+    # C-2. 단독 "Thank you" 환각 — "감사합니다" 가 silence-phrase 가드를 metric
+    # 좋아서 통과한 후 NMT 가 standalone "Thank you" 로 번역. 학생 화면에 강사가
+    # 안 한 인사 음성이 송출되는 치명 케이스 차단. ^...$ 앵커로 단독 매칭만 —
+    # "thank you for asking" 같은 정상 문맥 통과.
+    re.compile(r'^\s*thank\s*you\s*[\.!\?…]?\s*$', re.IGNORECASE),
+
     # D. 자막 메타 / 포맷 누설
     re.compile(r'^\s*WEBVTT\b'),
     re.compile(r'^\s*\d{2}:\d{2}:\d{2}[,\.]?\d*'),
@@ -147,6 +153,17 @@ class NMTService:
             self._mode = "hf"
 
     # ── 도메인 용어집 ────────────────────────────────────────────────────────
+
+    def get_glossary_terms(self) -> tuple[set[str], set[str]]:
+        """현재 적용 중인 용어집의 (한국어 set, 영어 set) 반환.
+        ws.py 의 ASR 검증 로직 (영어 비중 가드) 이 도메인 용어를 false positive
+        에서 제외하는 데 사용. 빈 dict / 미설정이면 빈 set 반환.
+        """
+        if not self._glossary_pairs:
+            return set(), set()
+        ko_terms = {ko for ko, _ in self._glossary_pairs}
+        en_terms = {en for _, en in self._glossary_pairs}
+        return ko_terms, en_terms
 
     def set_glossary(self, glossary: dict[str, str] | None) -> None:
         """한글 → 영어 도메인 용어 매핑 주입. None / 빈 dict 면 비활성.

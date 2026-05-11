@@ -130,10 +130,19 @@ function startBackend() {
       PYTHONUNBUFFERED: '1',       // Python stdout 버퍼링 해제
       PYTHONUTF8: '1',             // stdout 인코딩 UTF-8 강제
       PYTHONIOENCODING: 'utf-8',   // 더 명시적인 UTF-8 강제
+      // 백엔드가 Electron 부모 PID 를 감시 — .exe 가 닫히면 백엔드는 5분 더 살아
+      // 학생 자막 다운로드 받게 한 후 자살. 재실행 시 startBackend 첫 줄 taskkill 이
+      // 이 grace 도중에도 강제 kill (의도된 동작).
+      AUNION_PARENT_PID: String(process.pid),
     },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
+    // detached: 부모 (Electron) 가 죽어도 백엔드는 살아남도록 — Windows 에서 부모-자식 관계
+    // 분리. 이렇게 안 하면 Electron 종료 시 OS 가 자식 프로세스도 같이 정리해 5분 grace 가 무력화됨.
+    detached: true,
   })
+  // detached 와 함께 unref() — 부모의 event loop 에 자식이 영향 안 미치게.
+  backendProcess.unref()
 
   // ── stdout: __AUNION_STATUS__ 파싱 + 일반 로그 전달 ──────────────
   let stdoutBuf = ''
@@ -440,19 +449,9 @@ app.whenReady().then(() => {
   }
 })
 
-function killBackend() {
-  if (backendProcess) {
-    backendProcess.kill()
-    backendProcess = null
-  }
-  try {
-    require('child_process').execSync('taskkill /F /IM aunion_backend.exe /T', { stdio: 'ignore' })
-  } catch {}
-}
-
-app.on('before-quit', killBackend)
-
+// .exe 종료 시 backend 는 일부러 안 죽임 — backend 가 부모 PID 감시해 자체적으로
+// 5분 grace (학생 자막 다운로드 시간) 후 자살. 재실행 시 startBackend() 의 taskkill
+// 이 이 grace 중인 backend 도 강제 kill 해 새 인스턴스로 깨끗하게 시작.
 app.on('window-all-closed', () => {
-  killBackend()
   app.quit()
 })

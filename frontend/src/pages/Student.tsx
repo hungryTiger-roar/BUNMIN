@@ -10,6 +10,7 @@ import {
 } from '@/stores/preferencesStore'
 import { useWebSocket } from '@/hooks/useWebSocket'
 import { useTTS } from '@/hooks/useTTS'
+import { useDelayBufferPlayer } from '@/hooks/useDelayBufferPlayer'
 import ParticipantsPanel from '@/components/common/ParticipantsPanel'
 import MaterialViewToggle from '@/components/common/MaterialViewToggle'
 import { StudentCursorOverlay, useCursorOverlay } from '@/components/student/StudentCursorOverlay'
@@ -136,41 +137,101 @@ function Student() {
     toggleTheme,
   } = usePreferencesStore()
 
-  // TTS — Student 전용, audioLang 변경 시 엔진 재생성 (original 선택 시 off로 대체해 엔진 초기화 생략)
-  const { synthesize, unlockAudio: unlockTTS, status: ttsStatus, setVolume: setTTSVolume } = useTTS(true, audioLang === 'original' ? 'off' : audioLang)
-
-  const synthesizeRef = useRef(synthesize)
-  synthesizeRef.current = synthesize
+  // TTS — Student 전용, audioLang 변경 시 엔진 재생성.
+  // ttsMs 는 player 가 playSentence return 에서 받아 commitSubtitle 에 전달 → 자막
+  // 표시 시점에 함께 store 에 기록 (별도 patch 경로 없음).
+  // audioLang === 'original' 이면 WebRTC 원본 음성 (delay 적용) 으로 듣기 → TTS 엔진 불필요해
+  // 'off' 로 대체해 WASM 초기화 생략.
+  const {
+    playSentence,
+    unlockAudio: unlockTTS,
+    status: ttsStatus,
+    setVolume: setTTSVolume,
+  } = useTTS(true, audioLang === 'original' ? 'off' : audioLang)
 
   const audioLangRef = useRef(audioLang)
   useEffect(() => { audioLangRef.current = audioLang }, [audioLang])
 
   const [isAudioUnlocked, setIsAudioUnlocked] = useState(false)
   const isAudioUnlockedRef = useRef(false)
-  // 자동 unlock 시도 완료 여부 — 시도 중에는 모달 안 보이게 해 UX 깜빡임 방지.
-  // (autoEnter / sessionStorage 경로는 비동기라 첫 렌더 시점엔 결과 모름)
   const [autoUnlockSettled, setAutoUnlockSettled] = useState(false)
 
   const originalAudioRef = useRef<HTMLAudioElement>(null)
 
+  // 원본 음성 (WebRTC) → DelayNode → GainNode → destination 파이프라인.
+  //   - <audio> 엘리먼트는 트랙 keepalive 용으로 srcObject 유지 + 항상 muted=true.
+  //   - 실제 출력은 Web Audio API 라인에서 발생 → DelayNode 로 자막/그림과 같은 박자.
+  //   - AudioContext 는 user gesture (unlockAudio) 시점에 초기화 (브라우저 자동재생 정책).
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const delayNodeRef = useRef<DelayNode | null>(null)
+  const gainNodeRef = useRef<GainNode | null>(null)
+  const pendingAudioStreamRef = useRef<MediaStream | null>(null)
+
+  // delayMs 는 useDelayBufferPlayer 와 동일한 값 사용 — 강사 박자 정합성.
+  const delayMs = Number(import.meta.env.VITE_SYNC_DELAY_MS) || 15000
+
   const unlockAudio = useCallback(async () => {
     const ok = await unlockTTS()
-    if (!ok) {
-      // 자동 시도 (autoEnter 경유) 가 브라우저 정책에 막힌 경우.
-      // isAudioUnlocked 는 false 유지 → 모달 그대로 → 사용자 클릭 유도.
-      return
-    }
+    if (!ok) return
     isAudioUnlockedRef.current = true
     setIsAudioUnlocked(true)
+
+    // AudioContext + DelayNode 초기화 — user gesture 내부라 안전.
+    if (!audioContextRef.current) {
+      try {
+        const ctx = new AudioContext()
+        // maxDelayTime 은 delayMs + 5s buffer (실행 중 동적 조정 여지).
+        const delayNode = ctx.createDelay((delayMs / 1000) + 5)
+        delayNode.delayTime.value = delayMs / 1000
+        const gainNode = ctx.createGain()
+        gainNode.gain.value = 0  // 초기 0 — sync effect 가 즉시 올림
+        delayNode.connect(gainNode).connect(ctx.destination)
+
+        audioContextRef.current = ctx
+        delayNodeRef.current = delayNode
+        gainNodeRef.current = gainNode
+
+        // ontrack 이 unlock 보다 먼저 도착해서 보관된 stream 이 있으면 지금 연결.
+        if (pendingAudioStreamRef.current) {
+          try {
+            const src = ctx.createMediaStreamSource(pendingAudioStreamRef.current)
+            src.connect(delayNode)
+            sourceNodeRef.current = src
+          } catch (err) {
+            console.error('[OriginalAudio] pending stream 연결 실패:', err)
+          }
+        }
+
+        if (ctx.state === 'suspended') {
+          await ctx.resume()
+        }
+        console.log(`[OriginalAudio] DelayNode 파이프라인 초기화 완료 (delay=${delayMs}ms)`)
+      } catch (err) {
+        console.error('[OriginalAudio] AudioContext 초기화 실패:', err)
+      }
+    }
+
     originalAudioRef.current?.play().catch(() => {})
     console.log('[Audio] 재생 잠금 해제됨')
-  }, [unlockTTS])
+  }, [unlockTTS, delayMs])
 
-  const onTranslation = useCallback((text: string) => {
-    if (isAudioUnlockedRef.current && audioLangRef.current !== 'original') {
-      synthesizeRef.current(text, audioLangRef.current)
-    }
-  }, [])
+  // 학생측 player — wall-clock + 고정 lag (delay-buffer) 로 강사 박자 그대로 재현.
+  // delayMs 는 unlockAudio 위에서 선언 — 원본 음성 DelayNode 와 동일한 값 공유.
+  const playSentenceRef = useRef(playSentence)
+  useEffect(() => { playSentenceRef.current = playSentence }, [playSentence])
+
+  const unitPlayer = useDelayBufferPlayer({
+    playSentence: (text: string, lang: TranslationLang) =>
+      playSentenceRef.current(text, lang),
+    isAudioUnlocked: () => isAudioUnlockedRef.current,
+    getAudioLang: () => audioLangRef.current,
+    delayMs,
+  })
+
+  useEffect(() => {
+    console.log(`[SyncMode] delay-buffer (delay=${delayMs}ms)`)
+  }, [delayMs])
 
   // ref 기반 커서 오버레이 (React 상태 없이 DOM 직접 조작)
   // slideRef를 전달해서 컨테이너 크기 기준으로 px 변환
@@ -207,9 +268,30 @@ function Student() {
         }
       } else if (e.track.kind === 'audio') {
         const audioStream = new MediaStream([e.track])
+        // <audio> 엘리먼트: 트랙 keepalive 용 srcObject 만 유지, 출력은 항상 muted.
+        // 실제 재생은 Web Audio API (DelayNode → GainNode) 라인 — 자막/그림과 같은
+        // 박자로 wall-clock + delayMs 후 출력.
         if (originalAudioRef.current) {
           originalAudioRef.current.srcObject = audioStream
-          originalAudioRef.current.muted = audioLangRef.current !== 'original'
+          originalAudioRef.current.muted = true
+        }
+        // AudioContext 가 이미 있으면 즉시 wire, 없으면 unlockAudio 시점에 처리.
+        pendingAudioStreamRef.current = audioStream
+        const ctx = audioContextRef.current
+        const delayNode = delayNodeRef.current
+        if (ctx && delayNode) {
+          try { sourceNodeRef.current?.disconnect() } catch {}
+          try {
+            const src = ctx.createMediaStreamSource(audioStream)
+            src.connect(delayNode)
+            sourceNodeRef.current = src
+            pendingAudioStreamRef.current = null
+            console.log('[OriginalAudio] WebRTC audio track 즉시 DelayNode 에 연결')
+          } catch (err) {
+            console.error('[OriginalAudio] stream 연결 실패:', err)
+          }
+        } else {
+          console.log('[OriginalAudio] WebRTC audio track 도착 — AudioContext 대기 중 (unlockAudio 시 연결)')
         }
       }
     }
@@ -236,10 +318,33 @@ function Student() {
     pc.addIceCandidate(candidate).catch(() => { /* 핸드셰이크 도중 도착 가능 — 무시 */ })
   }, [])
 
+  // unit player 콜백 — useWebSocket 이 호출. transcription 은 sentence unit 으로,
+  // lifecycle (lecture_end/pause/resume) 은 lifecycle unit 으로 큐에 적재.
+  const onTranscription = useCallback((params: {
+    text: string
+    commitSubtitle: (ttsMs?: number) => void
+    speechStartAt: number
+    sentAt: number
+  }) => {
+    unitPlayer.enqueueSentence(params)
+  }, [unitPlayer])
+
+  const onLifecycle = useCallback((apply: () => void | Promise<void>, label: string) => {
+    unitPlayer.enqueueLifecycle(apply, label)
+  }, [unitPlayer])
+
   const { isConnected, connect, send, sendChat, sendStudentRename } = useWebSocket(
     WS_PIPELINE_URL,
     'student',
-    { onCursor, onDraw, onTranslation, onWebRtcOffer: handleWebRtcOffer, onWebRtcIce: handleWebRtcIce }
+    {
+      onCursor,
+      onDraw,
+      onWebRtcOffer: handleWebRtcOffer,
+      onWebRtcIce: handleWebRtcIce,
+      unitPlayer,
+      onTranscription,
+      onLifecycle,
+    },
   )
 
   useEffect(() => { sendRef.current = send }, [send])
@@ -302,9 +407,29 @@ function Student() {
   const dragStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 })
   const zoomRef = useRef(zoom)
 
+  // 자막 다운로드 모달 트리거 — sessionId null → 값 transition.
+  //   학생은 강의 진행 중엔 sessionId 가 null 이고, lecture_end 메시지 도착 시점에
+  //   useWebSocket 이 즉시 setSessionId 를 호출하므로 그 순간 모달이 뜸.
+  //   (lifecycle queue 에 들어간 UI 종료 전환은 발화 큐가 다 끝난 뒤 적용되지만,
+  //    sessionId 자체는 큐와 무관하게 즉시 세팅되어 모달은 빠르게 노출.)
+  const prevSessionIdRef = useRef<string | null>(null)
   useEffect(() => {
-    if (sessionId) setShowTranscriptModal(true)
+    if (!prevSessionIdRef.current && sessionId) {
+      setShowTranscriptModal(true)
+    }
+    prevSessionIdRef.current = sessionId
   }, [sessionId])
+
+  // 강의 종료 시 캔버스 잔류 제거 — DrawingCanvas pageActionsRef 가 page 번호로만
+  // keying 되어 다음 강의에서 옛 강의의 stroke 가 그대로 노출되는 것 차단.
+  // isLectureStarted true→false 전환 (lecture_end lifecycle apply 적용 후) 시점에 정리.
+  const prevIsLectureStartedRef = useRef<boolean>(false)
+  useEffect(() => {
+    if (prevIsLectureStartedRef.current && !isLectureStarted) {
+      drawingCanvasRef.current?.clearAllPages()
+    }
+    prevIsLectureStartedRef.current = isLectureStarted
+  }, [isLectureStarted])
 
   useEffect(() => {
     let cancelled = false
@@ -480,18 +605,40 @@ function Student() {
   // 줌 배지 타이머 정리
   useEffect(() => () => { if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current) }, [])
 
+  // 원본 음성 Web Audio 파이프라인 cleanup — unmount 시 노드 해제 + 컨텍스트 종료.
+  useEffect(() => () => {
+    try { sourceNodeRef.current?.disconnect() } catch {}
+    try { delayNodeRef.current?.disconnect() } catch {}
+    try { gainNodeRef.current?.disconnect() } catch {}
+    audioContextRef.current?.close().catch(() => {})
+    sourceNodeRef.current = null
+    delayNodeRef.current = null
+    gainNodeRef.current = null
+    audioContextRef.current = null
+  }, [])
+
   // volume/muted → TTS GainNode 실시간 동기화
   useEffect(() => {
     setTTSVolume(volume, isMuted)
   }, [volume, isMuted, setTTSVolume])
 
-  // audioLang/volume/muted → 원본 오디오 엘리먼트 동기화
+  // audioLang/volume/muted → 원본 음성 GainNode 동기화 (Web Audio 라인이 실제 출력).
+  // <audio> 엘리먼트는 항상 muted=true — 트랙 keepalive 용으로만 유지.
   useEffect(() => {
     const audio = originalAudioRef.current
-    if (!audio) return
-    audio.muted = audioLang !== 'original' || isMuted
-    audio.volume = volume / 100
-  }, [audioLang, volume, isMuted])
+    if (audio) {
+      audio.muted = true
+      audio.volume = 0
+    }
+    const gain = gainNodeRef.current
+    const ctx = audioContextRef.current
+    if (gain && ctx) {
+      const target = (audioLang === 'original' && !isMuted) ? (volume / 100) : 0
+      // 클릭 노이즈 방지 — 50ms ramp 으로 부드럽게 전환.
+      gain.gain.cancelScheduledValues(ctx.currentTime)
+      gain.gain.setTargetAtTime(target, ctx.currentTime, 0.05)
+    }
+  }, [audioLang, volume, isMuted, isAudioUnlocked])
 
   useEffect(() => {
     chatScrollRef.current?.scrollTo({

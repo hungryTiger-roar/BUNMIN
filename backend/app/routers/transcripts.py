@@ -35,6 +35,8 @@ class TranscriptSegment(BaseModel):
     ts_utc: str          # ISO8601 절대 시간
     original: str
     translated: str
+    slide_id: Optional[str] = None
+    page: Optional[int] = None
 
 
 class TranscriptMeta(BaseModel):
@@ -91,8 +93,16 @@ def start_session(slide_id: Optional[str]) -> str:
     return session_id
 
 
-def append_segment(session_id: str, original: str, translated: str) -> None:
-    """번역 결과를 JSONL 한 줄로 append. 세션 비활성이면 무시."""
+def append_segment(
+    session_id: str,
+    original: str,
+    translated: str,
+    slide_id: Optional[str] = None,
+    page: Optional[int] = None,
+) -> None:
+    """번역 결과를 JSONL 한 줄로 append. 세션 비활성이면 무시.
+    slide_id / page: 발화 시작 시점의 페이지. 다운로드 자막에 메타로 표시.
+    """
     session = active_sessions.get(session_id)
     if session is None:
         return
@@ -107,6 +117,8 @@ def append_segment(session_id: str, original: str, translated: str) -> None:
         "ts_utc": ts_utc,
         "original": original,
         "translated": translated,
+        "slide_id": slide_id,
+        "page": page,
     }
 
     with open(_jsonl_path(session_id), "a", encoding="utf-8") as f:
@@ -192,12 +204,14 @@ def _to_srt(segments: list[dict], default_duration: float = 4.0) -> str:
 
 
 def _to_txt(segments: list[dict]) -> str:
-    """세그먼트 → 평문."""
+    """세그먼트 → 평문. 페이지 정보가 있으면 시간 옆에 (page N) 으로 표시."""
     lines: list[str] = []
     for seg in segments:
         t = int(float(seg["t_offset"]))
         mins, secs = divmod(t, 60)
-        lines.append(f"[{mins:02d}:{secs:02d}] {seg.get('original', '')}")
+        page = seg.get("page")
+        page_tag = f" (page {page})" if isinstance(page, int) else ""
+        lines.append(f"[{mins:02d}:{secs:02d}]{page_tag} {seg.get('original', '')}")
         lines.append(f"          → {seg.get('translated', '')}")
     return "\n".join(lines)
 

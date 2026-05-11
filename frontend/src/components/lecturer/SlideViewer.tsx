@@ -108,11 +108,12 @@ function SlideViewer({ onPageChange, children, containerRef }: SlideViewerProps)
       {/* 강의자료 원본/번역 토글 (우측 상단) */}
       <MaterialViewToggle className="absolute top-3 right-3 z-40" locale="ko" />
 
-      {/* 이전/다음 버튼 (호버 시 표시) */}
+      {/* 이전/다음 버튼 (호버 시 표시) — z-40 으로 DrawingCanvas (z-30) 위에 두어
+           필기 모드 활성 시에도 버튼 클릭 가로채이지 않도록. */}
       <button
         onClick={prevPage}
         disabled={currentPage <= 1}
-        className="absolute left-2 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-0"
+        className="absolute left-2 top-1/2 -translate-y-1/2 z-40 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-0"
       >
         <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -122,7 +123,7 @@ function SlideViewer({ onPageChange, children, containerRef }: SlideViewerProps)
       <button
         onClick={nextPage}
         disabled={currentPage >= totalPages}
-        className="absolute right-2 top-1/2 -translate-y-1/2 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-0"
+        className="absolute right-2 top-1/2 -translate-y-1/2 z-40 p-3 bg-black/50 hover:bg-black/70 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-0"
       >
         <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
