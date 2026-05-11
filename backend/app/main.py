@@ -137,7 +137,7 @@ def _is_cached(model_name: str) -> bool:
     """모델이 로컬 디렉토리 또는 HF 캐시에 있는지 판단.
       - 로컬 경로 형식(절대/`models/...`): 디렉토리 + 가중치 존재 검사
       - 단순 이름(piper, rapidocr): True (서비스 자체에서 처리)
-      - HF repo_id: 캐시 검사
+      - HF repo_id: (1) CT2 변환된 로컬 디렉토리(<name>-ct2) 우선 → (2) HF 캐시 검사
     """
     from pathlib import Path
     # 로컬 경로 형식
@@ -147,6 +147,11 @@ def _is_cached(model_name: str) -> bool:
         return _has_weights(target)
     # 서비스 내부 처리 (piper, rapidocr 등)
     if "/" not in model_name:
+        return True
+    # CT2 동봉본 검사 — NLLB 처럼 HF repo_id 가 default 지만 CT2 가 설치본에 동봉되는 케이스.
+    # NMTService 가 _ct2_model_dir 로 우선 로드하므로 이 디렉토리만 있으면 다운로드 불필요.
+    ct2_name = model_name.split("/")[-1] + "-ct2"
+    if resolve_model_dir(ct2_name) is not None:
         return True
     # HF repo_id → 캐시 검사
     try:
