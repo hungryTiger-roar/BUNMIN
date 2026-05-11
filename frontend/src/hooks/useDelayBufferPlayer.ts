@@ -164,31 +164,47 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
       `lecSpan=${params.sentAt - params.speechStartAt}ms scheduled=+${Math.round(ahead)}ms`,
     )
 
-    // 예약 시간에 audio 큐에 push — sequential 재생 보장.
-    // 자막은 audio 가 실제 시작될 때 표시 → 자막↔TTS 동기화. audio off / original 이면
-    // schedule 시점에 즉시 표시 (audio anchor 없음 → wall-clock 시점에 맞춰 등장).
-    // 'original' = WebRTC 강사 원본 음성을 별도 DelayNode 로 듣는 모드 → TTS 합성 불필요.
+    // 정책 (옵션 1): TTS 영어 엔진 항시 합성. audioLang 에 따라 TTS GainNode 가 mute/unmute.
+    //   - 사용자가 'en' ↔ 'original' 토글 시 instant 전환 가능 (silence gap 없음).
+    //   - 'original' 모드에서도 TTS 는 합성됨 → muted 출력 (CPU ~3% 추가, Zoom 보다 가벼움).
+    //
+    // 자막 commit 타이밍 — 모드별로 다름:
+    //   - 'en': TTS audioStartedAt 시점에 commit (자막↔TTS 동기)
+    //   - 그 외 ('original'/'off'/'de'/'es'/'ru'): schedule 시점 즉시 commit
+    //     ('original' 은 wall-clock 기준 원본 음성과 ~50ms 차이로 자연스럽게 매칭)
     scheduleAt(targetWall, () => {
       const opts = optionsRef.current
-      const lang = opts.getAudioLang()
-      if (lang === 'off' || lang === 'original' || !opts.isAudioUnlocked()) {
+      if (!opts.isAudioUnlocked()) {
         try { params.commitSubtitle() } catch (err) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', err) }
         return
       }
+      // schedule 시점 lang 으로 자막 anchor 결정 (실행 시점에 토글돼도 일관 유지).
+      const langAtSchedule = opts.getAudioLang()
+      const useTtsAnchor = (langAtSchedule === 'en')
+
+      if (!useTtsAnchor) {
+        // 'en' 외 모드 — 자막 즉시 commit (wall-clock anchor).
+        try { params.commitSubtitle() } catch (err) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', err) }
+      }
+
       audioQueueRef.current.push(async () => {
         try {
-          const result = await opts.playSentence(params.text, opts.getAudioLang())
-          // audio 시작 시점에 자막 표시 — 이전 audio 가 큐에서 대기 중이었더라도
-          // 실제 재생 시작 시각 (audioStartedAt) 에 맞춰 등장.
-          const subtitleDelay = Math.max(0, result.audioStartedAt - Date.now())
-          setTimeout(() => {
-            try { params.commitSubtitle(result.ttsMs) } catch (err) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', err) }
-          }, subtitleDelay)
+          // TTS 합성은 항상 진행 — mute 여부는 TTS GainNode 가 audioLang 에 따라 처리.
+          const result = await opts.playSentence(params.text, 'en')
+          if (useTtsAnchor) {
+            // 'en' 모드 sentence — audio 시작 시점에 자막 표시 (자막↔TTS 동기).
+            const subtitleDelay = Math.max(0, result.audioStartedAt - Date.now())
+            setTimeout(() => {
+              try { params.commitSubtitle(result.ttsMs) } catch (err) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', err) }
+            }, subtitleDelay)
+          }
           await result.ended
         } catch (err) {
           console.error('[DelayBufferPlayer] playSentence 실패:', err)
-          // 합성 실패해도 자막은 보여줘야 — 즉시 표시.
-          try { params.commitSubtitle() } catch (e) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', e) }
+          // 합성 실패 — 'en' anchor 였으면 자막 미표시 상태이므로 fallback commit.
+          if (useTtsAnchor) {
+            try { params.commitSubtitle() } catch (e) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', e) }
+          }
         }
       })
       processAudioQueue()

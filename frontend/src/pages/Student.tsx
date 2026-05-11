@@ -137,17 +137,16 @@ function Student() {
     toggleTheme,
   } = usePreferencesStore()
 
-  // TTS — Student 전용, audioLang 변경 시 엔진 재생성.
-  // ttsMs 는 player 가 playSentence return 에서 받아 commitSubtitle 에 전달 → 자막
-  // 표시 시점에 함께 store 에 기록 (별도 patch 경로 없음).
-  // audioLang === 'original' 이면 WebRTC 원본 음성 (delay 적용) 으로 듣기 → TTS 엔진 불필요해
-  // 'off' 로 대체해 WASM 초기화 생략.
+  // TTS — Student 전용, 영어 엔진 항시 로드 정책.
+  // audioLang 토글 (en ↔ original ↔ off ...) 시 엔진 재초기화 비용 제거 + 모드 전환 즉시 반응.
+  // de/es/ru 등 비영어 옵션 선택 시 TTS 음성은 안 나가지만 (다국어 정책 보류), dropdown 은 유지.
+  // ttsMs 는 player 가 playSentence return 에서 받아 commitSubtitle 에 전달 → 자막 commit 시점 기록.
   const {
     playSentence,
     unlockAudio: unlockTTS,
     status: ttsStatus,
     setVolume: setTTSVolume,
-  } = useTTS(true, audioLang === 'original' ? 'off' : audioLang)
+  } = useTTS(true, 'en')
 
   const audioLangRef = useRef(audioLang)
   useEffect(() => { audioLangRef.current = audioLang }, [audioLang])
@@ -198,6 +197,7 @@ function Student() {
             const src = ctx.createMediaStreamSource(pendingAudioStreamRef.current)
             src.connect(delayNode)
             sourceNodeRef.current = src
+            pendingAudioStreamRef.current = null
           } catch (err) {
             console.error('[OriginalAudio] pending stream 연결 실패:', err)
           }
@@ -271,9 +271,13 @@ function Student() {
         // <audio> 엘리먼트: 트랙 keepalive 용 srcObject 만 유지, 출력은 항상 muted.
         // 실제 재생은 Web Audio API (DelayNode → GainNode) 라인 — 자막/그림과 같은
         // 박자로 wall-clock + delayMs 후 출력.
+        // play() 명시 호출 — autoPlay 속성이 srcObject 교체 시점 (재협상) 에 항상 트리거
+        // 되진 않음. 일부 Chrome 에서 element 가 paused 면 WebRTC 디코더가 frame 흘리는 걸
+        // 중단 → MediaStreamSource 가 무음 받음 → 'original' 선택해도 안 들림.
         if (originalAudioRef.current) {
           originalAudioRef.current.srcObject = audioStream
           originalAudioRef.current.muted = true
+          originalAudioRef.current.play().catch(() => { /* 다음 인터랙션에서 sync effect 가 재시도 */ })
         }
         // AudioContext 가 이미 있으면 즉시 wire, 없으면 unlockAudio 시점에 처리.
         pendingAudioStreamRef.current = audioStream
@@ -617,26 +621,99 @@ function Student() {
     audioContextRef.current = null
   }, [])
 
-  // volume/muted → TTS GainNode 실시간 동기화
+  // 원본 AudioContext suspend 복구 (옵션 B) — sync 보존형.
+  //   단순 ctx.resume() 은 DelayNode 의 stale buffer 가 그대로 출력돼 visual/자막과
+  //   N초 (= suspend 시간) desync 됨. 대신 resume 직후 DelayNode 와 MediaStreamSource 를
+  //   재생성해 buffer 를 비우고 새로 15초 채우게 함 → 복귀 후 15초 무음 후 sync 그대로 복구.
+  //   gainNode 는 유지 (audioLang 별 mute 상태 보존).
   useEffect(() => {
-    setTTSVolume(volume, isMuted)
-  }, [volume, isMuted, setTTSVolume])
+    const rebuildPipeline = async () => {
+      const ctx = audioContextRef.current
+      const gain = gainNodeRef.current
+      if (!ctx || !gain) return
+      if (ctx.state !== 'suspended') return
+
+      try {
+        try { sourceNodeRef.current?.disconnect() } catch { /* ignore */ }
+        try { delayNodeRef.current?.disconnect() } catch { /* ignore */ }
+        sourceNodeRef.current = null
+        delayNodeRef.current = null
+
+        await ctx.resume()
+
+        // 새 DelayNode — 이전 buffer (suspend 시점에 freeze 된 stale 샘플) 폐기
+        const newDelayNode = ctx.createDelay((delayMs / 1000) + 5)
+        newDelayNode.delayTime.value = delayMs / 1000
+        newDelayNode.connect(gain)
+        delayNodeRef.current = newDelayNode
+
+        // WebRTC MediaStream 재연결 — audio element 의 srcObject 우선, 없으면 pending
+        const audioEl = originalAudioRef.current
+        const stream = (audioEl?.srcObject as MediaStream | null)
+                    ?? pendingAudioStreamRef.current
+        if (stream) {
+          try {
+            const src = ctx.createMediaStreamSource(stream)
+            src.connect(newDelayNode)
+            sourceNodeRef.current = src
+            // audio element 도 재생 보장 (suspend 중 paused 됐을 수 있음)
+            if (audioEl?.paused) audioEl.play().catch(() => { /* 다음 인터랙션 재시도 */ })
+          } catch (err) {
+            console.error('[OriginalAudio] resume 후 source 재연결 실패:', err)
+          }
+        }
+        console.log('[OriginalAudio] sync 보존 — DelayNode 재생성 (15초 후 정상 출력)')
+      } catch (err) {
+        console.error('[OriginalAudio] resume/rebuild 실패:', err)
+      }
+    }
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') rebuildPipeline()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    window.addEventListener('pageshow', rebuildPipeline)
+    window.addEventListener('focus', rebuildPipeline)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('pageshow', rebuildPipeline)
+      window.removeEventListener('focus', rebuildPipeline)
+    }
+  }, [delayMs])
+
+  // volume/muted/audioLang → TTS GainNode 실시간 동기화.
+  // audioLang !== 'en' 이면 강제 mute — 토글 시 in-flight TTS 가 원본 음성과 동시 출력되는 것 차단.
+  // (큐 새 진입은 unitPlayer 의 gate 가 막지만, 이미 재생 중인 sentence 는 GainNode mute 로만 차단 가능)
+  useEffect(() => {
+    const ttsEffectiveMuted = isMuted || audioLang !== 'en'
+    setTTSVolume(volume, ttsEffectiveMuted)
+  }, [volume, isMuted, audioLang, setTTSVolume])
 
   // audioLang/volume/muted → 원본 음성 GainNode 동기화 (Web Audio 라인이 실제 출력).
-  // <audio> 엘리먼트는 항상 muted=true — 트랙 keepalive 용으로만 유지.
+  // <audio> 엘리먼트 정책 — Chrome WebRTC 트랙은 attached 된 element 가 "playing" 상태일 때만
+  // MediaStreamAudioSourceNode 로 audio frames 를 흘려보냄. muted=true 는 OK 지만 volume=0 까지
+  // 더하면 일부 Chrome 버전에서 트랙 디코딩 중단 → DelayNode 버퍼가 무음으로 채워져 'original' 선택해도
+  // 안 들리는 증상 발생. 그래서 volume 은 1 그대로 두고 muted 만 true 로 유지.
   useEffect(() => {
     const audio = originalAudioRef.current
     if (audio) {
       audio.muted = true
-      audio.volume = 0
+      // 명시적으로 재생 유지 — 어떤 사유로든 pause 되면 트랙 디코딩 중단됨.
+      if (audio.paused) {
+        audio.play().catch(() => {})
+      }
     }
     const gain = gainNodeRef.current
     const ctx = audioContextRef.current
     if (gain && ctx) {
       const target = (audioLang === 'original' && !isMuted) ? (volume / 100) : 0
-      // 클릭 노이즈 방지 — 50ms ramp 으로 부드럽게 전환.
-      gain.gain.cancelScheduledValues(ctx.currentTime)
-      gain.gain.setTargetAtTime(target, ctx.currentTime, 0.05)
+      // 10ms 선형 ramp — 사람의 짧은 gap 감지 임계(~5-10ms) 아래라 "즉시" 로 느껴지면서
+      // sample boundary 클릭/팝 차단. (이전 setTargetAtTime(0.05) 는 ~250ms 까지 끌어
+      // 토글 시 부드럽지만 살짝 느린 감 있었음.)
+      const now = ctx.currentTime
+      gain.gain.cancelScheduledValues(now)
+      gain.gain.setValueAtTime(gain.gain.value, now)
+      gain.gain.linearRampToValueAtTime(target, now + 0.01)
     }
   }, [audioLang, volume, isMuted, isAudioUnlocked])
 
