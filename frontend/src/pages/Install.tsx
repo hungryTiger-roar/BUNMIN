@@ -28,6 +28,14 @@ interface BackendHealth {
   download?: DownloadInfo | null
 }
 
+interface DiskCheck {
+  ok: boolean
+  free_gb: number
+  required_gb: number
+  drive: string
+  shortfall_gb: number
+}
+
 // ─── 포맷 유틸 ───────────────────────────────────────────────────────────────
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return '0 B'
@@ -61,7 +69,30 @@ function Install() {
   const [download, setDownload] = useState<DownloadInfo | null>(null)
   const [errorMsg, setErrorMsg] = useState<string>('')
   const [starting, setStarting] = useState(false)
+  const [disk, setDisk] = useState<DiskCheck | null>(null)
+  const [diskError, setDiskError] = useState<string | null>(null)
   const pollTimerRef = useRef<number | null>(null)
+
+  // disk-check 는 마법사 띄울 때 한 번만 — 다운로드 중엔 의미 없음
+  useEffect(() => {
+    let cancelled = false
+    fetch(`${API_BASE}/api/install/disk-check`)
+      .then(async (r) => {
+        if (cancelled) return
+        if (!r.ok) {
+          setDiskError(`HTTP ${r.status}`)
+          return
+        }
+        const data: DiskCheck = await r.json()
+        if (!cancelled) setDisk(data)
+      })
+      .catch((e) => {
+        if (!cancelled) setDiskError(e instanceof Error ? e.message : String(e))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -106,7 +137,22 @@ function Install() {
     if (starting) return
     setStarting(true)
     try {
-      await fetch(`${API_BASE}/api/install/start-download`, { method: 'POST' })
+      const res = await fetch(`${API_BASE}/api/install/start-download`, { method: 'POST' })
+      if (!res.ok) {
+        // 백엔드가 디스크 부족 등으로 거부한 경우
+        const body = await res.json().catch(() => null)
+        const detail = body?.detail
+        if (detail && typeof detail === 'object' && detail.code === 'insufficient_disk') {
+          setErrorMsg(
+            `디스크 여유 공간이 부족합니다. 사용 가능: ${detail.free_gb}GB / 필요: ${detail.required_gb}GB.\n` +
+              `다른 파일을 정리한 뒤 앱을 다시 실행해 주세요.`,
+          )
+        } else {
+          setErrorMsg(`다운로드 시작 거부: HTTP ${res.status}`)
+        }
+        setPhase('error')
+        return
+      }
       setPhase('downloading')
     } catch (e) {
       setErrorMsg(`다운로드 시작 요청 실패: ${e}`)
@@ -127,7 +173,12 @@ function Install() {
     <div className="min-h-screen bg-stone-100 flex items-center justify-center p-6 antialiased">
       <Card>
         {phase === 'intro' && (
-          <IntroPanel onStart={handleStartDownload} starting={starting} />
+          <IntroPanel
+            onStart={handleStartDownload}
+            starting={starting}
+            disk={disk}
+            diskError={diskError}
+          />
         )}
         {phase === 'downloading' && (
           <DownloadPanel download={download} onCancel={handleCancel} />
@@ -180,7 +231,25 @@ function StepFooter({ children }: { children: React.ReactNode }) {
 }
 
 // ─── Step 1: Intro ──────────────────────────────────────────────────────────
-function IntroPanel({ onStart, starting }: { onStart: () => void; starting: boolean }) {
+function IntroPanel({
+  onStart,
+  starting,
+  disk,
+  diskError,
+}: {
+  onStart: () => void
+  starting: boolean
+  disk: DiskCheck | null
+  diskError: string | null
+}) {
+  // 세 상태:
+  //   diskError != null      → 체크 실패 — 다운로드 차단
+  //   disk != null && !disk.ok → 디스크 부족 — 다운로드 차단
+  //   disk == null && diskError == null → 아직 응답 대기 — 버튼은 일단 활성
+  const diskInsufficient = disk !== null && !disk.ok
+  const diskCheckFailed = diskError !== null
+  const blockDownload = diskInsufficient || diskCheckFailed
+
   return (
     <>
       <StepHeader
@@ -214,8 +283,70 @@ function IntroPanel({ onStart, starting }: { onStart: () => void; starting: bool
         <div className="grid grid-cols-3 gap-3 mt-6">
           <Meta icon={<IconClock />} label="소요 시간" value="30~60분" />
           <Meta icon={<IconNetwork />} label="인터넷 연결" value="필요" />
-          <Meta icon={<IconLightning />} label="다음 실행" value="즉시 시작" />
+          <Meta
+            icon={<IconDisk />}
+            label="필요 공간"
+            value={
+              disk
+                ? `${disk.required_gb.toFixed(0)} GB`
+                : diskCheckFailed
+                ? '확인 실패'
+                : '확인 중'
+            }
+          />
         </div>
+
+        {/* 디스크 체크 실패 (백엔드/네트워크 문제) */}
+        {diskCheckFailed && (
+          <div className="mt-4 px-4 py-3 rounded-lg border bg-red-50 border-red-200 text-red-700 text-[13px] flex items-start gap-3">
+            <svg className="w-4 h-4 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div className="flex-1 min-w-0">
+              <div className="font-medium">디스크 정보 확인 실패</div>
+              <div className="text-[11.5px] mt-0.5 opacity-80">{diskError}</div>
+              <div className="text-[11.5px] mt-1.5 leading-relaxed opacity-90">
+                백엔드와 통신 중 오류가 발생했습니다. 잠시 후 앱을 재시작해 주세요. 문제가 계속되면 관리자에게 문의해 주세요.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 디스크 사용량 표시 (성공 시) */}
+        {disk && !diskCheckFailed && (
+          <div
+            className={`mt-4 px-4 py-3 rounded-lg border text-[13px] flex items-start gap-3 ${
+              diskInsufficient
+                ? 'bg-red-50 border-red-200 text-red-700'
+                : 'bg-emerald-50/60 border-emerald-200/80 text-emerald-700'
+            }`}
+          >
+            <svg className="w-4 h-4 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              {diskInsufficient ? (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              ) : (
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              )}
+            </svg>
+            <div className="flex-1 min-w-0">
+              <div className="font-medium">
+                {diskInsufficient
+                  ? `디스크 여유 공간 부족 — ${disk.shortfall_gb.toFixed(1)} GB 더 필요`
+                  : `디스크 여유 공간 충분 (${disk.drive} 드라이브)`}
+              </div>
+              <div className="text-[11.5px] mt-0.5 font-mono tabular-nums opacity-80">
+                사용 가능 {disk.free_gb.toFixed(1)} GB · 필요 {disk.required_gb.toFixed(0)} GB
+              </div>
+              {diskInsufficient && (
+                <div className="text-[11.5px] mt-1.5 leading-relaxed opacity-90">
+                  다른 파일을 정리한 뒤 앱을 재시작해 주세요. 모델 다운로드는 디스크 여유가 확보되어야 시작할 수 있습니다.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <p className="mt-6 text-xs text-stone-400 leading-relaxed">
           다운로드는 최초 1회만 진행되며, 이후 실행에서는 이 화면이 표시되지 않습니다. 다운로드된 모델은 사용자의 로컬 디스크에 저장됩니다.
@@ -226,10 +357,16 @@ function IntroPanel({ onStart, starting }: { onStart: () => void; starting: bool
         <button
           type="button"
           onClick={onStart}
-          disabled={starting}
+          disabled={starting || blockDownload}
           className="px-7 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 disabled:bg-stone-300 disabled:cursor-not-allowed transition-colors text-white text-sm font-medium shadow-sm"
         >
-          {starting ? '시작 중...' : '다운로드 시작'}
+          {starting
+            ? '시작 중...'
+            : diskCheckFailed
+            ? '확인 실패'
+            : diskInsufficient
+            ? '디스크 부족'
+            : '다운로드 시작'}
         </button>
       </StepFooter>
     </>
@@ -489,11 +626,13 @@ function IconNetwork() {
   )
 }
 
-function IconLightning() {
+function IconDisk() {
   return (
     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8}
-        d="M13 10V3L4 14h7v7l9-11h-7z" />
+        d="M4 7v10c0 2 1 3 3 3h10c2 0 3-1 3-3V7c0-2-1-3-3-3H7C5 4 4 5 4 7z" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8}
+        d="M4 12h16" />
     </svg>
   )
 }

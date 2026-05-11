@@ -7,15 +7,32 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 
-# ── HuggingFace Hub symlink 차단 (Windows WinError 448 회피) ──────────
+# ── HuggingFace Hub symlink → copy 대체 (Windows WinError 448 회피) ───
 # HF Hub 가 cache/snapshots/ 에 symlink 을 만들면, 새 Windows 보안 정책이 그 reparse
 # point 를 "untrusted mount point" 로 판정해 per-user (asInvoker) 프로세스에서
-# traverse 거부 (WinError 448) → 모델 로딩 실패. os.symlink 을 OSError 던지도록
-# 가로채면 HF Hub 가 자동으로 shutil.copyfile 로 폴백.
+# traverse 거부 (WinError 448) → 모델 로딩 실패.
+#
+# `os.symlink` 자체를 `shutil.copyfile` 로 대체. HF Hub 은 symlink 성공으로 인식해
+# 정상 흐름을 유지하고, 실제 디스크엔 reparse point 대신 일반 파일 복사본이 생김.
+# (이전엔 OSError 를 던져 HF Hub 의 fallback 을 유도했으나, xet/`new_blob=False` 등
+#  fallback 이 없는 경로에서 OSError 가 그대로 전파돼 다운로드 실패.)
 if sys.platform == "win32":
-    def _disabled_symlink(*_args, **_kwargs):
-        raise OSError(1314, "symlinks disabled to avoid WinError 448 (untrusted mount point)")
-    os.symlink = _disabled_symlink
+    import shutil as _shutil
+
+    def _symlink_as_copy(src, dst, target_is_directory=False, *, dir_fd=None):
+        src_str = os.fspath(src)
+        dst_str = os.fspath(dst)
+        # symlink 의 src 는 보통 dst 디렉토리 기준 상대경로 — resolve
+        if not os.path.isabs(src_str):
+            resolved_src = os.path.normpath(os.path.join(os.path.dirname(dst_str), src_str))
+        else:
+            resolved_src = src_str
+        # HF Hub 는 파일만 symlink — 디렉토리 케이스는 안 만남. 안전하게 스킵.
+        if target_is_directory:
+            return
+        _shutil.copyfile(resolved_src, dst_str)
+
+    os.symlink = _symlink_as_copy
 
 # ── 상위 디렉토리를 Python 경로에 추가 (translate_slide_v3 import용) ─────
 _backend_dir = Path(__file__).parent

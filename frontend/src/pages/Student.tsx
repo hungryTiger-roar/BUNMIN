@@ -26,13 +26,21 @@ const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
   { value: 'ru', label: '러시아어 (Русский)' },
 ]
 
-const AUDIO_LANG_OPTIONS = LANG_OPTIONS.filter((o) => o.value !== 'ko')
+const AUDIO_LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
+  { value: 'off', label: 'Off' },
+  { value: 'original', label: '원본 (Original)' },
+  { value: 'en', label: '영어 (English)' },
+  { value: 'de', label: '독일어 (Deutsch)' },
+  { value: 'es', label: '스페인어 (Español)' },
+  { value: 'ru', label: '러시아어 (Русский)' },
+]
 const SUBTITLE_LANG_OPTIONS = LANG_OPTIONS
 
 const STYLE_LABEL: Record<SubtitleStyle, string> = {
   plain: 'Plain',
   outline: 'Outline',
   glow: 'Glow',
+  background: 'Background',
 }
 
 const ASPECT_OPTIONS: { value: AspectRatio; label: string; className: string }[] = [
@@ -79,7 +87,7 @@ function subtitleStyleToCss(style: SubtitleStyle): CSSProperties {
         ].join(', '),
       }
     default:
-      return {}
+      return { color: 'black' }
   }
 }
 
@@ -132,12 +140,14 @@ function Student() {
   // TTS — Student 전용, audioLang 변경 시 엔진 재생성.
   // ttsMs 는 player 가 playSentence return 에서 받아 commitSubtitle 에 전달 → 자막
   // 표시 시점에 함께 store 에 기록 (별도 patch 경로 없음).
+  // audioLang === 'original' 이면 WebRTC 원본 음성 (delay 적용) 으로 듣기 → TTS 엔진 불필요해
+  // 'off' 로 대체해 WASM 초기화 생략.
   const {
     playSentence,
     unlockAudio: unlockTTS,
     status: ttsStatus,
     setVolume: setTTSVolume,
-  } = useTTS(true, audioLang)
+  } = useTTS(true, audioLang === 'original' ? 'off' : audioLang)
 
   const audioLangRef = useRef(audioLang)
   useEffect(() => { audioLangRef.current = audioLang }, [audioLang])
@@ -146,20 +156,70 @@ function Student() {
   const isAudioUnlockedRef = useRef(false)
   const [autoUnlockSettled, setAutoUnlockSettled] = useState(false)
 
+  const originalAudioRef = useRef<HTMLAudioElement>(null)
+
+  // 원본 음성 (WebRTC) → DelayNode → GainNode → destination 파이프라인.
+  //   - <audio> 엘리먼트는 트랙 keepalive 용으로 srcObject 유지 + 항상 muted=true.
+  //   - 실제 출력은 Web Audio API 라인에서 발생 → DelayNode 로 자막/그림과 같은 박자.
+  //   - AudioContext 는 user gesture (unlockAudio) 시점에 초기화 (브라우저 자동재생 정책).
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const delayNodeRef = useRef<DelayNode | null>(null)
+  const gainNodeRef = useRef<GainNode | null>(null)
+  const pendingAudioStreamRef = useRef<MediaStream | null>(null)
+
+  // delayMs 는 useDelayBufferPlayer 와 동일한 값 사용 — 강사 박자 정합성.
+  const delayMs = Number(import.meta.env.VITE_SYNC_DELAY_MS) || 15000
+
   const unlockAudio = useCallback(async () => {
     const ok = await unlockTTS()
     if (!ok) return
     isAudioUnlockedRef.current = true
     setIsAudioUnlocked(true)
-    console.log('[Audio] 재생 잠금 해제됨 (WASM TTS)')
-  }, [unlockTTS])
+
+    // AudioContext + DelayNode 초기화 — user gesture 내부라 안전.
+    if (!audioContextRef.current) {
+      try {
+        const ctx = new AudioContext()
+        // maxDelayTime 은 delayMs + 5s buffer (실행 중 동적 조정 여지).
+        const delayNode = ctx.createDelay((delayMs / 1000) + 5)
+        delayNode.delayTime.value = delayMs / 1000
+        const gainNode = ctx.createGain()
+        gainNode.gain.value = 0  // 초기 0 — sync effect 가 즉시 올림
+        delayNode.connect(gainNode).connect(ctx.destination)
+
+        audioContextRef.current = ctx
+        delayNodeRef.current = delayNode
+        gainNodeRef.current = gainNode
+
+        // ontrack 이 unlock 보다 먼저 도착해서 보관된 stream 이 있으면 지금 연결.
+        if (pendingAudioStreamRef.current) {
+          try {
+            const src = ctx.createMediaStreamSource(pendingAudioStreamRef.current)
+            src.connect(delayNode)
+            sourceNodeRef.current = src
+          } catch (err) {
+            console.error('[OriginalAudio] pending stream 연결 실패:', err)
+          }
+        }
+
+        if (ctx.state === 'suspended') {
+          await ctx.resume()
+        }
+        console.log(`[OriginalAudio] DelayNode 파이프라인 초기화 완료 (delay=${delayMs}ms)`)
+      } catch (err) {
+        console.error('[OriginalAudio] AudioContext 초기화 실패:', err)
+      }
+    }
+
+    originalAudioRef.current?.play().catch(() => {})
+    console.log('[Audio] 재생 잠금 해제됨')
+  }, [unlockTTS, delayMs])
 
   // 학생측 player — wall-clock + 고정 lag (delay-buffer) 로 강사 박자 그대로 재현.
-  // VITE_SYNC_DELAY_MS env 로 lag 조정 가능 (기본 15초).
+  // delayMs 는 unlockAudio 위에서 선언 — 원본 음성 DelayNode 와 동일한 값 공유.
   const playSentenceRef = useRef(playSentence)
   useEffect(() => { playSentenceRef.current = playSentence }, [playSentence])
-
-  const delayMs = Number(import.meta.env.VITE_SYNC_DELAY_MS) || 15000
 
   const unitPlayer = useDelayBufferPlayer({
     playSentence: (text: string, lang: TranslationLang) =>
@@ -200,10 +260,39 @@ function Student() {
     })
     peerConnectionRef.current = pc
     pc.ontrack = (e) => {
-      const stream = e.streams[0]
-      pendingStreamRef.current = stream
-      if (screenVideoRef.current) {
-        screenVideoRef.current.srcObject = stream
+      if (e.track.kind === 'video') {
+        const stream = e.streams[0]
+        pendingStreamRef.current = stream
+        if (screenVideoRef.current) {
+          screenVideoRef.current.srcObject = stream
+        }
+      } else if (e.track.kind === 'audio') {
+        const audioStream = new MediaStream([e.track])
+        // <audio> 엘리먼트: 트랙 keepalive 용 srcObject 만 유지, 출력은 항상 muted.
+        // 실제 재생은 Web Audio API (DelayNode → GainNode) 라인 — 자막/그림과 같은
+        // 박자로 wall-clock + delayMs 후 출력.
+        if (originalAudioRef.current) {
+          originalAudioRef.current.srcObject = audioStream
+          originalAudioRef.current.muted = true
+        }
+        // AudioContext 가 이미 있으면 즉시 wire, 없으면 unlockAudio 시점에 처리.
+        pendingAudioStreamRef.current = audioStream
+        const ctx = audioContextRef.current
+        const delayNode = delayNodeRef.current
+        if (ctx && delayNode) {
+          try { sourceNodeRef.current?.disconnect() } catch {}
+          try {
+            const src = ctx.createMediaStreamSource(audioStream)
+            src.connect(delayNode)
+            sourceNodeRef.current = src
+            pendingAudioStreamRef.current = null
+            console.log('[OriginalAudio] WebRTC audio track 즉시 DelayNode 에 연결')
+          } catch (err) {
+            console.error('[OriginalAudio] stream 연결 실패:', err)
+          }
+        } else {
+          console.log('[OriginalAudio] WebRTC audio track 도착 — AudioContext 대기 중 (unlockAudio 시 연결)')
+        }
       }
     }
     pc.onicecandidate = (e) => {
@@ -516,10 +605,40 @@ function Student() {
   // 줌 배지 타이머 정리
   useEffect(() => () => { if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current) }, [])
 
+  // 원본 음성 Web Audio 파이프라인 cleanup — unmount 시 노드 해제 + 컨텍스트 종료.
+  useEffect(() => () => {
+    try { sourceNodeRef.current?.disconnect() } catch {}
+    try { delayNodeRef.current?.disconnect() } catch {}
+    try { gainNodeRef.current?.disconnect() } catch {}
+    audioContextRef.current?.close().catch(() => {})
+    sourceNodeRef.current = null
+    delayNodeRef.current = null
+    gainNodeRef.current = null
+    audioContextRef.current = null
+  }, [])
+
   // volume/muted → TTS GainNode 실시간 동기화
   useEffect(() => {
     setTTSVolume(volume, isMuted)
   }, [volume, isMuted, setTTSVolume])
+
+  // audioLang/volume/muted → 원본 음성 GainNode 동기화 (Web Audio 라인이 실제 출력).
+  // <audio> 엘리먼트는 항상 muted=true — 트랙 keepalive 용으로만 유지.
+  useEffect(() => {
+    const audio = originalAudioRef.current
+    if (audio) {
+      audio.muted = true
+      audio.volume = 0
+    }
+    const gain = gainNodeRef.current
+    const ctx = audioContextRef.current
+    if (gain && ctx) {
+      const target = (audioLang === 'original' && !isMuted) ? (volume / 100) : 0
+      // 클릭 노이즈 방지 — 50ms ramp 으로 부드럽게 전환.
+      gain.gain.cancelScheduledValues(ctx.currentTime)
+      gain.gain.setTargetAtTime(target, ctx.currentTime, 0.05)
+    }
+  }, [audioLang, volume, isMuted, isAudioUnlocked])
 
   useEffect(() => {
     chatScrollRef.current?.scrollTo({
@@ -574,6 +693,9 @@ function Student() {
     <div
       className="h-screen overflow-hidden flex flex-col bg-background text-onBackground"
     >
+      {/* 원본 오디오 — audioLang=original 일 때만 언뮤트, 평소엔 muted */}
+      <audio ref={originalAudioRef} autoPlay muted playsInline style={{ display: 'none' }} />
+
       {/* 음성 활성화 오버레이 — 새로고침 / 직접 URL 진입 시 user gesture 확보 용도.
           브라우저 autoplay 정책상 사용자 클릭 없이 AudioContext.resume() 통과 불가 →
           명확한 버튼으로 학생이 의식적으로 음성을 켜게 함. /start 경유 시 autoEnter
@@ -882,28 +1004,42 @@ function Student() {
             )}
 
             {/* 자막 오버레이 */}
-            {ccEnabled && (primaryText || secondaryText) && (
-              <div
-                className={`absolute left-1/2 -translate-x-1/2 max-w-[90%] px-4 text-center text-white pointer-events-none z-10 ${
-                  subtitleSettings.position === 'top' ? 'top-6' : 'bottom-20'
-                }`}
-                style={{
-                  fontSize: `${subtitleSettings.fontSize}px`,
-                  opacity: subtitleSettings.opacity,
-                  ...subtitleStyleToCss(subtitleSettings.style),
-                }}
-              >
-                {primaryText && <p className="font-medium leading-snug">{primaryText}</p>}
-                {secondaryText && (
-                  <p
-                    className="mt-1 leading-snug opacity-80"
-                    style={{ fontSize: `${Math.max(12, subtitleSettings.fontSize - 4)}px` }}
-                  >
-                    {secondaryText}
-                  </p>
-                )}
-              </div>
-            )}
+            {ccEnabled && (primaryText || secondaryText) && (() => {
+              const isBg = subtitleSettings.style === 'background'
+              const textShadowIfNotBg = isBg ? {} : subtitleStyleToCss(subtitleSettings.style)
+              const bgSpanStyle = isBg ? {
+                backgroundColor: `rgba(8,8,8,${subtitleSettings.subtitleBgOpacity ?? 0.75})`,
+                padding: '0 8px',
+                WebkitBoxDecorationBreak: 'clone',
+                boxDecorationBreak: 'clone',
+              } as CSSProperties : {} as CSSProperties
+              return (
+                <div
+                  className={`absolute left-1/2 -translate-x-1/2 max-w-[90%] text-center text-white pointer-events-none z-10 ${
+                    subtitleSettings.position === 'top' ? 'top-6' : 'bottom-20'
+                  } px-4`}
+                  style={{
+                    fontSize: `${subtitleSettings.fontSize}px`,
+                    opacity: subtitleSettings.opacity,
+                    ...textShadowIfNotBg,
+                  }}
+                >
+                  {primaryText && (
+                    <p className="font-medium leading-snug">
+                      <span style={bgSpanStyle}>{primaryText}</span>
+                    </p>
+                  )}
+                  {secondaryText && (
+                    <p
+                      className="mt-1 leading-snug"
+                      style={{ fontSize: `${Math.max(12, subtitleSettings.fontSize - 4)}px`, ...(isBg ? {} : { opacity: 0.8 }) }}
+                    >
+                      <span style={bgSpanStyle}>{secondaryText}</span>
+                    </p>
+                  )}
+                </div>
+              )
+            })()}
 
             {/* 화면 내부 하단 컨트롤 바 — 마우스 올렸을 때만 표시 (설정 열려있으면 항상 표시) */}
             <div className={`absolute left-3 right-3 bottom-3 z-30 flex items-center gap-2 transition-opacity duration-200 ${
@@ -1044,13 +1180,13 @@ function Student() {
 
                       <div className="h-px bg-white/10" />
 
-                      {/* 글자 크기 */}
+                      {/* 자막 크기 */}
                       <button
                         type="button"
                         onClick={() => setSettingsPanel('fontSize')}
                         className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/10 transition-colors"
                       >
-                        <span>Font Size</span>
+                        <span>Subtitle Font Size</span>
                         <div className="flex items-center gap-2 text-white/60">
                           <span className="text-sm">{subtitleSettings.fontSize}px</span>
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1067,7 +1203,7 @@ function Student() {
                         onClick={() => setSettingsPanel('style')}
                         className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/10 transition-colors"
                       >
-                        <span>Style</span>
+                        <span>Subtitle Style</span>
                         <div className="flex items-center gap-2 text-white/60">
                           <span className="text-sm">{STYLE_LABEL[subtitleSettings.style]}</span>
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1159,7 +1295,7 @@ function Student() {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                           </svg>
                         </button>
-                        <span className="font-medium">Font Size</span>
+                        <span className="font-medium">Subtitle Font Size</span>
                       </div>
                       <div className="px-4 py-4">
                         <div className="flex justify-end items-center mb-3">
@@ -1192,19 +1328,36 @@ function Student() {
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                           </svg>
                         </button>
-                        <span className="font-medium">Style</span>
+                        <span className="font-medium">Subtitle Style</span>
                       </div>
                       {(Object.keys(STYLE_LABEL) as SubtitleStyle[]).map((s) => (
                         <button
                           key={s}
                           type="button"
-                          onClick={() => { setSubtitleSettings({ style: s }); setSettingsPanel('main') }}
+                          onClick={() => setSubtitleSettings({ style: s })}
                           className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/10 transition-colors"
                         >
                           <span className={`w-4 text-sm ${subtitleSettings.style === s ? 'opacity-100' : 'opacity-0'}`}>✓</span>
                           <span className={subtitleSettings.style === s ? 'font-medium' : ''}>{STYLE_LABEL[s]}</span>
                         </button>
                       ))}
+                      {subtitleSettings.style === 'background' && (
+                        <div className="px-4 py-3 border-t border-white/10">
+                          <div className="flex justify-between text-xs text-white/70 mb-1">
+                            <span>Background opacity</span>
+                            <span>{Math.round((subtitleSettings.subtitleBgOpacity ?? 0.8) * 100)}%</span>
+                          </div>
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            step={5}
+                            value={Math.round((subtitleSettings.subtitleBgOpacity ?? 0.8) * 100)}
+                            onChange={(e) => setSubtitleSettings({ subtitleBgOpacity: Number(e.target.value) / 100 })}
+                            className="w-full accent-white"
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1218,7 +1371,7 @@ function Student() {
           <button
             type="button"
             onClick={() => setSidebarOpen(v => !v)}
-            className={`absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-4 h-20 border border-r-0 rounded-l-lg ${theme === 'light' ? 'bg-surface border-primaryContainer shadow-[0_0_14px_rgba(0,0,0,0.18)]' : theme === 'dark' ? 'bg-overlayBorder border-white/20 shadow-md' : 'bg-[#E0DEF7] border-purple-200/50 shadow-md'} transition-all duration-300 ease-in-out ${
+            className={`absolute top-1/2 -translate-y-1/2 z-[55] flex items-center justify-center w-4 h-20 border border-r-0 rounded-l-lg ${theme === 'light' ? 'bg-surface border-primaryContainer shadow-[0_0_14px_rgba(0,0,0,0.18)]' : theme === 'dark' ? 'bg-overlayBorder border-white/20 shadow-md' : 'bg-[#E0DEF7] border-purple-200/50 shadow-md'} transition-all duration-300 ease-in-out ${
               sidebarOpen ? 'right-80' : 'right-0'
             }`}
             aria-label={sidebarOpen ? 'Hide panel' : 'Show panel'}
@@ -1231,8 +1384,8 @@ function Student() {
 
         {/* 우측 사이드: 강의자료 + 채팅 */}
         <aside className={isNarrow
-          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 min-h-0 px-3 py-4 sidebar-panel z-40 transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
-          : 'w-80 flex-shrink-0 flex flex-col gap-3 min-h-0'
+          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 min-h-0 px-3 py-4 sidebar-panel z-[55] transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
+          : 'relative z-[55] w-80 flex-shrink-0 flex flex-col gap-3 min-h-0'
         }>
           {/* 오늘의 강의 자료 — 강의 시작 후에만 노출 */}
           {isLectureStarted && (

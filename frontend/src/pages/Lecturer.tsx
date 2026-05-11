@@ -18,7 +18,9 @@ import CursorSpotlight from '@/components/lecturer/CursorSpotlight'
 import DrawingToolbar from '@/components/lecturer/DrawingToolbar'
 import { DrawingCanvas, type DrawingTool, type DrawingCanvasHandle } from '@/components/common/DrawingCanvas'
 import ScreenPickerModal from '@/components/lecturer/ScreenPickerModal'
-import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
+import { WS_PIPELINE_URL, API_BASE, getSlideLibrary } from '@/lib/api'
+import SlideLibrarySearchModal from '@/components/lecturer/SlideLibrarySearchModal'
+import type { SlideLibraryItem } from '@/types/slide'
 
 const ASPECT_OPTIONS: { value: AspectRatio; label: string; className: string }[] = [
   { value: '16/9', label: '16:9', className: 'aspect-[16/9]' },
@@ -30,6 +32,7 @@ const STYLE_LABEL: Record<SubtitleStyle, string> = {
   plain: '기본',
   outline: '테두리',
   glow: '글로우',
+  background: '배경',
 }
 
 type LecturerLang = 'off' | 'ko' | 'en' | 'de' | 'es' | 'ru'
@@ -71,14 +74,14 @@ function subtitleStyleToCss(style: SubtitleStyle): CSSProperties {
       return {
         textShadow: [
           '0 0 8px rgba(0,0,0,0.8)',
-          '0 0 8px rgba(255, 255, 255, 0.95)',
-          '0 0 16px rgba(255, 255, 255, 0.75)',
-          '0 0 28px rgba(255, 255, 255, 0.5)',
-          '0 0 40px rgba(255, 255, 255, 0.35)',
+          '0 0 8px rgba(255,255,255,0.95)',
+          '0 0 16px rgba(255,255,255,0.75)',
+          '0 0 28px rgba(255,255,255,0.5)',
+          '0 0 40px rgba(255,255,255,0.35)',
         ].join(', '),
       }
     default:
-      return { color: 'black'}
+      return { color: 'black' }
   }
 }
 
@@ -98,6 +101,9 @@ function Lecturer() {
   const [primaryLang, setPrimaryLang] = useState<LecturerLang>('en')
   const [secondaryLang, setSecondaryLang] = useState<LecturerLang>('ko')
   const [showTranscriptModal, setShowTranscriptModal] = useState(false)
+  const [showMaterialChangeModal, setShowMaterialChangeModal] = useState(false)
+  const [libraryItems, setLibraryItems] = useState<SlideLibraryItem[]>([])
+  const [showEndConfirm, setShowEndConfirm] = useState(false)
   const [spotlightEnabled, setSpotlightEnabled] = useState(false)
   const [spotlightColor, setSpotlightColor] = useState(SPOTLIGHT_PRESETS[0])
   // 필기 도구 상태 — 마우스 포인터와 동일한 6색 팔레트 공유
@@ -109,6 +115,7 @@ function Lecturer() {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 1000)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [panelOnTop, setPanelOnTop] = useState<'library' | 'sidebar'>('library')
   const [slideBoxWidth, setSlideBoxWidth] = useState<number | undefined>(undefined)
   const [pendingStart, setPendingStart] = useState(false)
   // 강의 시작 전 화면공유 시도 시 잠깐 보여줄 안내 문구
@@ -204,9 +211,13 @@ function Lecturer() {
     stopCapture: stopAudioCapture,
     analyserRef,
     setGain,
+    micStream,
   } = useAudioCapture({
     onAudioData: handleAudioData,
   })
+
+  const micStreamRef = useRef<MediaStream | null>(null)
+  useEffect(() => { micStreamRef.current = micStream }, [micStream])
 
   const [micGainPct, setMicGainPct] = useState(100)
 
@@ -235,6 +246,9 @@ function Lecturer() {
     onCaptureEnd: handleScreenCaptureEnd,
   })
 
+  const screenStreamRef = useRef<MediaStream | null>(null)
+  useEffect(() => { screenStreamRef.current = screenStream }, [screenStream])
+
   // 강의자 본인 화면용 — srcObject + autoPlay 조합은 일부 브라우저에서 자동재생 X → 명시적 play()
   useEffect(() => {
     const v = screenVideoRef.current
@@ -244,9 +258,13 @@ function Lecturer() {
     }
   }, [screenStream])
 
-  // WebRTC: 학생당 1개 PC 생성 → 화면 트랙 add → offer 송신
-  const createOfferForStudent = useCallback(async (studentId: string, stream: MediaStream) => {
-    // 기존 PC 있으면 닫고 새로 생성 (재협상 단순화)
+  // WebRTC: 학생당 1개 PC 생성 → 스크린/마이크 트랙 add → offer 송신
+  // 화면공유 없이도 마이크 트랙만으로 연결 가능 (원본 오디오 전용)
+  const createOfferForStudent = useCallback(async (studentId: string) => {
+    const screenS = screenStreamRef.current
+    const micS = micStreamRef.current
+    if (!screenS && !micS) return
+
     const existing = peerConnectionsRef.current.get(studentId)
     if (existing) {
       existing.close()
@@ -266,7 +284,12 @@ function Lecturer() {
         peerConnectionsRef.current.delete(studentId)
       }
     }
-    stream.getTracks().forEach((t) => pc.addTrack(t, stream))
+    if (screenS) {
+      screenS.getTracks().forEach((t) => pc.addTrack(t, screenS))
+    }
+    if (micS) {
+      micS.getAudioTracks().forEach((t) => pc.addTrack(t, micS))
+    }
     try {
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
@@ -278,28 +301,30 @@ function Lecturer() {
     }
   }, [send])
 
-  // 화면 공유 시작/종료 + 학생 입출에 따라 PC 동기화
-  // 트래킹용 prev refs — 변화 종류별로 다르게 처리 (스트림 교체 vs 학생 변경)
+  // 화면 공유 시작/종료 + 학생 입출 + 마이크 스트림 변경에 따라 PC 동기화
   const prevStreamRef = useRef<MediaStream | null>(null)
   const prevStudentIdsRef = useRef<Set<string>>(new Set())
+  const prevMicStreamRef = useRef<MediaStream | null>(null)
   useEffect(() => {
     const prevStream = prevStreamRef.current
     const prevIds = prevStudentIdsRef.current
+    const prevMicStream = prevMicStreamRef.current
     const currentIds = new Set(participants.students.map((s) => s.id))
 
-    if (!screenStream) {
-      // 스트림 종료 → 모든 PC 닫기
+    const hasAnyStream = !!screenStream || !!micStream
+    if (!hasAnyStream) {
+      // 스트림 없음 → 모든 PC 닫기
       peerConnectionsRef.current.forEach((pc) => pc.close())
       peerConnectionsRef.current.clear()
-    } else if (screenStream !== prevStream) {
-      // 스트림 새로 시작/교체 → 모든 학생에게 새 PC + offer
+    } else if (screenStream !== prevStream || micStream !== prevMicStream) {
+      // 스트림 교체 또는 마이크 on/off → 모든 학생에게 새 PC + offer
       peerConnectionsRef.current.forEach((pc) => pc.close())
       peerConnectionsRef.current.clear()
-      currentIds.forEach((id) => createOfferForStudent(id, screenStream))
+      currentIds.forEach((id) => createOfferForStudent(id))
     } else {
       // 같은 스트림에서 학생만 변경 → 신규에게만 offer, 떠난 학생 PC 닫기
       currentIds.forEach((id) => {
-        if (!prevIds.has(id)) createOfferForStudent(id, screenStream)
+        if (!prevIds.has(id)) createOfferForStudent(id)
       })
       prevIds.forEach((id) => {
         if (!currentIds.has(id)) {
@@ -314,7 +339,8 @@ function Lecturer() {
 
     prevStreamRef.current = screenStream
     prevStudentIdsRef.current = currentIds
-  }, [screenStream, participants.students, createOfferForStudent])
+    prevMicStreamRef.current = micStream
+  }, [screenStream, micStream, participants.students, createOfferForStudent])
 
   useEffect(() => {
     connect()
@@ -575,24 +601,23 @@ function Lecturer() {
     setShowTranscriptModal(true)
   }
 
-  // 같은 슬라이드로 강의 다시 시작 — 새 자막 세션이 발급되어 별도 자막 파일로 저장됨
-  const restartLecture = () => {
-    setShowTranscriptModal(false)
-    startLecture()  // slideStatus/slideId/모델모드 검증은 startLecture가 알아서 처리
-  }
-
-  // 다른 강의자료 선택 — Lecturer 초기 화면(자료 선택)으로 이동
-  const exitToLibrary = () => {
-    setShowTranscriptModal(false)
-    reset()
-    navigate('/lecturer')
-  }
-
   const handleExit = () => {
     stopAudioCapture()
     stopScreenCapture()
     reset()
     navigate('/lecturer/home')
+  }
+
+  const openMaterialChangeModal = async () => {
+    try {
+      const data = await getSlideLibrary('recent')
+      setLibraryItems(data.items)
+    } catch (err) {
+      console.error('[Lecturer] 라이브러리 로드 실패:', err)
+      setLibraryItems([])
+    }
+    setShowMaterialChangeModal(true)
+    setPanelOnTop('library')
   }
 
   const handleChatSubmit = (e: React.FormEvent) => {
@@ -646,24 +671,36 @@ function Lecturer() {
     : secondaryLang === 'ko' ? latestSubtitle.original
     : latestSubtitle.translated
 
+  const isBgStyle = subtitleSettings.style === 'background'
+  const bgSpanStyle = isBgStyle ? {
+    backgroundColor: `rgba(8,8,8,${subtitleSettings.subtitleBgOpacity ?? 0.75})`,
+    padding: '0 8px',
+    WebkitBoxDecorationBreak: 'clone',
+    boxDecorationBreak: 'clone',
+  } as React.CSSProperties : {} as React.CSSProperties
+
   const subtitleOverlay = ccEnabled && (primaryText || secondaryText) ? (
     <div
-      className={`absolute left-1/2 -translate-x-1/2 max-w-[85%] px-4 text-center text-white pointer-events-none z-10 ${
+      className={`absolute left-1/2 -translate-x-1/2 max-w-[85%] text-center text-white pointer-events-none z-10 ${
         subtitleSettings.position === 'top' ? 'top-6' : 'bottom-20'
-      }`}
+      } px-4`}
       style={{
         fontSize: `${subtitleSettings.fontSize}px`,
         opacity: subtitleSettings.opacity,
-        ...subtitleStyleToCss(subtitleSettings.style),
+        ...(isBgStyle ? {} : subtitleStyleToCss(subtitleSettings.style)),
       }}
     >
-      {primaryText && <p className="font-medium leading-snug">{primaryText}</p>}
+      {primaryText && (
+        <p className="font-medium leading-snug">
+          <span style={bgSpanStyle}>{primaryText}</span>
+        </p>
+      )}
       {secondaryText && (
         <p
-          className="mt-1 opacity-75 leading-snug"
-          style={{ fontSize: `${Math.max(11, subtitleSettings.fontSize - 5)}px` }}
+          className="mt-1 leading-snug"
+          style={{ fontSize: `${Math.max(11, subtitleSettings.fontSize - 5)}px`, ...(isBgStyle ? {} : { opacity: 0.75 }) }}
         >
-          {secondaryText}
+          <span style={bgSpanStyle}>{secondaryText}</span>
         </p>
       )}
     </div>
@@ -767,13 +804,13 @@ function Lecturer() {
               </svg>
             </button>
             <div className="h-px bg-white/10" />
-            {/* 글자 크기 */}
+            {/* 자막 크기 */}
             <button
               type="button"
               onClick={() => setSettingsPanel('fontSize')}
               className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/10 transition-colors"
             >
-              <span>글자 크기</span>
+              <span>자막 크기</span>
               <div className="flex items-center gap-2 text-white/60">
                 <span className="text-sm">{subtitleSettings.fontSize}px</span>
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -782,13 +819,13 @@ function Lecturer() {
               </div>
             </button>
             <div className="h-px bg-white/10" />
-            {/* 글자 스타일 */}
+            {/* 자막 스타일 */}
             <button
               type="button"
               onClick={() => setSettingsPanel('style')}
               className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/10 transition-colors"
             >
-              <span>글자 스타일</span>
+              <span>자막 스타일</span>
               <div className="flex items-center gap-2 text-white/60">
                 <span className="text-sm">{STYLE_LABEL[subtitleSettings.style]}</span>
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -842,7 +879,7 @@ function Lecturer() {
           </div>
         )}
 
-        {/* 글자 크기 서브패널 */}
+        {/* 자막 크기 서브패널 */}
         {settingsPanel === 'fontSize' && (
           <div className="w-72 bg-black/90 backdrop-blur-md text-white rounded-xl shadow-2xl overflow-hidden">
             <div className="flex items-center gap-2 px-3 py-3 border-b border-white/10">
@@ -851,7 +888,7 @@ function Lecturer() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
               </button>
-              <span className="font-medium">글자 크기</span>
+              <span className="font-medium">자막 크기</span>
             </div>
             <div className="px-4 py-4">
               <div className="flex justify-end items-center mb-3">
@@ -870,7 +907,7 @@ function Lecturer() {
           </div>
         )}
 
-        {/* 글자 스타일 서브패널 */}
+        {/* 자막 스타일 서브패널 */}
         {settingsPanel === 'style' && (
           <div className="w-72 bg-black/90 backdrop-blur-md text-white rounded-xl shadow-2xl overflow-hidden">
             <div className="flex items-center gap-2 px-3 py-3 border-b border-white/10">
@@ -879,19 +916,36 @@ function Lecturer() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                 </svg>
               </button>
-              <span className="font-medium">글자 스타일</span>
+              <span className="font-medium">자막 스타일</span>
             </div>
             {(Object.keys(STYLE_LABEL) as SubtitleStyle[]).map((s) => (
               <button
                 key={s}
                 type="button"
-                onClick={() => { setSubtitleSettings({ style: s }); setSettingsPanel('main') }}
+                onClick={() => setSubtitleSettings({ style: s })}
                 className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/10 transition-colors"
               >
                 <span className={`w-4 text-sm ${subtitleSettings.style === s ? 'opacity-100' : 'opacity-0'}`}>✓</span>
                 <span className={subtitleSettings.style === s ? 'font-medium' : ''}>{STYLE_LABEL[s]}</span>
               </button>
             ))}
+            {subtitleSettings.style === 'background' && (
+              <div className="px-4 py-3 border-t border-white/10">
+                <div className="flex justify-between text-xs text-white/70 mb-1">
+                  <span>배경 투명도</span>
+                  <span>{Math.round((subtitleSettings.subtitleBgOpacity ?? 0.8) * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={Math.round((subtitleSettings.subtitleBgOpacity ?? 0.8) * 100)}
+                  onChange={(e) => setSubtitleSettings({ subtitleBgOpacity: Number(e.target.value) / 100 })}
+                  className="w-full accent-white"
+                />
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -951,11 +1005,7 @@ function Lecturer() {
               <h2 className="text-lg font-semibold text-onSurface">강의 자막 저장</h2>
               <button
                 type="button"
-                onClick={() => {
-                  setShowTranscriptModal(false)
-                  reset()
-                  navigate('/lecturer/home')
-                }}
+                onClick={() => { setShowTranscriptModal(false); reset(); navigate('/lecturer') }}
                 className="w-7 h-7 rounded-full flex items-center justify-center text-onSurface/60 hover:bg-black/10 transition-colors"
               >✕</button>
             </div>
@@ -976,31 +1026,16 @@ function Lecturer() {
                 <span>🎬</span> SRT 다운로드
               </a>
             </div>
-            {/* 강의 종료 후 다음 동작 선택 */}
-            <div className="border-t border-onSurface/10 pt-3 flex flex-col gap-2">
-              <button
-                type="button"
-                onClick={restartLecture}
-                className="flex items-center justify-center gap-2 w-full py-3 rounded-xl bg-secondaryContainer text-onSecondaryContainer font-medium hover:opacity-90 transition-opacity"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-                같은 슬라이드로 다시 시작
-              </button>
-              <button
-                type="button"
-                onClick={exitToLibrary}
-                className="flex items-center justify-center gap-2 w-full py-3 rounded-xl border border-onSurface/20 text-onSurface font-medium hover:bg-onSurface/5 transition-colors"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-                </svg>
-                다른 강의자료 선택
-              </button>
-            </div>
           </div>
         </div>
+      )}
+
+      {showMaterialChangeModal && (
+        <SlideLibrarySearchModal
+          items={libraryItems}
+          onClose={() => setShowMaterialChangeModal(false)}
+          onDeleted={(ids) => setLibraryItems((prev) => prev.filter((it) => !ids.includes(it.slide_id)))}
+        />
       )}
 
       {/* 헤더 */}
@@ -1331,15 +1366,33 @@ function Lecturer() {
 
               <div className="flex items-center gap-2">
                 {!isLectureStarted ? (
-                  <button
-                    onClick={startLecture}
-                    disabled={!canStartLecture || pendingStart}
-                    className="px-6 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold shadow-sm"
-                  >
-                    {pendingStart ? '준비 중...' : '강의 시작'}
-                  </button>
+                  <>
+                    {canStartLecture && (
+                      <button
+                        type="button"
+                        onClick={openMaterialChangeModal}
+                        className="px-4 py-2.5 bg-primaryContainer hover:bg-primaryContainer/70 text-onSurface rounded-lg transition-colors text-sm font-medium shadow-sm"
+                      >
+                        강의자료 변경
+                      </button>
+                    )}
+                    <button
+                      onClick={startLecture}
+                      disabled={!canStartLecture || pendingStart}
+                      className="px-6 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold shadow-sm"
+                    >
+                      {pendingStart ? '준비 중...' : '강의 시작'}
+                    </button>
+                  </>
                 ) : (
                   <>
+                    <button
+                      type="button"
+                      onClick={openMaterialChangeModal}
+                      className="px-4 py-2.5 bg-primaryContainer hover:bg-primaryContainer/70 text-onSurface rounded-lg transition-colors text-sm font-medium shadow-sm"
+                    >
+                      강의자료 변경
+                    </button>
                     <button
                       onClick={togglePause}
                       className={`px-4 py-2.5 rounded-lg transition-colors text-sm font-medium shadow-sm ${
@@ -1350,12 +1403,34 @@ function Lecturer() {
                     >
                       {isPaused ? '다시 시작' : '일시정지'}
                     </button>
-                    <button
-                      onClick={endLecture}
-                      className="px-4 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors text-sm font-medium shadow-sm"
-                    >
-                      강의 종료
-                    </button>
+                    <div className="relative">
+                      {showEndConfirm && (
+                        <div className="absolute bottom-full mb-2 right-0 z-50 bg-surface sidebar-card text-onSurface border border-primaryContainer/60 rounded-xl shadow-2xl p-3 w-60">
+                          <div className="flex justify-end mb-1">
+                            <button
+                              type="button"
+                              onClick={() => setShowEndConfirm(false)}
+                              className="w-5 h-5 flex items-center justify-center text-onSurface/50 hover:text-onSurface transition-colors text-xs"
+                            >✕</button>
+                          </div>
+                          <p className="text-sm font-bold mb-2.5">강의를 종료하시겠습니까?</p>
+                          <button
+                            type="button"
+                            onClick={() => { setShowEndConfirm(false); endLecture() }}
+                            className="w-full py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg text-sm font-medium transition-colors"
+                          >
+                            강의 종료
+                          </button>
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setShowEndConfirm((v) => !v)}
+                        className={`px-4 py-2.5 rounded-lg transition-colors text-sm font-medium shadow-sm ${showEndConfirm ? 'bg-red-600 text-white' : 'bg-red-500 hover:bg-red-600 text-white'}`}
+                      >
+                        강의 종료
+                      </button>
+                    </div>
                   </>
                 )}
               </div>
@@ -1366,8 +1441,8 @@ function Lecturer() {
         {isNarrow && (
           <button
             type="button"
-            onClick={() => setSidebarOpen(v => !v)}
-            className={`absolute top-1/2 -translate-y-1/2 z-50 flex items-center justify-center w-4 h-20 border border-r-0 rounded-l-lg ${theme === 'light' ? 'bg-surface border-primaryContainer shadow-[0_0_14px_rgba(0,0,0,0.18)]' : theme === 'dark' ? 'bg-overlayBorder border-white/20 shadow-md' : 'bg-[#E0DEF7] border-purple-200/50 shadow-md'} transition-all duration-300 ease-in-out ${
+            onClick={() => { setSidebarOpen(v => { if (!v) setPanelOnTop('sidebar'); return !v }) }}
+            className={`absolute top-1/2 -translate-y-1/2 z-[55] flex items-center justify-center w-4 h-20 border border-r-0 rounded-l-lg ${theme === 'light' ? 'bg-surface border-primaryContainer shadow-[0_0_14px_rgba(0,0,0,0.18)]' : theme === 'dark' ? 'bg-overlayBorder border-white/20 shadow-md' : 'bg-[#E0DEF7] border-purple-200/50 shadow-md'} transition-all duration-300 ease-in-out ${
               sidebarOpen ? 'right-80' : 'right-0'
             }`}
             aria-label={sidebarOpen ? '패널 숨기기' : '패널 보기'}
@@ -1380,8 +1455,8 @@ function Lecturer() {
 
         {/* 사이드바 */}
         <aside className={isNarrow
-          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 overflow-hidden min-h-0 px-3 py-4 sidebar-panel z-40 transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
-          : 'w-80 flex-shrink-0 flex flex-col gap-3 overflow-hidden min-h-0'
+          ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 overflow-hidden min-h-0 px-3 py-4 sidebar-panel ${panelOnTop === 'sidebar' ? 'z-[65]' : 'z-[55]'} transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
+          : 'relative z-[55] w-80 flex-shrink-0 flex flex-col gap-3 overflow-hidden min-h-0'
         }>
           <div className="flex-1 overflow-y-auto scrollbar-hide space-y-3 min-h-0">
             

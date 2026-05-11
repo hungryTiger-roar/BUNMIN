@@ -16,6 +16,7 @@ export function useAudioCapture({
 }: UseAudioCaptureOptions) {
   const [isCapturing, setIsCapturing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [micStream, setMicStream] = useState<MediaStream | null>(null)
   const vadRef = useRef<any>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const analyserRef = useRef<AnalyserNode | null>(null)
@@ -192,6 +193,7 @@ export function useAudioCapture({
       })
 
       streamRef.current = stream
+      setMicStream(stream)
 
       // Web Audio API 설정
       const audioContext = new AudioContext({ sampleRate: 16000 })
@@ -345,6 +347,7 @@ registerProcessor('aunion-stream-processor', StreamProcessor)
     vadRef.current = null
     isSpeakingRef.current = false
     setIsCapturing(false)
+    setMicStream(null)
     console.log('[AudioCapture] 캡처 중지')
   }, [])
 
@@ -365,6 +368,7 @@ registerProcessor('aunion-stream-processor', StreamProcessor)
   return {
     isCapturing,
     error,
+    micStream,
     startCapture,
     stopCapture,
     analyserRef,

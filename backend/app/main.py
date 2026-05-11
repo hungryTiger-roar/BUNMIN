@@ -237,27 +237,41 @@ def _hf_cache_dir_for(repo_id: str):
 
 
 def _measure_dir_size(directory) -> int:
-    """HF 캐시 디렉토리에서 실제 다운로드된 사이즈 측정.
-    blobs/만 합산 — snapshots/는 blobs로 향하는 하드링크/복사본이라 중복 카운트되면
-    실제보다 ~2배 부풀려진 값이 나옴 (Windows는 심볼릭 미지원 시 실제 복사 발생)."""
-    from pathlib import Path
-    p = Path(directory)
-    if not p.is_dir():
-        return 0
-    # HF 캐시 표준 구조: <repo>/blobs/* (실제 파일들), <repo>/snapshots/<rev>/* (링크)
-    blobs = p / "blobs"
-    target = blobs if blobs.is_dir() else p
-    total = 0
-    try:
-        for f in target.iterdir():
-            if f.is_file():
+    """HF 캐시 모델 디렉토리의 다운로드 사이즈 측정.
+
+    HF Hub 의 두 가지 layout 을 모두 다루기 위해 `blobs/` 와 `snapshots/` 의
+    재귀 사이즈 중 **MAX** 를 반환:
+
+    - **Symlink 가능 환경** (Linux, Windows admin/dev): blobs/ 에 실제 파일 저장,
+      snapshots/ 는 symlink (디스크 사이즈 0). → MAX = blobs/.
+    - **Symlink 차단 환경** (우리 backend/run.py 패치): HF Hub 이 blobs/ 건너뛰고
+      snapshots/ 에 직접 다운로드. blobs/ 0, snapshots/ 14GB. → MAX = snapshots/.
+    - **드물게 양쪽 다 차있을 때** (copy fallback): 같은 콘텐츠가 양쪽에 있어
+      더블 카운트 회피. → MAX = 단일 콘텐츠 사이즈.
+
+    이전 구현은 `blobs/` 직속만 non-recursive 합산이라 우리 패치 환경에서 항상 0 이었고,
+    UI 가 진행률을 못 따라가서 7GB → 2GB → "완료" 같은 부정확한 표시가 났음.
+    """
+    import os as _os
+
+    def _walk_size(path: str) -> int:
+        if not _os.path.isdir(path):
+            return 0
+        total = 0
+        for root, _dirs, files in _os.walk(path, followlinks=False):
+            for name in files:
                 try:
-                    total += f.stat().st_size
+                    total += _os.path.getsize(_os.path.join(root, name))
                 except OSError:
                     pass
-    except OSError:
-        pass
-    return total
+        return total
+
+    if not _os.path.isdir(directory):
+        return 0
+
+    blobs_size = _walk_size(_os.path.join(directory, "blobs"))
+    snapshots_size = _walk_size(_os.path.join(directory, "snapshots"))
+    return max(blobs_size, snapshots_size)
 
 
 def _start_byte_progress_watcher(model_key: str, repo_id: str, total_bytes: int) -> threading.Event:
@@ -271,7 +285,12 @@ def _start_byte_progress_watcher(model_key: str, repo_id: str, total_bytes: int)
         last_bytes = 0
         last_time = _time.time()
         while not stop_event.is_set():
-            current = _measure_dir_size(cache_dir)
+            measured = _measure_dir_size(cache_dir)
+            # 단조 증가 보장 — HF Hub 의 atomic move/rename 순간 측정에 걸려서 파일이
+            # 잠시 안 보이거나(락), partial 삭제 후 재시작으로 인해 측정값이 일시적으로
+            # 줄어드는 경우가 있음. 다운로드 본질상 진행률은 절대 감소하면 안 되므로
+            # 직전 값으로 clamp.
+            current = max(measured, last_bytes)
             now = _time.time()
             elapsed = now - last_time
             speed = (current - last_bytes) / elapsed if elapsed > 0 else 0

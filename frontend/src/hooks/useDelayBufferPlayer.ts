@@ -165,11 +165,13 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
     )
 
     // 예약 시간에 audio 큐에 push — sequential 재생 보장.
-    // 자막은 audio 가 실제 시작될 때 표시 → 자막↔TTS 동기화. audio off 면 schedule
-    // 시점에 즉시 표시 (audio 가 anchor 가 없으니 wall-clock 시점에 맞춰 등장).
+    // 자막은 audio 가 실제 시작될 때 표시 → 자막↔TTS 동기화. audio off / original 이면
+    // schedule 시점에 즉시 표시 (audio anchor 없음 → wall-clock 시점에 맞춰 등장).
+    // 'original' = WebRTC 강사 원본 음성을 별도 DelayNode 로 듣는 모드 → TTS 합성 불필요.
     scheduleAt(targetWall, () => {
       const opts = optionsRef.current
-      if (opts.getAudioLang() === 'off' || !opts.isAudioUnlocked()) {
+      const lang = opts.getAudioLang()
+      if (lang === 'off' || lang === 'original' || !opts.isAudioUnlocked()) {
         try { params.commitSubtitle() } catch (err) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', err) }
         return
       }

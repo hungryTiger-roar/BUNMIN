@@ -53,3 +53,58 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 ; per-user 설치 + asInvoker manifest이므로 별도 권한 플래그 불필요
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; \
   Flags: nowait postinstall skipifsilent
+
+[Code]
+{
+  설치 후 첫 실행 시 VLM 모델(~14GB)을 HuggingFace에서 다운로드합니다.
+  Windows symlink 우회 패치 때문에 cache 사용량이 ~2배가 되어 실제로 ~30GB 가 필요.
+  설치 시점에 미리 안내 + 디스크 여유 부족하면 경고 (강제 차단은 안 함).
+}
+const
+  RequiredFreeGB = 35;  { 모델 14GB + symlink → copy 패치로 인한 ~2배 사용 + 안전 마진 }
+
+var
+  DiskInfoPage: TOutputMsgWizardPage;
+
+function GetFreeGB(Path: String): Double;
+var
+  FreeBytes, TotalBytes: Int64;
+begin
+  Result := -1.0;
+  if GetSpaceOnDisk64(Path, FreeBytes, TotalBytes) then
+    Result := FreeBytes / (1024.0 * 1024.0 * 1024.0);
+end;
+
+procedure InitializeWizard();
+begin
+  DiskInfoPage := CreateOutputMsgPage(
+    wpWelcome,
+    'AI 모델 추가 다운로드 안내',
+    '첫 실행 시 인터넷에서 AI 모델이 자동으로 다운로드됩니다.',
+    '이 설치 프로그램은 약 3.5 GB 의 앱 본체를 설치합니다.' + #13#10 +
+    '처음 실행 시 슬라이드 번역용 AI 모델 약 14 GB 를 HuggingFace 에서 추가 다운로드합니다.' + #13#10 + #13#10 +
+    'Windows 안전 모드 호환을 위해 모델은 ~2배 공간을 사용하므로,' + #13#10 +
+    '쾌적한 사용을 위해 사용자 디스크에 약 35 GB 이상의 여유 공간을 확보해 주세요.' + #13#10 + #13#10 +
+    '여유 공간이 부족하면 모델 다운로드가 실패할 수 있습니다 (앱은 정상 설치).');
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+var
+  FreeGB: Double;
+begin
+  Result := True;
+  if CurPageID = DiskInfoPage.ID then
+  begin
+    FreeGB := GetFreeGB(ExpandConstant('{autopf}'));
+    if (FreeGB > 0) and (FreeGB < RequiredFreeGB) then
+    begin
+      if MsgBox(
+        Format('현재 디스크 여유 공간: %.1f GB' + #13#10 +
+               '권장 여유 공간: %d GB' + #13#10 + #13#10 +
+               '여유 공간이 권장치보다 적습니다. 첫 실행 시 모델 다운로드가 실패할 수 있습니다.' + #13#10 + #13#10 +
+               '그래도 설치를 계속하시겠습니까?', [FreeGB, RequiredFreeGB]),
+        mbConfirmation, MB_YESNO) = IDNO then
+        Result := False;
+    end;
+  end;
+end;
