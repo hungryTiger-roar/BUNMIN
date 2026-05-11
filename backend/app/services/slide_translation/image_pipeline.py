@@ -196,12 +196,12 @@ def select_glossary_items(
 
     # context_texts가 제공되면 현재 페이지에 등장하는 용어 우선 선택
     if context_texts:
-        combined_text = " ".join(context_texts)
+        # any() + generator로 short-circuit 평가 (대용량 텍스트 성능 최적화)
         in_context = []
         not_in_context = []
 
         for ko, en in items:
-            if ko in combined_text:
+            if any(ko in text for text in context_texts):
                 in_context.append((ko, en))
             else:
                 not_in_context.append((ko, en))
