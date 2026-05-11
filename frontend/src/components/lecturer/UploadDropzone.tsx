@@ -28,6 +28,8 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
   const cancelledRef = useRef(false)
+  const clientTokenRef = useRef<string | null>(null)
+  const slideIdRef = useRef<string | null>(null)
   const [stage, setStage] = useState<Stage>('pending')
   const [stageCurrent, setStageCurrent] = useState(0)
   const [stageTotal, setStageTotal] = useState(0)
@@ -86,13 +88,22 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
     setError(null)
     setSlideStatus('uploading')
     cancelledRef.current = false
+    slideIdRef.current = null
 
     const controller = new AbortController()
     abortControllerRef.current = controller
 
+    // client_token: 응답 받기 전 취소된 경우 백엔드가 add_task 를 스킵하도록 매칭하는 키
+    const token =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    clientTokenRef.current = token
+
     try {
       const formData = new FormData()
       formData.append('file', file)
+      formData.append('client_token', token)
 
       const response = await fetch(`${API_BASE}/slides/upload`, {
         method: 'POST',
@@ -106,6 +117,15 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
       }
 
       const data = await response.json()
+      // 응답 도착 전에 사용자가 취소했으면 토큰이 매칭되어 백엔드가 cancelled=true 로 회신
+      // 또는 응답 도착 후 cancelled flag 가 set 됐다면 ref 가 true
+      if (data.cancelled || cancelledRef.current) {
+        setSlideStatus('none')
+        clientTokenRef.current = null
+        return
+      }
+
+      slideIdRef.current = data.slide_id
       setSlideId(data.slide_id)
       setSlideStatus('processing')
       pollStatus(data.slide_id)
@@ -130,6 +150,8 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
           setDisplayEta(0)
           setSlideId(null)
           setSlideStatus('none')
+          slideIdRef.current = null
+          clientTokenRef.current = null
           onUploadComplete?.()
           return
         }
@@ -168,6 +190,26 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
     cancelledRef.current = true
     abortControllerRef.current?.abort()
     abortControllerRef.current = null
+
+    const sid = slideIdRef.current
+    const token = clientTokenRef.current
+
+    if (sid) {
+      // 처리 중 — 백엔드 flag set 으로 다음 체크포인트에서 cleanup 트리거
+      fetch(`${API_BASE}/slides/${sid}/cancel`, {
+        method: 'POST',
+        keepalive: true,
+      }).catch(() => {})
+    } else if (token) {
+      // 업로드 응답 받기 전 — 토큰만 보류 등록. upload_slide 가 매칭되면 add_task 스킵
+      fetch(`${API_BASE}/slides/cancel-pending?client_token=${encodeURIComponent(token)}`, {
+        method: 'POST',
+        keepalive: true,
+      }).catch(() => {})
+    }
+
+    slideIdRef.current = null
+    clientTokenRef.current = null
     setSlideStatus('none')
   }, [setSlideStatus])
 
