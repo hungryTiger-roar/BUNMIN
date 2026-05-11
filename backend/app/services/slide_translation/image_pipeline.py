@@ -1098,6 +1098,8 @@ def stage_overlay(image_path: str, regions: list, output_path: str):
     for region in translate_regions:
         bbox = region["bbox"]
         is_solid, bg_color = is_solid_background(img_np, bbox)
+        # 텍스트 색상 결정용으로 배경색 저장
+        region["fill_color"] = bg_color
         if is_solid:
             x_min, y_min, x_max, y_max = [int(v) for v in bbox]
             draw_temp.rectangle([x_min, y_min, x_max, y_max], fill=bg_color)
@@ -1122,23 +1124,29 @@ def stage_overlay(image_path: str, regions: list, output_path: str):
         height = y_max - y_min
         english = region["english"]
 
-        try:
-            cx, cy = int((x_min + x_max) / 2), int((y_min + y_max) / 2)
-            cx = max(0, min(cx, img.width - 1))
-            cy = max(0, min(cy, img.height - 1))
-            pixel = img.getpixel((cx, cy))
-            if isinstance(pixel, int):
-                bg_color = (pixel, pixel, pixel)
-            else:
-                bg_color = pixel[:3]
-        except Exception:
-            bg_color = (255, 255, 255)
+        # 저장된 배경색 사용 (없으면 픽셀에서 읽기)
+        bg_color = region.get("fill_color")
+        if not bg_color:
+            try:
+                cx, cy = int((x_min + x_max) / 2), int((y_min + y_max) / 2)
+                cx = max(0, min(cx, img.width - 1))
+                cy = max(0, min(cy, img.height - 1))
+                pixel = img.getpixel((cx, cy))
+                if isinstance(pixel, int):
+                    bg_color = (pixel, pixel, pixel)
+                else:
+                    bg_color = pixel[:3]
+            except Exception:
+                bg_color = (255, 255, 255)
 
         initial_font_size = max(12, int(height * 0.7))
         lines, font, final_font_size, line_height = fit_text_to_box(english, width - 4, height - 4, initial_font_size, draw)
 
-        brightness = sum(bg_color) / 3
-        text_color = (0, 0, 0) if brightness > 127 else (255, 255, 255)
+        # 가중치 기반 명도 계산 (인간 시각 특성 반영)
+        r, g, b = int(bg_color[0]), int(bg_color[1]), int(bg_color[2])
+        brightness = (r * 299 + g * 587 + b * 114) / 1000
+        text_color = (0, 0, 0) if brightness > 128 else (255, 255, 255)
+        print(f"      [Overlay] bg_color={bg_color}, brightness={brightness:.1f}, text_color={text_color}")
         total_text_height = line_height * len(lines)
         start_y = y_min + (height - total_text_height) / 2
 
