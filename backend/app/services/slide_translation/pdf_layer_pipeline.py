@@ -591,7 +591,7 @@ class PDFLayerPipeline:
 
             return {
                 "blocks": all_blocks,
-                "merge_groups": []  # TODO: 페이지 간 병합 그룹
+                "merge_groups": []
             }
 
         except Exception as e:

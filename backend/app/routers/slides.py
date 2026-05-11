@@ -1412,7 +1412,9 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
                 ocr_results = await asyncio.to_thread(
                     batch_ocr_surya,
                     image_paths_for_ocr,
-                    slide_id
+                    slide_id,
+                    None,  # chunk_size (기본값)
+                    lambda: _is_cancelled(slide_id)  # 페이지별 취소 체크
                 )
 
                 print(f"  OCR 완료: {len(ocr_results)}개 페이지")
@@ -1464,7 +1466,9 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
                         pages_with_korean,
                         image_paths_map,
                         slide_id,
-                        glossary
+                        glossary,
+                        None,  # chunk_size (기본값)
+                        lambda: _is_cancelled(slide_id)  # 페이지별 취소 체크
                     )
 
                     print(f"  번역 완료: {len(translate_results)}개 페이지")
