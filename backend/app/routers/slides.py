@@ -828,6 +828,11 @@ def _delete_slide_files(slide_id: str) -> list[str]:
     if token:
         pending_cancel_tokens.pop(token, None)
 
+    # 해시 매핑 삭제 — 동일 파일 재업로드 시 새로 처리되도록
+    content_hash = slide_status.get(slide_id, {}).get("content_hash")
+    if content_hash:
+        _hash_to_slide_id.pop(content_hash, None)
+
     slide_status.pop(slide_id, None)
     slide_data.pop(slide_id, None)
     slide_glossary.pop(slide_id, None)
