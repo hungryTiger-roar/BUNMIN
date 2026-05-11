@@ -797,42 +797,66 @@ async def load_slide(slide_id: str):
 def _delete_slide_files(slide_id: str) -> list[str]:
     """단일 슬라이드의 모든 관련 파일/메모리 정리. 삭제된 항목 종류 리스트 반환 (없으면 빈 리스트)."""
     deleted: list[str] = []
+    skipped: list[str] = []
     print(f"[Slides] _delete_slide_files 시작: {slide_id}")
 
     pdf_path = UPLOAD_DIR / f"{slide_id}.pdf"
     if pdf_path.exists():
-        pdf_path.unlink()
-        deleted.append("pdf")
-        print(f"  삭제: {pdf_path}")
+        try:
+            pdf_path.unlink()
+            deleted.append("pdf")
+            print(f"  삭제: {pdf_path}")
+        except PermissionError:
+            skipped.append("pdf (사용 중)")
+            print(f"  스킵 (사용 중): {pdf_path}")
     else:
         print(f"  없음: {pdf_path}")
 
     meta_p = _meta_path(slide_id)
     if meta_p.exists():
-        meta_p.unlink()
-        deleted.append("meta")
-        print(f"  삭제: {meta_p}")
+        try:
+            meta_p.unlink()
+            deleted.append("meta")
+            print(f"  삭제: {meta_p}")
+        except PermissionError:
+            skipped.append("meta (사용 중)")
 
     image_files = list(IMAGES_DIR.glob(f"{slide_id}_*.png"))
+    img_deleted = 0
     for img in image_files:
-        img.unlink()
-    if image_files:
+        try:
+            img.unlink()
+            img_deleted += 1
+        except PermissionError:
+            pass
+    if img_deleted:
         deleted.append("images")
-        print(f"  삭제: images {len(image_files)}개")
+        print(f"  삭제: images {img_deleted}개")
 
     translated_imgs = list(TRANSLATED_DIR.glob(f"{slide_id}_*.png"))
+    trans_deleted = 0
     for img in translated_imgs:
-        img.unlink()
-    if translated_imgs:
-        print(f"  삭제: translated images {len(translated_imgs)}개")
+        try:
+            img.unlink()
+            trans_deleted += 1
+        except PermissionError:
+            pass
+    if trans_deleted:
+        print(f"  삭제: translated images {trans_deleted}개")
 
     translated_pdf = TRANSLATED_DIR / f"{slide_id}_translated.pdf"
     if translated_pdf.exists():
-        translated_pdf.unlink()
-        deleted.append("translated")
-        print(f"  삭제: {translated_pdf}")
+        try:
+            translated_pdf.unlink()
+            deleted.append("translated")
+            print(f"  삭제: {translated_pdf}")
+        except PermissionError:
+            skipped.append("translated_pdf (사용 중)")
 
-    print(f"[Slides] _delete_slide_files 완료: {slide_id} → {deleted}")
+    if skipped:
+        print(f"[Slides] _delete_slide_files 완료: {slide_id} → 삭제={deleted}, 스킵={skipped}")
+    else:
+        print(f"[Slides] _delete_slide_files 완료: {slide_id} → {deleted}")
 
     # 보류 토큰 누수 방지 — slide_status pop 전에 token 추출
     token = slide_status.get(slide_id, {}).get("client_token")
