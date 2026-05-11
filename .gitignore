@@ -97,3 +97,4 @@ backend/app/services/models/
 
 # 로컬 데이터셋
 datasets/
+backend/app/services/slide_translation/glossaries/*.json
