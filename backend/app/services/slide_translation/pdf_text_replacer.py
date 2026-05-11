@@ -48,6 +48,42 @@ from .pdf_font_handler import (
 
 logger = logging.getLogger(__name__)
 
+
+# =============================================================================
+# Invalid Output Gate (Final Rendering Gate)
+# =============================================================================
+
+# Invalid patterns that should NEVER be rendered to final PDF
+INVALID_RENDER_PATTERNS = [
+    r'\?{2,}',                          # Consecutive ?? or more
+    r'[A-Za-z가-힣]\?+[A-Za-z가-힣]',   # Question marks between letters (device???OS)
+    r'[\x00-\x1f\x7f-\x9f]',            # Control characters
+    r'\bp\d+_b\d+\b',                   # Block IDs (p3_b4)
+    r'[가-힣]+\?+[가-힣]+',              # Korean with embedded question marks
+    r'\?{3,}',                          # Three or more question marks anywhere
+]
+
+
+def _is_invalid_for_rendering(text: str, target_lang: str = "en") -> tuple[bool, str]:
+    """
+    Check if text contains invalid patterns that should NOT be rendered.
+
+    This is the FINAL gate before rendering to PDF.
+    Returns (is_invalid, reason)
+    """
+    if not text:
+        return True, "empty_text"
+
+    for pattern in INVALID_RENDER_PATTERNS:
+        if re.search(pattern, text):
+            return True, f"matched_pattern: {pattern}"
+
+    # 영어 번역인데 한글 잔존 → invalid
+    if target_lang == "en" and re.search(r'[가-힣]', text):
+        return True, "korean_remaining_in_english"
+
+    return False, ""
+
 # 한글 폰트 경로 (env에서 읽기, 없으면 기본값)
 KOREAN_FONT_PATH = os.getenv("KOREAN_FONT_PATH", "C:/Windows/Fonts/malgun.ttf")
 if not os.path.exists(KOREAN_FONT_PATH):
@@ -86,17 +122,26 @@ def _render_multi_color_text(
     F. 그래도 안 되면 -1 반환 (review_needed)
 
     핵심: definition이 반드시 보여야 함. 색상은 그 다음 문제.
+
+    term_definition role 색상 정책:
+    - term_color: 원본 term 색상 (보통 빨강)
+    - definition_color: 원본 definition 색상, 없으면 black (NEVER term_color)
+    - 의미 구조 보존이 색상 보존보다 우선
     """
     translated = trans.get('translated', '')
     line_colors = trans.get('line_colors', [])
+    role = trans.get('role', 'body')
     page_rect = page.rect
+
+    # DEBUG: 함수 진입 확인
+    block_id = trans.get('block_id', 'unknown')
+    print(f"[MultiColor-ENTER] {block_id}: translated='{translated[:50]}...', line_colors={line_colors}")
 
     # 색상 준비
     first_color = (0, 0, 0)
-    second_color = (0, 0, 0)
-    has_multi_color = False
+    second_color = None  # None = not found
 
-    if line_colors and len(line_colors) >= 2:
+    if line_colors:
         colors = []
         for c in line_colors:
             if isinstance(c, int):
@@ -106,12 +151,13 @@ def _render_multi_color_text(
             else:
                 colors.append((0, 0, 0))
 
-        first_color = colors[0]
-        for c in colors[1:]:
-            if c != first_color:
-                second_color = c
-                has_multi_color = True
-                break
+        if colors:
+            first_color = colors[0]
+            # 두 번째 색상 찾기 (first_color와 다른 첫 번째 색상)
+            for c in colors[1:]:
+                if c != first_color:
+                    second_color = c
+                    break
 
     # "Term[구분자] Definition" 패턴 감지
     # 구분자: 한글, 영문, 숫자, 공백을 제외한 모든 기호
@@ -135,9 +181,30 @@ def _render_multi_color_text(
         )
         return 0
 
-    # ===== Fallback 전략들 (Layout Plan → 렌더링) =====
-    term_color = first_color if has_multi_color else (0, 0, 0)
-    def_color = second_color if has_multi_color else (0, 0, 0)
+    # ===== 색상 정책 결정 =====
+    # Term: Definition 패턴이 감지되면 (match가 존재하면):
+    # - term: 원본 색상 (first_color, 보통 빨강)
+    # - definition: 두 번째 색상이 있고 term과 다르면 사용, 없으면 black
+    # - 의미 구조 보존이 색상 보존보다 우선 (role과 무관하게 적용)
+    #
+    # Term: Definition이 아닌 일반 multi-color:
+    # - 기존 로직 유지
+
+    # 패턴이 매치되었으므로 Term: Definition 구조임
+    # → definition은 반드시 term과 다른 색상 (없으면 black)
+    term_color = first_color  # term은 원본 색상 유지 (보통 빨강)
+
+    # definition 색상 결정: second_color가 있고 term과 다르면 사용, 아니면 black
+    if second_color is not None and second_color != first_color:
+        def_color = second_color
+    else:
+        def_color = (0, 0, 0)  # black fallback (NEVER term_color)
+
+    # DEBUG: 색상 결정 로그
+    block_id = trans.get('block_id', 'unknown')
+    print(f"[MultiColor] {block_id}: term='{term}', def='{definition[:30]}...'")
+    print(f"[MultiColor] {block_id}: line_colors={line_colors}, first_color={first_color}, second_color={second_color}")
+    print(f"[MultiColor] {block_id}: term_color={term_color}, def_color={def_color}")
 
     # 시도할 폰트 스케일
     font_scales = [1.0, 0.95, 0.9, 0.85]
@@ -315,6 +382,7 @@ def replace_texts_in_pdf(
         "replaced": 0,
         "review_needed": 0,
         "failed": 0,
+        "skipped_invalid": 0,  # Blocked by final rendering gate
     }
     debug_records = []
 
@@ -385,6 +453,8 @@ def replace_texts_in_pdf(
                 results["replaced"] += 1
             elif result.status == "review_needed":
                 results["review_needed"] += 1
+            elif result.status == "skipped_invalid":
+                results["skipped_invalid"] += 1
             else:
                 results["failed"] += 1
 
@@ -399,6 +469,8 @@ def replace_texts_in_pdf(
                 results["replaced"] += 1
             elif result.status == "review_needed":
                 results["review_needed"] += 1
+            elif result.status == "skipped_invalid":
+                results["skipped_invalid"] += 1
             else:
                 results["failed"] += 1
 
@@ -462,6 +534,18 @@ def _replace_single_block(
         result.error = "Invalid input"
         return result
 
+    # === FINAL RENDERING GATE ===
+    # Check if translation contains invalid patterns (???, control chars, etc.)
+    # If invalid, skip rendering entirely - do NOT render broken text to PDF
+    is_invalid, invalid_reason = _is_invalid_for_rendering(translated)
+    if is_invalid:
+        result.status = "skipped_invalid"
+        result.error = f"Invalid translation blocked: {invalid_reason}"
+        logger.warning(f"[RENDER GATE] Blocked invalid text for {block_id}: '{translated[:50]}...' - {invalid_reason}")
+        # Return without inserting any text - the redacted area will remain blank
+        # This is intentional: blank is better than ???
+        return result
+
     x0, y0, x1, y1 = bbox
     # prefix area skip (only when keep_prefix=True and prefix_width > 0)
     x0_adjusted = x0 + prefix_width if (keep_prefix and prefix_width > 0) else x0
@@ -497,7 +581,19 @@ def _replace_single_block(
     result.final_size = final_size
 
     # 5. 텍스트 삽입 (redaction으로 이미 배경 처리됨)
-    if has_multi_color:
+    # multi-color 렌더러 사용 조건:
+    # 1. has_multi_color=True (여러 색상 감지)
+    # 2. role == "term_definition"
+    # 3. 번역문에 "Term: Definition" 패턴이 있음 (콜론 뒤에 텍스트)
+    # 주의: hyphen은 제외 (Real-Time 같은 복합어 오인식 방지)
+    # Term: 40자 이하, Definition: 5자 이상, 콜론 뒤 공백 필수
+    has_term_definition_pattern = bool(re.match(r'^[A-Za-z가-힣0-9\s]{1,40}:\s+.{5,}', translated))
+    use_multi_color_renderer = has_multi_color or role == "term_definition" or has_term_definition_pattern
+
+    # DEBUG: multi-color 렌더러 호출 여부 확인
+    print(f"[Replace] {block_id}: has_multi_color={has_multi_color}, role={role}, has_pattern={has_term_definition_pattern}, use_renderer={use_multi_color_renderer}")
+
+    if use_multi_color_renderer:
         # multi-color 렌더러가 모든 fallback을 내부적으로 처리
         # (같은 줄 → 두 줄 → bbox 확장 → 폰트 축소 → 단색 fallback)
         insert_result = _render_multi_color_text(
@@ -515,8 +611,8 @@ def _replace_single_block(
         )
     result.insert_result = insert_result
 
-    # 단색 텍스트의 overflow 처리 (multi-color는 이미 내부에서 처리됨)
-    if insert_result < 0 and not has_multi_color:
+    # 단색 텍스트의 overflow 처리 (multi-color 렌더러는 이미 내부에서 처리됨)
+    if insert_result < 0 and not use_multi_color_renderer:
         retry_rect = final_rect
 
         if expand_allowed:

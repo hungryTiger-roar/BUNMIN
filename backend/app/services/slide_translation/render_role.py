@@ -423,8 +423,9 @@ class RenderQualityReport:
 
         # ====== 4. Scale ratio 기반 품질 체크 ======
         if font_scale_ratio < thresholds["fail"]:
-            # 심각한 축소 - title/heading/body면 error
-            severity = "error" if render_role in ["title", "heading", "body", "bullet"] else "warning"
+            # 심각한 축소 - warning only (확대로 해결 가능)
+            # 이전: error였지만 사용자 피드백 반영하여 warning으로 변경
+            severity = "warning"
             self.warnings.append({
                 "block_id": block_id,
                 "type": "font_scale_too_low",
@@ -437,8 +438,9 @@ class RenderQualityReport:
                 "render_role": render_role,
             })
             self.stats["font_too_small"] += 1
-            if severity == "error":
-                self.errors.append(self.warnings[-1])
+            # 더 이상 errors에 추가하지 않음 (warning only)
+            # has_issue는 title/heading에서만 설정
+            if render_role in ["title", "heading"]:
                 has_issue = True
 
         elif font_scale_ratio < thresholds["warning"]:
