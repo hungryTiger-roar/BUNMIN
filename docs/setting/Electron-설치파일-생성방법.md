@@ -168,15 +168,16 @@ VLM 동봉본 만들려면 electron:build 뒤에 `cp -r models/qwen2.5-vl-7b-ins
 
 ## 첫 실행 마법사 (Install Wizard)
 
-설치본을 처음 실행하는 사용자에게 VLM Base 16GB 다운로드를 안내하는 흐름. (B) 옵션 빌드의 첫 실행 시 자동으로 표시됨.
+설치본 첫 실행 시 자동으로 표시. **이전엔 `/loading` + `/install` 두 페이지로 분리돼있었으나 통합됨** — 매 실행마다 `/install` 단일 진입점에서 백엔드 상태에 따라 phase 가 자동 전환.
 
-### 단계 (5단계)
+### Phase (5단계)
 
-1. **Intro** — 다운로드 안내 카드 + "다운로드 시작" 버튼
-2. **Downloading** — 진행률(byte), 속도, ETA 실시간 표시
-3. **Finalizing** — 다운로드 100% 도달 후 snapshot 생성 단계 (Windows 하드링크/복사). "다운로드를 마무리하고 있습니다" 메시지 + 보조 바 indeterminate
-4. **Verifying** — safetensors 헤더 sanity 검사. "모델을 검증하고 있습니다" 메시지
-5. **Complete** — 설치 완료 안내 + "확인" 버튼 → `/lecturer`
+1. **Preparing** — backend 가 모델 캐시 확인 + 로컬 로드 중. 4개 모델 카드(ASR/NMT/OCR/VLM) + 상태 칩(대기/로드 중/완료) 표시. 모든 모델이 캐시 hit 인 경우 (= 재실행) 이 단계만 거쳐 곧장 `/lecturer` 로 자동 진입 (Complete 페이지 스킵으로 마찰 제거).
+2. **Intro** — VLM 미캐시 시 backend 가 `wait_user_action` 으로 대기 → "다운로드 시작" 버튼 + 디스크 체크 + 16GB 안내 카드.
+3. **Downloading** — 진행률(byte), 속도, ETA 실시간 표시. **모델별 분리 카드** — VLM 14GB / (HF cache 가 비어있다면) Surya OCR ~2GB 등이 동시 다운로드 시 각자 카드 1개씩 깜빡임 없이 진행.
+4. **Finalizing** — 다운로드 100% 도달 후 snapshot 생성 단계 (Windows 하드링크/복사). "다운로드를 마무리하고 있습니다" 메시지 + phase 칩 = "정리 중"
+5. **Verifying** — safetensors 헤더 sanity 검사. "모델을 검증하고 있습니다" 메시지 + phase 칩 = "검증 중"
+6. **Complete** — 설치 완료 안내 + "확인" 버튼 → `/lecturer`. (Preparing 만 거친 케이스에선 스킵)
 
 ### 백엔드 상태 흐름
 
@@ -341,6 +342,72 @@ if sys.platform == "win32":
 
 ---
 
+## 트레이 아이콘 + 백그라운드 유지 ([frontend/electron/main.cjs](../../frontend/electron/main.cjs))
+
+창 X 버튼 클릭 시 종료가 아니라 **시스템 트레이로 hide**. 강의자가 PDF 업로드 등 백그라운드 작업 진행 중일 때 창을 닫아도 작업 계속 + 다시 열면 같은 상태 유지.
+
+### 동작
+
+| 사용자 행동 | 결과 |
+|---|---|
+| 창 X 클릭 | 창 hide → 트레이 아이콘만 남음. `aunion_backend.exe` + Electron renderer 살아있음 |
+| 트레이 아이콘 더블클릭 | 창 복원 + 포커스. React state / 라우트 / 스크롤 / fetch 진행 상황 모두 그대로 |
+| 트레이 우클릭 → "종료" | `isQuitting=true` set → 진짜 종료. `before-quit` 흐름으로 백엔드 grace 정리 |
+
+### 구현 포인트
+
+- **`isQuitting` 플래그**: close 이벤트 핸들러가 이걸 보고 hide vs 진짜 종료 분기. 트레이 종료 / `before-quit` / 마법사 quit-app IPC 모두 set.
+- **`webPreferences.backgroundThrottling: false`**: hide 후 hidden 상태에서 Chromium 이 setInterval / fetch 를 throttle 하지 않도록 비활성화. OCR 업로드처럼 진행 중인 fetch 가 정상 속도로 계속 진행.
+- **`mainWindow.isDestroyed()` + `webContents.isDestroyed()` 가드**: 백엔드가 `detached: true` + 5분 grace 로 살아있어 mainWindow 파괴 뒤에도 stdout 이벤트 발생. `sendLog/sendProgress/sendModelStatus` 가 파괴된 webContents 에 접근하면 `TypeError: Object has been destroyed` crash → 가드로 방지.
+
+### 임시 placeholder 아이콘
+
+[frontend/electron/assets/tray-icon-{16,32}.png](../../frontend/electron/assets/) — indigo 배경에 "A" 글자. 정식 앱 아이콘 작업 시 교체 예정.
+
+### 검증
+
+1. 부팅 후 창 X → 트레이 아이콘만 남음 + 작업관리자에서 `aunion_backend.exe` PID 유지 확인
+2. PDF 업로드 시작 → 진행률 보이는 동안 X → 트레이 더블클릭 → **진행률이 계속 진행** (`backgroundThrottling=false` 효과)
+3. 트레이 우클릭 → 종료 → **crash 없이 깔끔히 종료** (이전엔 `TypeError: Object has been destroyed`)
+
+---
+
+## install / uninstall 시 백엔드 자동 종료 ([installer.iss](../../installer.iss) `[Code]`)
+
+백엔드는 부모 Electron 종료 후에도 **5분 grace 동안 살아남아** 학생 자막 다운로드를 처리함 (`757bd35` 워치독). 이 grace 도중에 새 설치본을 실행하거나 제거를 시도하면 살아있는 `aunion_backend.exe` 가 파일 락을 잡아 Inno Setup 이 파일을 못 지움 → "닫아주세요" 다이얼로그 / "수동 삭제하세요" 메시지가 뜸.
+
+해결: Inno Setup 의 두 후크에서 진입 직전에 백엔드 강제 종료.
+
+```pascal
+procedure KillAunionProcesses();
+var ResultCode: Integer;
+begin
+  Exec('taskkill.exe', '/F /IM aunion_backend.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('taskkill.exe', '/F /IM "Aunion AI.exe" /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(500);  { Windows 핸들 정리 대기 }
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin KillAunionProcesses(); Result := ''; end;
+
+function InitializeUninstall(): Boolean;
+begin KillAunionProcesses(); Result := True; end;
+```
+
+`Aunion AI.exe` 까지 같이 kill 하는 이유 — Electron 메인 프로세스도 살아있으면 자기 자신 (`{app}\Aunion AI.exe`) 파일 락 잡음.
+
+---
+
+## 모델별 분리 다운로드 UI (`_model_status["downloads"]`)
+
+병렬 다운로드 (예: VLM + Surya OCR) 가 동시에 진행될 때 단일 `_model_status["download"]` 필드를 두 watcher 가 덮어쓰면서 UI 가 한 모델 / 다른 모델 사이로 깜빡이던 문제 해소.
+
+`_model_status["downloads"]` (plural dict, key=model_key) 로 변경 — VLM watcher 는 `downloads["vlm"]` 에, NMT watcher 는 `downloads["nmt_asr"]` 에 독립적으로 기록. 프론트엔드는 활성 키마다 카드 1개씩 렌더링 (current/total 바이트 + 속도 + ETA + phase 칩).
+
+`_is_cached` 도 같이 보강 — HF repo_id 가 default 인 모델 (예: NLLB) 의 **CT2 동봉본** 디렉토리(`<name>-ct2`) 가 설치 위치에 있으면 캐시 hit 으로 판정. 이전엔 HF cache 만 검사해서 fresh install 시 NMT 가 불필요하게 HF 원본 ~2.3GB 를 다운받았고 끝나면 안 쓰임.
+
+---
+
 ## 디스크 공간 사전 체크
 
 VLM 모델은 HF에서 ~14GB 다운로드되고, symlink → copy 패치 때문에 `blobs/` + `snapshots/` 양쪽에 사본이 생겨 실제 디스크 사용량이 **~28GB** 까지 늘어남. 여기에 앱 본체(~3.5GB)와 안전 마진을 더해 **35GB** 가 권장 여유 공간.
@@ -459,23 +526,17 @@ Get-Item $f | Select-Object Name, LinkType, Target
 # LinkType=SymbolicLink 이면 위 fix 필요
 ```
 
-### Install 마법사가 안 뜨고 옛 Loading 화면이 나옴
+### Install 마법사가 안 뜨고 옛 Loading 화면이 나옴 (구버전 — Loading 페이지 삭제됨)
 
-`setup/win-unpacked/resources/backend/_internal/frontend_dist/` 안의 frontend가 stale한 경우. PyInstaller가 frontend dist를 임베드한 시점 이후에 `npm run build`가 다시 돌았을 때 발생.
+> **현재 버전 (S14P31S205-145 이후) 엔 해당 안 됨** — `/loading` 페이지가 삭제되고 `/install` 단일 진입점으로 통합됨. 아래는 통합 이전 빌드 사용 시 디버깅 메모.
 
-해결: 위의 "한 줄 빌드 명령" 박스 안의 frontend-only 흐름으로 frontend_dist만 갱신하거나, PyInstaller부터 다시 빌드.
+이전 빌드 디버깅: `setup/win-unpacked/resources/backend/_internal/frontend_dist/` 안의 frontend가 stale한 경우. PyInstaller가 frontend dist를 임베드한 시점 이후에 `npm run build`가 다시 돌았을 때 발생. 해결: frontend-only 흐름으로 frontend_dist 갱신 또는 PyInstaller 부터 다시 빌드.
 
-검증:
-```bash
-grep -o "wait_user_action" setup/win-unpacked/resources/backend/_internal/frontend_dist/assets/*.js
-```
-나와야 정상.
+### Install 마법사 Complete 화면을 못 보고 강의자 페이지로 직행 (S14P31S205-145 이후 의도된 동작)
 
-### Install 마법사 Complete 화면을 못 보고 강의자 페이지로 직행
-
-[Loading.tsx](../../frontend/src/pages/Loading.tsx)의 IPC 리스너(`onBackendReady` 등)가 cleanup 없이 등록되어, 사용자가 `/install`로 이동한 뒤에도 `backend-ready` IPC가 도착하면 leaked 리스너가 `navigate('/lecturer')`를 호출함.
-
-fix: Loading.tsx의 모든 IPC 콜백 첫 줄에 `if (!window.location.hash.startsWith('#/loading')) return` 가드 추가됨. 새 리스너가 추가되면 동일 가드 필요.
+> **현재**: 모델 캐시 hit (= 모든 모델 즉시 로드) 시 Complete 페이지를 스킵하고 곧장 `/lecturer` 로 자동 진입. 사용자의 불필요한 "확인" 클릭 제거. VLM 다운로드를 거친 케이스에선 여전히 Complete 표시.
+>
+> 구버전(Loading.tsx 가 분리되어 있던 시점) 의 IPC 리스너 leak 으로 인한 강제 navigate 버그는 Loading 페이지 통합 시 사라짐.
 
 ### "VLM 모델이 지정된 로컬 경로에 없습니다" 에러 (설치본에서)
 
