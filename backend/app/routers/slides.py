@@ -797,31 +797,42 @@ async def load_slide(slide_id: str):
 def _delete_slide_files(slide_id: str) -> list[str]:
     """단일 슬라이드의 모든 관련 파일/메모리 정리. 삭제된 항목 종류 리스트 반환 (없으면 빈 리스트)."""
     deleted: list[str] = []
+    print(f"[Slides] _delete_slide_files 시작: {slide_id}")
 
     pdf_path = UPLOAD_DIR / f"{slide_id}.pdf"
     if pdf_path.exists():
         pdf_path.unlink()
         deleted.append("pdf")
+        print(f"  삭제: {pdf_path}")
+    else:
+        print(f"  없음: {pdf_path}")
 
     meta_p = _meta_path(slide_id)
     if meta_p.exists():
         meta_p.unlink()
         deleted.append("meta")
+        print(f"  삭제: {meta_p}")
 
     image_files = list(IMAGES_DIR.glob(f"{slide_id}_*.png"))
     for img in image_files:
         img.unlink()
     if image_files:
         deleted.append("images")
+        print(f"  삭제: images {len(image_files)}개")
 
     translated_imgs = list(TRANSLATED_DIR.glob(f"{slide_id}_*.png"))
     for img in translated_imgs:
         img.unlink()
+    if translated_imgs:
+        print(f"  삭제: translated images {len(translated_imgs)}개")
 
     translated_pdf = TRANSLATED_DIR / f"{slide_id}_translated.pdf"
     if translated_pdf.exists():
         translated_pdf.unlink()
         deleted.append("translated")
+        print(f"  삭제: {translated_pdf}")
+
+    print(f"[Slides] _delete_slide_files 완료: {slide_id} → {deleted}")
 
     # 보류 토큰 누수 방지 — slide_status pop 전에 token 추출
     token = slide_status.get(slide_id, {}).get("client_token")
@@ -852,16 +863,26 @@ async def cancel_pending(client_token: str = Query(...)):
 @router.post("/{slide_id}/cancel")
 async def cancel_slide(slide_id: str):
     """업로드/처리 중인 슬라이드 취소.
-    flag 만 set — 정리는 process_slide() 자신이 다음 체크포인트에서 수행.
+    즉시 파일 삭제 + 플래그 set (VLM 블로킹 중에도 파일은 먼저 정리).
     완료/실패된 자료는 noop (라이브러리에 이미 등록됨, 영구삭제는 DELETE 사용)."""
     if slide_id not in slide_status:
         raise HTTPException(404, "슬라이드를 찾을 수 없습니다")
     status = slide_status[slide_id].get("status")
     if status in ("completed", "failed"):
         return {"slide_id": slide_id, "mode": "already_finalized"}
+
+    # 1. 취소 플래그 set (체크포인트에서 감지용)
     slide_status[slide_id]["cancelled"] = True
     print(f"[Slides] {slide_id} 취소 플래그 set (status={status})")
-    return {"slide_id": slide_id, "mode": "flag_set"}
+
+    # 2. 즉시 파일 삭제 (VLM 블로킹 중에도 파일은 먼저 정리)
+    content_hash = slide_status.get(slide_id, {}).get("content_hash")
+    deleted = _delete_slide_files(slide_id)
+    if content_hash:
+        _hash_to_slide_id.pop(content_hash, None)
+    print(f"[Slides] {slide_id} 즉시 파일 삭제: {deleted}")
+
+    return {"slide_id": slide_id, "mode": "cancelled_and_cleaned", "deleted": deleted}
 
 
 @router.delete("/delete/{slide_id}")
