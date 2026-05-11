@@ -90,12 +90,24 @@ class PDFLayerPipeline:
         output_dir: Optional[str] = None,
         on_page_complete: Optional[callable] = None,
         glossary: Optional[dict] = None,
+        should_cancel: Optional[callable] = None,
     ):
         self.llm_client = llm_client or get_default_llm_client()
         self.output_dir = output_dir
         self.on_page_complete = on_page_complete  # 페이지 완료 시 콜백 (page_num: int)
         self.glossary = glossary or {}  # {한글: 영어} 용어집
+        # 외부 취소 신호 폴링 콜백 — () -> bool. True 반환 시 파이프라인이 가능한 가장 빠른 경계에서 중단.
+        # VLM 분석/번역의 각 페이지 시작 직전마다 호출됨.
+        self.should_cancel = should_cancel
         self.log_lines = []
+
+    def _check_cancelled(self) -> bool:
+        if self.should_cancel is None:
+            return False
+        try:
+            return bool(self.should_cancel())
+        except Exception:
+            return False
 
     def _log(self, message: str):
         """파이프라인 로그"""
@@ -147,9 +159,16 @@ class PDFLayerPipeline:
             "translated_blocks": 0,
             "failed_blocks": 0,
             "details": [],
+            "cancelled": False,
         }
 
         try:
+            # 취소 체크 (Step 1 진입 전)
+            if self._check_cancelled():
+                self._log("[CANCEL] Pipeline cancelled before Step 1")
+                result["cancelled"] = True
+                return result
+
             # Step 1: PDF 텍스트 레이어 확인
             self._log("[Step 1] Checking PDF text layer...")
             layer_info = check_pdf_has_text_layer(pdf_path)
@@ -175,11 +194,22 @@ class PDFLayerPipeline:
                 result["message"] = "No Korean text to translate"
                 return result
 
+            # 취소 체크 (Step 2.5 진입 전 — VLM 로드 직전)
+            if self._check_cancelled():
+                self._log("[CANCEL] Pipeline cancelled before Step 2.5 (VLM)")
+                result["cancelled"] = True
+                return result
+
             # Step 2.5: VLM 레이아웃 분석 (선택적)
             layout_analysis = None
             try:
                 self._log("[Step 2.5] Analyzing page layout with VLM...")
                 layout_analysis = self._analyze_layout_with_vlm(pdf_path, korean_texts)
+                if layout_analysis is None and self._check_cancelled():
+                    # _analyze_layout_with_vlm 가 페이지간 체크에서 취소 감지하면 None 반환
+                    self._log("[CANCEL] Pipeline cancelled during Step 2.5")
+                    result["cancelled"] = True
+                    return result
                 if layout_analysis:
                     on_image_count = sum(1 for b in layout_analysis.get("blocks", []) if b.get("on_image_background"))
                     self._log(f"  - Analyzed {len(layout_analysis.get('blocks', []))} blocks")
@@ -189,14 +219,30 @@ class PDFLayerPipeline:
             except Exception as e:
                 self._log(f"  - VLM analysis skipped: {e}")
 
+            # 취소 체크 (Step 3 진입 전)
+            if self._check_cancelled():
+                self._log("[CANCEL] Pipeline cancelled before Step 3 (translation)")
+                result["cancelled"] = True
+                return result
+
             # Step 3: 번역
             self._log("[Step 3] Translating texts...")
             translations = self._translate_texts(korean_texts, target_lang)
+            if self._check_cancelled():
+                self._log("[CANCEL] Pipeline cancelled during Step 3")
+                result["cancelled"] = True
+                return result
             self._log(f"  - Translated {len(translations)} blocks")
 
             # 레이아웃 분석 결과를 translations에 반영
             if layout_analysis:
                 translations = self._apply_layout_analysis(translations, layout_analysis)
+
+            # 취소 체크 (Step 4 진입 전 — 부분 산출물 PDF 만드는 거 차단)
+            if self._check_cancelled():
+                self._log("[CANCEL] Pipeline cancelled before Step 4 (replace)")
+                result["cancelled"] = True
+                return result
 
             # Step 4: PDF 텍스트 교체
             self._log("[Step 4] Replacing texts in PDF...")
@@ -272,6 +318,11 @@ class PDFLayerPipeline:
         total_page_count = len(page_groups)
 
         for page_num, items in page_groups.items():
+            # 페이지 진입 직전 취소 체크 — 다음 페이지 LLM 호출 차단
+            if self._check_cancelled():
+                self._log(f"    [CANCEL] Translation cancelled at page {page_num}")
+                return translations
+
             self._log(f"    Page {page_num}: {len(items)} blocks")
 
             try:
@@ -558,6 +609,12 @@ class PDFLayerPipeline:
 
             # 각 페이지 분석
             for page_num, blocks in page_groups.items():
+                # 페이지 사이 취소 체크 — VLM 한 페이지(~수초) 끝나자마자 다음 페이지 진입 차단
+                if self._check_cancelled():
+                    self._log(f"  - VLM analysis cancelled at page {page_num}")
+                    doc.close()
+                    return None
+
                 if page_num < 1 or page_num > len(doc):
                     continue
 
