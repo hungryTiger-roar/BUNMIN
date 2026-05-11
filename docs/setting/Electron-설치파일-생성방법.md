@@ -372,6 +372,62 @@ if sys.platform == "win32":
 
 ---
 
+## 기본 메뉴바 제거 + 자체 타이틀바 ([frontend/electron/main.cjs](../../frontend/electron/main.cjs), [TitleBar.tsx](../../frontend/src/components/common/TitleBar.tsx))
+
+기본 Electron chrome(File/Edit/View/Window/Help 메뉴 + OS 디폴트 흰색 타이틀바) 을 완전 제거하고 테마에 반응하는 자체 타이틀바를 그림. 데스크탑 앱 마감 완성도 ↑.
+
+### 핵심 설정 3가지
+
+| 위치 | 값 | 효과 |
+|---|---|---|
+| `main.cjs` (`whenReady`) | `Menu.setApplicationMenu(null)` | 메뉴바 + 기본 단축키 (Ctrl+R, Ctrl+Shift+I 등) 완전 제거 |
+| `main.cjs` (BrowserWindow) | `frame: false` | OS 디폴트 타이틀바 + 윈도우 frame 제거. Windows 가장자리 8px 리사이즈는 그대로 유효 |
+| `main.cjs` (BrowserWindow) | `backgroundColor: '#f5f5f4'` | 첫 페인트 전 흰 깜빡임 방지 (스플래시 컬러) |
+
+### IPC + 자체 컨트롤 ([TitleBar.tsx](../../frontend/src/components/common/TitleBar.tsx))
+
+자체 타이틀바는 32px fixed top 스트립. 좌측 indigo dot + "Aunion AI" 라벨, 우측 min/max/close SVG 버튼.
+
+| IPC channel | 방향 | 동작 |
+|---|---|---|
+| `window-minimize` | renderer → main | `mainWindow.minimize()` |
+| `window-toggle-maximize` | renderer → main | `mainWindow.isMaximized()` 여부에 따라 `maximize` / `unmaximize` |
+| `window-close` | renderer → main | `mainWindow.close()` — 기존 close 핸들러로 들어가 트레이 hide 흐름 |
+| `window-is-maximized` | renderer → main (invoke) | 현재 max 상태 boolean 반환 |
+| `window-maximized-change` | main → renderer | maximize/unmaximize 이벤트 발생 시 renderer 에 통지 — 아이콘 토글용 |
+
+스트립 전체에 `-webkit-app-region: drag` 으로 윈도우 드래그 핸들, 버튼들만 `no-drag` 로 클릭 가능.
+
+### 테마 반영 (CSS 변수)
+
+[styles/index.css](../../frontend/src/styles/index.css) 에 `--titlebar-bg` / `--titlebar-fg` 정의:
+
+| 테마 | bg | fg |
+|---|---|---|
+| Light (default) | `#FFFFFF` (순백) | `#2A2F4A` (다크 navy) |
+| Dark | `#1E2142` (다크 surface) | `#E8E9F5` (라이트) |
+| Gradient | `rgba(46, 50, 87, 0.75)` 글래스 + `backdrop-filter: blur(8px)` | `#FFFFFF` |
+
+테마 변경 (설정 페이지의 light / dark / gradient 토글) → `documentElement.classList` 갱신 → CSS 변수 자동 재바인딩 → 타이틀바 색 즉시 반영.
+
+### `min-h-screen` 글로벌 override (레이아웃 충돌 방지)
+
+자체 타이틀바 32px 가 추가됐는데 페이지들이 `min-h-screen` (= 100vh) 을 쓰면 viewport 를 32px 초과해 스크롤바 생김 + 콘텐츠가 타이틀바 영역 침범.
+
+해결: [index.css](../../frontend/src/styles/index.css) 의 `@layer utilities` 에서 `.min-h-screen` 과 `.h-screen` 을 `calc(100vh - 32px)` 로 override. App.tsx wrapper 의 `pt-8` (32px 패딩) 과 합쳐 정확히 viewport 에 맞춰짐.
+
+> **주의**: 글로벌 override 라 향후 모달/팝업/오버레이 컴포넌트에서 `min-h-screen` 쓰면 잘못된 높이가 적용됨. 그런 경우 `h-full` 또는 `min-h-[80vh]` 같은 임의 값 사용.
+
+### 검증
+
+1. 메뉴바 없음 — Alt 눌러도 안 나타남
+2. OS 디폴트 흰색 타이틀바 없음 — 자체 32px 스트립
+3. 드래그로 윈도우 이동, min/max/close 동작 (close 는 트레이 hide)
+4. 테마 변경 시 타이틀바 색 즉시 반영
+5. 스크롤바 없음, 콘텐츠가 타이틀바 영역 안 침범
+
+---
+
 ## install / uninstall 시 백엔드 자동 종료 ([installer.iss](../../installer.iss) `[Code]`)
 
 백엔드는 부모 Electron 종료 후에도 **5분 grace 동안 살아남아** 학생 자막 다운로드를 처리함 (`757bd35` 워치독). 이 grace 도중에 새 설치본을 실행하거나 제거를 시도하면 살아있는 `aunion_backend.exe` 가 파일 락을 잡아 Inno Setup 이 파일을 못 지움 → "닫아주세요" 다이얼로그 / "수동 삭제하세요" 메시지가 뜸.
