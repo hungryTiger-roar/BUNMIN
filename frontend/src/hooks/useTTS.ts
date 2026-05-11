@@ -419,7 +419,18 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
   const setVolume = useCallback((vol: number, muted: boolean) => {
     const v = muted ? 0 : vol / 100
     gainValueRef.current = v
-    if (gainRef.current) gainRef.current.gain.value = v
+    const gain = gainRef.current
+    const ctx = audioCtxRef.current
+    if (gain && ctx) {
+      // 10ms 선형 ramp — 'en' ↔ 'original' 토글 시 sample boundary 클릭 방지 + 즉시 느낌.
+      // 이전엔 .gain.value = v 로 instant 였으나 mid-sentence 토글 시 짧은 click 발생 위험.
+      const now = ctx.currentTime
+      gain.gain.cancelScheduledValues(now)
+      gain.gain.setValueAtTime(gain.gain.value, now)
+      gain.gain.linearRampToValueAtTime(v, now + 0.01)
+    } else if (gain) {
+      gain.gain.value = v
+    }
   }, [])
 
   /** Unit player 가 호출하는 Promise 기반 재생 — sentence 1개를 합성 + 재생.
