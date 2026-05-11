@@ -366,7 +366,7 @@ function createWindow() {
   })
 
   if (isDev) {
-    const url = `http://127.0.0.1:${FRONTEND_PORT}/#/loading`
+    const url = `http://127.0.0.1:${FRONTEND_PORT}/#/install`
     devLog(`loadURL: ${url}`)
     mainWindow.loadURL(url)
     mainWindow.webContents.openDevTools({ mode: 'detach' })
@@ -380,10 +380,10 @@ function createWindow() {
       if (!mainWindow || mainWindow.isDestroyed()) return
       if (!ok) {
         devLog('waitForHealth 실패 — file://로 폴백 (마이크 안 될 수 있음)')
-        mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: '/loading' })
+        mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: '/install' })
         return
       }
-      const url = `http://127.0.0.1:${BACKEND_PORT}/#/loading`
+      const url = `http://127.0.0.1:${BACKEND_PORT}/#/install`
       devLog(`백엔드 HTTP 준비 완료 → loadURL: ${url}`)
       mainWindow.loadURL(url)
     })

@@ -1,10 +1,11 @@
 /**
- * Install — Aunion AI 첫 실행 시 VLM 모델 다운로드 마법사
+ * Install — Aunion AI 첫 실행 + 매 실행 시 마법사 (이전 /loading 페이지 통합)
  *
- * 3단계 흐름:
- *   1. intro       — 다운로드 안내 + "다운로드 시작"
- *   2. downloading — 진행률/속도/ETA + 검증 단계
- *   3. complete    — 완료 안내 + "확인" → /lecturer
+ * 4단계 흐름:
+ *   1. intro       — VLM 미캐시 + 슬라이드 모드 → 다운로드 안내 + "다운로드 시작"
+ *   2. preparing   — 모델 캐시 있음 또는 캐시 없는 기본 모드 → 모델별 로드 진행
+ *   3. downloading — 진행률/속도/ETA + 검증 단계 (VLM 실제 다운로드 시)
+ *   4. complete    — 완료 안내 + "확인" → /lecturer
  *
  * 디자인: 모던 인스톨러 톤. 흰 배경 + 미세한 그림자 + indigo 강조.
  */
@@ -12,7 +13,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { API_BASE } from '@/lib/api'
 
-type Phase = 'intro' | 'downloading' | 'complete' | 'error'
+type Phase = 'intro' | 'preparing' | 'downloading' | 'complete' | 'error'
 
 interface DownloadInfo {
   phase: 'downloading' | 'finalizing' | 'verifying'
@@ -21,11 +22,24 @@ interface DownloadInfo {
   speed_bps: number
 }
 
+type ModelStatus = 'pending' | 'loading' | 'done' | 'error' | 'skipped'
+
+interface ModelEntry {
+  status: ModelStatus
+  progress: number
+  label: string
+  desc: string
+}
+
+const MODEL_KEYS = ['asr', 'nmt_asr', 'ocr', 'vlm'] as const
+type ModelKey = (typeof MODEL_KEYS)[number]
+
 interface BackendHealth {
   status: 'starting' | 'wait_user_action' | 'loading' | 'ready' | 'ok' | 'error'
   message?: string
   progress?: number
   download?: DownloadInfo | null
+  models?: Record<ModelKey, ModelEntry>
 }
 
 interface DiskCheck {
@@ -65,12 +79,18 @@ function formatEta(remainingBytes: number, bps: number): string {
 // ─── 메인 ───────────────────────────────────────────────────────────────────
 function Install() {
   const navigate = useNavigate()
-  const [phase, setPhase] = useState<Phase>('intro')
+  // 초기 phase 는 'preparing' — 백엔드 응답 받기 전엔 (대부분의 케이스) 일단 모델 로드 화면을 보여줌.
+  // wait_user_action 신호가 오면 'intro' 로 전환, download 시작되면 'downloading' 으로.
+  const [phase, setPhase] = useState<Phase>('preparing')
   const [download, setDownload] = useState<DownloadInfo | null>(null)
+  const [models, setModels] = useState<Record<ModelKey, ModelEntry> | null>(null)
   const [errorMsg, setErrorMsg] = useState<string>('')
   const [starting, setStarting] = useState(false)
   const [disk, setDisk] = useState<DiskCheck | null>(null)
   const [diskError, setDiskError] = useState<string | null>(null)
+  // VLM 다운로드/사용자 액션 단계를 거쳤는지 추적. true 면 ready 시 Complete 페이지 표시,
+  // false (= 캐시 hit, preparing 만 거침) 면 곧장 /lecturer 로 이동해 마찰 제거.
+  const sawDownloadFlowRef = useRef(false)
   const pollTimerRef = useRef<number | null>(null)
 
   // disk-check 는 마법사 띄울 때 한 번만 — 다운로드 중엔 의미 없음
@@ -103,19 +123,33 @@ function Install() {
         const data: BackendHealth = await res.json()
         if (cancelled) return
         if (data.download) setDownload(data.download)
+        if (data.models) setModels(data.models)
 
         switch (data.status) {
           case 'wait_user_action':
+            sawDownloadFlowRef.current = true
             setPhase('intro')
             break
           case 'loading':
           case 'starting':
-            if (data.download) setPhase('downloading')
+            // 실제 다운로드 진행 중이면 downloading + flag set, 아니면 preparing (로컬 모델 로드).
+            if (data.download) {
+              sawDownloadFlowRef.current = true
+              setPhase('downloading')
+            } else {
+              setPhase('preparing')
+            }
             break
           case 'ready':
           case 'ok':
-            setPhase('complete')
-            break
+            // VLM 다운로드 / 사용자 액션 단계 거쳤으면 Complete 페이지로 사용자에게 명시적 확인.
+            // 거치지 않은 (캐시 hit) 케이스면 곧장 /lecturer 로 진행 — 불필요한 클릭 제거.
+            if (sawDownloadFlowRef.current) {
+              setPhase('complete')
+            } else {
+              navigate('/lecturer')
+            }
+            return
           case 'error':
             setErrorMsg(data.message || '알 수 없는 오류가 발생했습니다.')
             setPhase('error')
@@ -180,6 +214,7 @@ function Install() {
             diskError={diskError}
           />
         )}
+        {phase === 'preparing' && <PreparingPanel models={models} />}
         {phase === 'downloading' && (
           <DownloadPanel download={download} onCancel={handleCancel} />
         )}
@@ -485,6 +520,113 @@ function DownloadPanel({
       </StepFooter>
     </>
   )
+}
+
+// ─── Step 2.5: Preparing (모델 캐시 있음 — 로컬 로드 중) ────────────────────
+const DEFAULT_MODELS: Record<ModelKey, ModelEntry> = {
+  asr: { status: 'pending', progress: 0, label: 'ASR (음성인식)', desc: '대기 중' },
+  nmt_asr: { status: 'pending', progress: 0, label: 'NMT (실시간 번역)', desc: '대기 중' },
+  ocr: { status: 'pending', progress: 0, label: 'OCR (문자인식)', desc: '대기 중' },
+  vlm: { status: 'pending', progress: 0, label: 'VLM (슬라이드 번역)', desc: '대기 중' },
+}
+
+function PreparingPanel({ models }: { models: Record<ModelKey, ModelEntry> | null }) {
+  const data = models ?? DEFAULT_MODELS
+  return (
+    <>
+      <StepHeader
+        title="AI 모델 준비 중"
+        description="강의 시작에 필요한 모델을 로드하고 있습니다. 잠시만 기다려 주세요."
+      />
+
+      <div className="px-12 py-8 space-y-2.5">
+        {MODEL_KEYS.map((key) => (
+          <ModelRow key={key} entry={data[key]} />
+        ))}
+      </div>
+
+      <StepFooter>
+        <div className="text-xs text-stone-400">
+          첫 실행은 평균 30초 이내. CUDA 워밍업 포함 최대 1~2분 걸릴 수 있습니다.
+        </div>
+      </StepFooter>
+    </>
+  )
+}
+
+function ModelRow({ entry }: { entry: ModelEntry }) {
+  const isDone = entry.status === 'done'
+  const isActive = entry.status === 'loading'
+  const isError = entry.status === 'error'
+  const isSkipped = entry.status === 'skipped'
+
+  // 칩 색상
+  const chipClass = isDone
+    ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+    : isActive
+    ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+    : isError
+    ? 'bg-red-50 border-red-200 text-red-700'
+    : isSkipped
+    ? 'bg-stone-100 border-stone-200 text-stone-500'
+    : 'bg-stone-50 border-stone-200 text-stone-500'
+
+  const chipText = isDone
+    ? '완료'
+    : isActive
+    ? '로드 중'
+    : isError
+    ? '실패'
+    : isSkipped
+    ? '스킵'
+    : '대기'
+
+  return (
+    <div className="flex items-center gap-4 py-2.5 px-3 rounded-lg border border-stone-200/70 bg-white">
+      <StatusDot status={entry.status} />
+      <div className="flex-1 min-w-0">
+        <div className="text-[13.5px] font-medium text-stone-900 leading-tight">{entry.label}</div>
+        {entry.desc && (
+          <div className="text-[11px] text-stone-400 mt-0.5 truncate font-mono" title={entry.desc}>
+            {entry.desc}
+          </div>
+        )}
+      </div>
+      <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full border ${chipClass}`}>
+        {chipText}
+      </span>
+    </div>
+  )
+}
+
+function StatusDot({ status }: { status: ModelStatus }) {
+  if (status === 'done') {
+    return (
+      <svg className="w-4 h-4 text-emerald-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+      </svg>
+    )
+  }
+  if (status === 'loading') {
+    return (
+      <svg className="w-4 h-4 text-indigo-500 animate-spin shrink-0" fill="none" viewBox="0 0 24 24">
+        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+        <path
+          className="opacity-75"
+          fill="currentColor"
+          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+        />
+      </svg>
+    )
+  }
+  if (status === 'error') {
+    return (
+      <svg className="w-4 h-4 text-red-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+      </svg>
+    )
+  }
+  return <div className="w-4 h-4 rounded-full border-2 border-stone-300 shrink-0" />
 }
 
 // ─── Step 3: Complete ───────────────────────────────────────────────────────
