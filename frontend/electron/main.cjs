@@ -82,16 +82,28 @@ const _lastState = {
   ready: null,    // null=미정, true=ok/ready, false=error
 }
 
+// mainWindow 가 파괴된 뒤에도 백엔드(detached) 가 살아있어 stdout 이벤트가 계속
+// 발생함. 파괴된 webContents 에 send() 호출하면 "Object has been destroyed" 던짐.
+function _renderTarget() {
+  if (!mainWindow || mainWindow.isDestroyed()) return null
+  const wc = mainWindow.webContents
+  if (!wc || wc.isDestroyed()) return null
+  return wc
+}
+
 function sendLog(log) {
-  if (mainWindow) mainWindow.webContents.send('backend-log', log)
+  const wc = _renderTarget()
+  if (wc) wc.send('backend-log', log)
 }
 function sendProgress(progress) {
   _lastState.progress = progress
-  if (mainWindow) mainWindow.webContents.send('backend-progress', progress)
+  const wc = _renderTarget()
+  if (wc) wc.send('backend-progress', progress)
 }
 function sendModelStatus(models) {
   _lastState.models = models
-  if (mainWindow) mainWindow.webContents.send('backend-model-status', models)
+  const wc = _renderTarget()
+  if (wc) wc.send('backend-model-status', models)
 }
 
 // ─── 백엔드 준비 신호 (한 번만 호출) ─────────────────────────────
