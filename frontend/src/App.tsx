@@ -6,7 +6,6 @@ import LecturerHome from './pages/LecturerHome'
 import LecturerSettings from './pages/LecturerSettings'
 import Student from './pages/Student'
 import Start from './pages/Start'
-import Loading from './pages/Loading'
 import Install from './pages/Install'
 import { usePreferencesStore } from './stores/preferencesStore'
 
@@ -23,7 +22,6 @@ function App() {
   return (
     <div className="min-h-screen bg-background">
       <Routes>
-        <Route path="/loading" element={<Loading />} />
         <Route path="/install" element={<Install />} />
         <Route path="/" element={<Start />} />
         <Route path="/lecturer" element={<Lecturer />} />

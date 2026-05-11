@@ -108,3 +108,33 @@ begin
     end;
   end;
 end;
+
+{
+  백엔드 (aunion_backend.exe) 는 부모 Electron 종료 후에도 5분 grace 동안 살아남아
+  학생 자막 다운로드를 처리함 (757bd35 워치독 패턴). install / uninstall 진입 시점에
+  이 백엔드가 살아있으면 .exe 파일 락 때문에 Inno Setup 이 파일을 못 지워 "수동 삭제"
+  메시지를 표시. 진입 직전에 taskkill 로 정리해 매끄러운 install/uninstall 흐름 보장.
+}
+procedure KillAunionProcesses();
+var
+  ResultCode: Integer;
+begin
+  Exec('taskkill.exe', '/F /IM aunion_backend.exe /T',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('taskkill.exe', '/F /IM "Aunion AI.exe" /T',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  { 파일 락 해제 대기 — Windows 가 핸들 정리하는 데 잠시 걸릴 수 있음 }
+  Sleep(500);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  KillAunionProcesses();
+  Result := '';  { 빈 문자열 = 진행 OK }
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  KillAunionProcesses();
+  Result := True;
+end;
