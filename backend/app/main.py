@@ -80,7 +80,9 @@ _model_status = {
         "ocr": {"status": "pending", "progress": 0, "label": "OCR (문자인식)", "desc": ModelConfig.OCR_MODEL},
         "vlm": {"status": "pending", "progress": 0, "label": "VLM (슬라이드 번역)", "desc": VLM_BASE_MODEL},
     },
-    "download": None,
+    # downloads: 모델별 진행 정보 — 병렬 다운로드에서 단일 필드를 두 watcher 가 덮어쓰는
+    # 깜빡임 방지 위해 모델 키(asr/nmt_asr/ocr/vlm)로 분리. 완료 시 해당 키 제거.
+    "downloads": {},
 }
 
 # 사용자가 "다운로드 시작" 버튼 클릭 시 set — VLM 미캐시 첫 실행 흐름에서 대기 해제
@@ -304,7 +306,7 @@ def _start_byte_progress_watcher(model_key: str, repo_id: str, total_bytes: int)
             else:
                 phase = "downloading"
 
-            _model_status["download"] = {
+            _model_status["downloads"][model_key] = {
                 "phase": phase,
                 "current_bytes": current,
                 "total_bytes": total_bytes,
@@ -321,6 +323,7 @@ def _start_byte_progress_watcher(model_key: str, repo_id: str, total_bytes: int)
             last_bytes = current
             last_time = now
             stop_event.wait(1.0)
+        # watcher 종료 → 해당 모델 download 슬롯 비움 (verifying 이전 라스트 값은 _download_one 가 별도로 채움)
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
@@ -359,7 +362,7 @@ def _download_one(model_key: str, repo_id: str):
 
     _model_status["models"][model_key]["progress"] = 100
     # 다운로드 완료 — phase 전환 (검증/초기화)
-    _model_status["download"] = {
+    _model_status["downloads"][model_key] = {
         "phase": "verifying",
         "current_bytes": total_bytes,
         "total_bytes": total_bytes,
@@ -455,10 +458,12 @@ def _load_models_sync():
         vlm_just_downloaded = any(k == "vlm" for k, _ in to_download)
         if vlm_just_downloaded:
             import time as _time
-            _model_status["download"] = {
+            # VLM 마지막 측정값 보존해 검증 단계에서도 동일 사이즈 표시
+            _vlm_prev = _model_status["downloads"].get("vlm") or {}
+            _model_status["downloads"]["vlm"] = {
                 "phase": "verifying",
-                "current_bytes": _model_status["download"].get("current_bytes", 0) if _model_status["download"] else 0,
-                "total_bytes": _model_status["download"].get("total_bytes", 0) if _model_status["download"] else 0,
+                "current_bytes": _vlm_prev.get("current_bytes", 0),
+                "total_bytes": _vlm_prev.get("total_bytes", 0),
                 "speed_bps": 0,
             }
             _model_status["message"] = "AI 엔진 준비 중..."
@@ -481,7 +486,7 @@ def _load_models_sync():
             _time.sleep(0.5)  # 검증 단계 UI에 잠시 보이도록
             print(f"[검증] 완료 ({len(safetensors)}개 파일 OK)", flush=True)
 
-        _model_status["download"] = None
+        _model_status["downloads"] = {}
         _model_status["status"] = "ready"
         _model_status["message"] = "슬라이드 번역 전용 모드 — 준비 완료"
         _model_status["progress"] = 100
@@ -569,6 +574,9 @@ def _load_models_sync():
     else:
         print("모든 모델 초기화 완료!", flush=True)
     print("=" * 50, flush=True)
+
+    # 다운로드 진행 정보는 더 이상 유효하지 않으므로 정리 (UI 가 깔끔하게 progress 화면 떠남)
+    _model_status["downloads"] = {}
 
     if failed_models:
         _model_status["status"] = "error"

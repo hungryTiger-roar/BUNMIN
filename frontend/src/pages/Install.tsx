@@ -38,7 +38,8 @@ interface BackendHealth {
   status: 'starting' | 'wait_user_action' | 'loading' | 'ready' | 'ok' | 'error'
   message?: string
   progress?: number
-  download?: DownloadInfo | null
+  // 모델별 다운로드 진행 정보 — 병렬 다운로드 시 모델 키로 분리해 단일 필드 덮어쓰기 문제 회피.
+  downloads?: Partial<Record<ModelKey, DownloadInfo>>
   models?: Record<ModelKey, ModelEntry>
 }
 
@@ -82,7 +83,8 @@ function Install() {
   // 초기 phase 는 'preparing' — 백엔드 응답 받기 전엔 (대부분의 케이스) 일단 모델 로드 화면을 보여줌.
   // wait_user_action 신호가 오면 'intro' 로 전환, download 시작되면 'downloading' 으로.
   const [phase, setPhase] = useState<Phase>('preparing')
-  const [download, setDownload] = useState<DownloadInfo | null>(null)
+  // 모델 키 → 다운로드 정보. 활성 다운로드가 하나도 없으면 빈 객체.
+  const [downloads, setDownloads] = useState<Partial<Record<ModelKey, DownloadInfo>>>({})
   const [models, setModels] = useState<Record<ModelKey, ModelEntry> | null>(null)
   const [errorMsg, setErrorMsg] = useState<string>('')
   const [starting, setStarting] = useState(false)
@@ -122,8 +124,10 @@ function Install() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data: BackendHealth = await res.json()
         if (cancelled) return
-        if (data.download) setDownload(data.download)
+        const activeDownloads = data.downloads ?? {}
+        setDownloads(activeDownloads)
         if (data.models) setModels(data.models)
+        const hasActiveDownload = Object.keys(activeDownloads).length > 0
 
         switch (data.status) {
           case 'wait_user_action':
@@ -132,8 +136,8 @@ function Install() {
             break
           case 'loading':
           case 'starting':
-            // 실제 다운로드 진행 중이면 downloading + flag set, 아니면 preparing (로컬 모델 로드).
-            if (data.download) {
+            // 활성 다운로드 있으면 downloading + flag set, 아니면 preparing (로컬 모델 로드).
+            if (hasActiveDownload) {
               sawDownloadFlowRef.current = true
               setPhase('downloading')
             } else {
@@ -216,7 +220,7 @@ function Install() {
         )}
         {phase === 'preparing' && <PreparingPanel models={models} />}
         {phase === 'downloading' && (
-          <DownloadPanel download={download} onCancel={handleCancel} />
+          <DownloadPanel downloads={downloads} models={models} onCancel={handleCancel} />
         )}
         {phase === 'complete' && <CompletePanel onConfirm={handleConfirm} />}
         {phase === 'error' && <ErrorPanel message={errorMsg} onClose={handleCancel} />}
@@ -409,104 +413,55 @@ function IntroPanel({
 }
 
 // ─── Step 2: Downloading ────────────────────────────────────────────────────
+// 모델 카드 라벨 — Preparing 과 일관된 표기
+const DOWNLOAD_LABEL: Record<ModelKey, string> = {
+  asr: 'ASR (음성인식)',
+  nmt_asr: 'NMT (실시간 번역)',
+  ocr: 'OCR (문자인식)',
+  vlm: 'VLM (슬라이드 번역)',
+}
+
 function DownloadPanel({
-  download,
+  downloads,
+  models,
   onCancel,
 }: {
-  download: DownloadInfo | null
+  downloads: Partial<Record<ModelKey, DownloadInfo>>
+  models: Record<ModelKey, ModelEntry> | null
   onCancel: () => void
 }) {
-  const phaseKind = download?.phase ?? 'downloading'
-  const isFinalizing = phaseKind === 'finalizing'
-  const isVerifying = phaseKind === 'verifying'
-  const isPostDownload = isFinalizing || isVerifying  // 다운로드 100% 이후 단계
+  // 표시 순서 — 큰 모델 먼저 (VLM > NMT > ASR > OCR) 가 자연스럽지만 일관 위해 MODEL_KEYS 그대로
+  const orderedKeys = MODEL_KEYS.filter((k) => downloads[k]) as ModelKey[]
+  const anyPostDownload = orderedKeys.some((k) => {
+    const phase = downloads[k]?.phase
+    return phase === 'finalizing' || phase === 'verifying'
+  })
 
-  const total = download?.total_bytes ?? 0
-  const current = download?.current_bytes ?? 0
-  const speed = download?.speed_bps ?? 0
-  const dlPct = total > 0 ? Math.min(100, (current / total) * 100) : 0
-  const remaining = Math.max(0, total - current)
-
-  // 단계별 헤더 메시지
-  const headerTitle = isVerifying
-    ? '모델을 검증하고 있습니다'
-    : isFinalizing
+  const headerTitle = anyPostDownload
     ? '다운로드를 마무리하고 있습니다'
-    : '잠시만 기다려 주세요'
-
-  const headerDesc = isVerifying
-    ? '다운로드된 파일이 정상적으로 저장되었는지 확인하고 있습니다.'
-    : isFinalizing
-    ? '받은 파일을 정리하는 중입니다. 사용자 PC 환경에 따라 수 분 정도 걸릴 수 있습니다.'
-    : '슬라이드 번역에 필요한 AI 모델을 다운로드하는 중입니다.'
-
-  // 보조 바 라벨
-  const subLabel = isVerifying ? '검증 진행 중' : isFinalizing ? '정리 진행 중' : '대기 중'
+    : orderedKeys.length === 0
+    ? '잠시만 기다려 주세요'
+    : 'AI 모델 다운로드 중'
+  const headerDesc = anyPostDownload
+    ? '받은 파일을 정리하고 검증하는 중입니다. 디스크 속도에 따라 수 분 걸릴 수 있습니다.'
+    : '강의 시작에 필요한 AI 모델을 다운로드하는 중입니다. 모델별로 진행률이 표시됩니다.'
 
   return (
     <>
       <StepHeader title={headerTitle} description={headerDesc} />
 
-      <div className="px-12 py-8">
-        {/* 다운로드 바 */}
-        <div className="mb-7">
-          <div className="flex items-baseline justify-between mb-2.5">
-            <span className="text-[13px] font-medium text-stone-700">다운로드</span>
-            <span className="text-xs text-stone-500 font-mono tabular-nums">
-              {total > 0 ? (
-                <>
-                  <span className="text-stone-700">{formatBytes(Math.min(current, total))}</span>
-                  <span className="mx-1.5 text-stone-300">/</span>
-                  <span>{formatBytes(total)}</span>
-                  {!isPostDownload && speed > 0 && (
-                    <span className="ml-3 text-stone-400">{formatSpeed(speed)}</span>
-                  )}
-                </>
-              ) : (
-                <span className="text-stone-400">준비 중</span>
-              )}
-            </span>
-          </div>
-          <ProgressBar
-            percent={isPostDownload ? 100 : dlPct}
-            done={isPostDownload || dlPct >= 100}
-            color="indigo"
+      <div className="px-12 py-8 space-y-3">
+        {orderedKeys.length === 0 && (
+          <div className="text-xs text-stone-400 py-2">진행 정보 수신 대기 중...</div>
+        )}
+        {orderedKeys.map((key) => (
+          <DownloadModelCard
+            key={key}
+            label={DOWNLOAD_LABEL[key]}
+            desc={models?.[key]?.desc ?? ''}
+            info={downloads[key]!}
           />
-          {!isPostDownload && (
-            <div className="mt-2 flex justify-between text-[11px] text-stone-400 font-mono tabular-nums">
-              <span>{dlPct >= 1 ? `${dlPct.toFixed(1)}%` : '연결 중...'}</span>
-              {speed > 0 && total > 0 && (
-                <span>{formatEta(remaining, speed)}</span>
-              )}
-            </div>
-          )}
-          {isPostDownload && (
-            <div className="mt-2 text-[11px] text-emerald-600 font-medium">
-              다운로드 완료 ({formatBytes(total)})
-            </div>
-          )}
-        </div>
-
-        {/* 보조 바 — 정리/검증 진행 표시 */}
-        <div>
-          <div className="flex items-baseline justify-between mb-2.5">
-            <span className="text-[13px] font-medium text-stone-700">
-              {isVerifying ? '검증' : '준비'}
-            </span>
-            <span className="text-xs text-stone-400">{subLabel}</span>
-          </div>
-          <ProgressBar
-            percent={isPostDownload ? 60 : 0}
-            done={false}
-            color="indigo"
-            indeterminate={isPostDownload}
-          />
-          {isFinalizing && (
-            <p className="mt-3 text-[11px] text-stone-400 leading-relaxed">
-              파일을 사용 가능한 위치로 옮기는 중입니다. 디스크 속도에 따라 시간이 다소 걸릴 수 있습니다.
-            </p>
-          )}
-        </div>
+        ))}
       </div>
 
       <StepFooter>
@@ -519,6 +474,73 @@ function DownloadPanel({
         </button>
       </StepFooter>
     </>
+  )
+}
+
+function DownloadModelCard({ label, desc, info }: { label: string; desc: string; info: DownloadInfo }) {
+  const phaseKind = info.phase
+  const isFinalizing = phaseKind === 'finalizing'
+  const isVerifying = phaseKind === 'verifying'
+  const isPostDownload = isFinalizing || isVerifying
+
+  const total = info.total_bytes ?? 0
+  const current = info.current_bytes ?? 0
+  const speed = info.speed_bps ?? 0
+  const dlPct = total > 0 ? Math.min(100, (current / total) * 100) : 0
+  const remaining = Math.max(0, total - current)
+
+  const stageLabel = isVerifying ? '검증 중' : isFinalizing ? '정리 중' : '다운로드 중'
+
+  return (
+    <div className="border border-stone-200 rounded-xl p-4 bg-white">
+      <div className="flex items-center justify-between gap-3 mb-2">
+        <div className="min-w-0">
+          <div className="text-[13.5px] font-semibold text-stone-900 leading-tight">{label}</div>
+          {desc && (
+            <div className="text-[11px] text-stone-400 mt-0.5 truncate font-mono" title={desc}>
+              {desc}
+            </div>
+          )}
+        </div>
+        <span className="text-[11px] font-medium px-2 py-0.5 rounded-full border border-indigo-200 bg-indigo-50 text-indigo-700 shrink-0">
+          {stageLabel}
+        </span>
+      </div>
+
+      <div className="flex items-baseline justify-between mb-1.5 text-[11.5px] font-mono tabular-nums">
+        {total > 0 ? (
+          <>
+            <span className="text-stone-700">
+              {formatBytes(Math.min(current, total))}
+              <span className="mx-1 text-stone-300">/</span>
+              <span className="text-stone-500">{formatBytes(total)}</span>
+            </span>
+            {!isPostDownload && speed > 0 && (
+              <span className="text-stone-400">{formatSpeed(speed)}</span>
+            )}
+          </>
+        ) : (
+          <span className="text-stone-400">준비 중</span>
+        )}
+      </div>
+
+      <ProgressBar
+        percent={isPostDownload ? 100 : dlPct}
+        done={isPostDownload || dlPct >= 100}
+        color="indigo"
+      />
+
+      <div className="mt-1.5 flex justify-between text-[10.5px] text-stone-400 font-mono tabular-nums">
+        {isPostDownload ? (
+          <span className="text-emerald-600 font-medium">다운로드 완료</span>
+        ) : (
+          <>
+            <span>{dlPct >= 1 ? `${dlPct.toFixed(1)}%` : '연결 중...'}</span>
+            {speed > 0 && total > 0 && <span>{formatEta(remaining, speed)}</span>}
+          </>
+        )}
+      </div>
+    </div>
   )
 }
 
