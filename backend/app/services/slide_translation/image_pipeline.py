@@ -161,21 +161,26 @@ def build_glossary_from_ocr_results(ocr_results: list, lecture_title: str = "Lec
 # VLM 프롬프트에 포함할 용어집 최대 항목 수
 # - VLM 입력 토큰 길이 제한 (Qwen2.5-VL: 8192 tokens)
 # - 용어집이 너무 길면 번역할 텍스트가 잘릴 수 있음
-# - 15개 × ~30 chars ≈ 450 chars → 안전한 범위
-MAX_GLOSSARY_ITEMS = 15
+# - 25개 × ~30 chars ≈ 750 chars → 안전한 범위
+MAX_GLOSSARY_ITEMS = 25
 
 
-def select_glossary_items(glossary: dict, max_items: int = None) -> list[tuple[str, str]]:
+def select_glossary_items(
+    glossary: dict,
+    max_items: int = None,
+    context_texts: list[str] = None
+) -> list[tuple[str, str]]:
     """
     VLM 프롬프트에 포함할 용어집 항목 선택
 
     선택 전략 (우선순위):
-    1. force 정책이 명시된 용어 (예: "_force" suffix가 있는 경우)
+    1. 현재 페이지 텍스트에 실제로 등장하는 용어 (context_texts 제공 시)
     2. 나머지는 원래 순서대로 (빌드 시 빈도/중요도 순 정렬됨)
 
     Args:
         glossary: {한글: 영어} 용어집
         max_items: 최대 항목 수 (기본: MAX_GLOSSARY_ITEMS)
+        context_texts: 현재 페이지의 OCR 텍스트 리스트 (우선순위 판단용)
 
     Returns:
         [(한글, 영어), ...] 선택된 항목 리스트
@@ -184,13 +189,26 @@ def select_glossary_items(glossary: dict, max_items: int = None) -> list[tuple[s
         return []
 
     max_items = max_items or MAX_GLOSSARY_ITEMS
-
-    # 현재는 단순히 앞에서부터 선택 (빌드 시 이미 중요도 순 정렬됨)
-    # TODO: 향후 개선 - 현재 페이지에 실제로 등장하는 용어 우선 선택
     items = list(glossary.items())
 
     if len(items) <= max_items:
         return items
+
+    # context_texts가 제공되면 현재 페이지에 등장하는 용어 우선 선택
+    if context_texts:
+        # any() + generator로 short-circuit 평가 (대용량 텍스트 성능 최적화)
+        in_context = []
+        not_in_context = []
+
+        for ko, en in items:
+            if any(ko in text for text in context_texts):
+                in_context.append((ko, en))
+            else:
+                not_in_context.append((ko, en))
+
+        # 등장하는 용어 먼저, 나머지는 원래 순서
+        prioritized = in_context + not_in_context
+        return prioritized[:max_items]
 
     return items[:max_items]
 
@@ -835,7 +853,7 @@ def stage_translate(image_path: str, regions: list, glossary: dict = None) -> li
 
     glossary_section = ""
     if glossary:
-        selected_glossary = select_glossary_items(glossary)
+        selected_glossary = select_glossary_items(glossary, context_texts=page_context_items)
         glossary_lines = [f'  "{ko}": "{en}"' for ko, en in selected_glossary]
         glossary_section = "\n[GLOSSARY]\n" + "\n".join(glossary_lines) + "\n"
 
@@ -1080,6 +1098,8 @@ def stage_overlay(image_path: str, regions: list, output_path: str):
     for region in translate_regions:
         bbox = region["bbox"]
         is_solid, bg_color = is_solid_background(img_np, bbox)
+        # 텍스트 색상 결정용으로 배경색 저장
+        region["fill_color"] = bg_color
         if is_solid:
             x_min, y_min, x_max, y_max = [int(v) for v in bbox]
             draw_temp.rectangle([x_min, y_min, x_max, y_max], fill=bg_color)
@@ -1104,23 +1124,29 @@ def stage_overlay(image_path: str, regions: list, output_path: str):
         height = y_max - y_min
         english = region["english"]
 
-        try:
-            cx, cy = int((x_min + x_max) / 2), int((y_min + y_max) / 2)
-            cx = max(0, min(cx, img.width - 1))
-            cy = max(0, min(cy, img.height - 1))
-            pixel = img.getpixel((cx, cy))
-            if isinstance(pixel, int):
-                bg_color = (pixel, pixel, pixel)
-            else:
-                bg_color = pixel[:3]
-        except Exception:
-            bg_color = (255, 255, 255)
+        # 저장된 배경색 사용 (없으면 픽셀에서 읽기)
+        bg_color = region.get("fill_color")
+        if not bg_color:
+            try:
+                cx, cy = int((x_min + x_max) / 2), int((y_min + y_max) / 2)
+                cx = max(0, min(cx, img.width - 1))
+                cy = max(0, min(cy, img.height - 1))
+                pixel = img.getpixel((cx, cy))
+                if isinstance(pixel, int):
+                    bg_color = (pixel, pixel, pixel)
+                else:
+                    bg_color = pixel[:3]
+            except Exception:
+                bg_color = (255, 255, 255)
 
         initial_font_size = max(12, int(height * 0.7))
         lines, font, final_font_size, line_height = fit_text_to_box(english, width - 4, height - 4, initial_font_size, draw)
 
-        brightness = sum(bg_color) / 3
-        text_color = (0, 0, 0) if brightness > 127 else (255, 255, 255)
+        # 가중치 기반 명도 계산 (인간 시각 특성 반영)
+        r, g, b = int(bg_color[0]), int(bg_color[1]), int(bg_color[2])
+        brightness = (r * 299 + g * 587 + b * 114) / 1000
+        text_color = (0, 0, 0) if brightness > 128 else (255, 255, 255)
+        print(f"      [Overlay] bg_color={bg_color}, brightness={brightness:.1f}, text_color={text_color}")
         total_text_height = line_height * len(lines)
         start_y = y_min + (height - total_text_height) / 2
 
@@ -1214,7 +1240,8 @@ def clear_cache(slide_id: str):
 def batch_ocr_surya(
     image_paths: list[tuple[int, str]],
     slide_id: str = None,
-    chunk_size: int = None
+    chunk_size: int = None,
+    is_cancelled_callback: callable = None
 ) -> dict[int, list]:
     """
     여러 이미지를 배치로 OCR 처리
@@ -1223,6 +1250,7 @@ def batch_ocr_surya(
         image_paths: [(page_idx, image_path), ...]
         slide_id: 캐시 저장용 슬라이드 ID
         chunk_size: 청크 크기 (None이면 전체를 한 번에)
+        is_cancelled_callback: 취소 여부 확인 콜백 (페이지 처리 전 호출)
 
     Returns:
         {page_idx: regions, ...}
@@ -1278,6 +1306,15 @@ def batch_ocr_surya(
         print(f"\n  [Chunk {chunk_start//chunk_size + 1}] 페이지 {chunk_start+1}-{chunk_end}/{len(pending_pages)}")
 
         for page_idx, img_path in chunk:
+            # 페이지 처리 전 취소 체크
+            if is_cancelled_callback and is_cancelled_callback():
+                print(f"  [OCR Batch] 취소됨 - 처리 중단")
+                del foundation_predictor, det_predictor, rec_predictor
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                return results
+
             try:
                 image = Image.open(img_path).convert("RGB")
                 print(f"    페이지 {page_idx+1}: {image.size[0]}x{image.size[1]}px")
@@ -1338,7 +1375,8 @@ def batch_translate_vlm(
     image_paths: dict[int, str],
     slide_id: str = None,
     glossary: dict = None,
-    chunk_size: int = None
+    chunk_size: int = None,
+    is_cancelled_callback: callable = None
 ) -> dict[int, list]:
     """
     여러 페이지를 배치로 VLM 번역
@@ -1349,6 +1387,7 @@ def batch_translate_vlm(
         slide_id: 캐시 저장용 슬라이드 ID
         glossary: 용어집
         chunk_size: 청크 크기
+        is_cancelled_callback: 취소 여부 확인 콜백 (페이지 처리 전 호출)
 
     Returns:
         {page_idx: translated_regions, ...}
@@ -1392,6 +1431,11 @@ def batch_translate_vlm(
         print(f"\n  [Chunk {chunk_start//chunk_size + 1}] 페이지 {chunk_start+1}-{chunk_end}/{len(pending_pages)}")
 
         for page_idx, regions in chunk:
+            # 페이지 처리 전 취소 체크
+            if is_cancelled_callback and is_cancelled_callback():
+                print(f"  [VLM Batch] 취소됨 - 처리 중단")
+                return results
+
             try:
                 img_path = image_paths.get(page_idx)
                 if not img_path:
@@ -1474,7 +1518,7 @@ def _translate_regions_with_vlm(
 
     glossary_section = ""
     if glossary:
-        selected_glossary = select_glossary_items(glossary)
+        selected_glossary = select_glossary_items(glossary, context_texts=page_context_items)
         glossary_lines = [f'  "{ko}": "{en}"' for ko, en in selected_glossary]
         glossary_section = "\n[GLOSSARY]\n" + "\n".join(glossary_lines) + "\n"
 

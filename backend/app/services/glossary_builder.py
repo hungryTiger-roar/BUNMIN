@@ -117,15 +117,23 @@ class GlossaryBuilder:
         return list(extracted)
 
     def _extract_terms_via_gpt(self, korean_texts: list[str], lecture_title: str) -> dict:
-        """GPT API로 전문용어 추출 및 번역"""
+        """GPT API로 전문용어 추출 및 번역 (25개씩 배치 호출)"""
         if not korean_texts:
             return {}
 
-        # 텍스트 목록 (최대 100개로 제한)
-        texts_sample = korean_texts[:100]
-        texts_str = "\n".join(f"- {t}" for t in texts_sample)
+        # 25개씩 청크로 나눠서 여러 번 호출
+        CHUNK_SIZE = 25
+        all_terms = {}
+        total_chunks = (len(korean_texts) + CHUNK_SIZE - 1) // CHUNK_SIZE
 
-        prompt = f"""다음은 "{lecture_title}" 강의 슬라이드에서 추출한 한글 텍스트입니다.
+        for chunk_idx in range(0, len(korean_texts), CHUNK_SIZE):
+            chunk = korean_texts[chunk_idx:chunk_idx + CHUNK_SIZE]
+            chunk_num = chunk_idx // CHUNK_SIZE + 1
+            print(f"[Glossary] GPT 호출 {chunk_num}/{total_chunks} ({len(chunk)}개 텍스트)")
+
+            texts_str = "\n".join(f"- {t}" for t in chunk)
+
+            prompt = f"""다음은 "{lecture_title}" 강의 슬라이드에서 추출한 한글 텍스트입니다.
 
 {texts_str}
 
@@ -142,35 +150,36 @@ JSON 형식으로 응답하세요:
 전문용어가 없으면 빈 객체 {{}}를 반환하세요.
 JSON만 반환하세요. 설명은 불필요합니다."""
 
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a technical translator specializing in academic terminology. Respond only with valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,
-                max_tokens=2000,
-            )
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": "You are a technical translator specializing in academic terminology. Respond only with valid JSON."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.1,
+                    max_tokens=2000,
+                )
 
-            content = response.choices[0].message.content.strip()
+                content = response.choices[0].message.content.strip()
 
-            # JSON 파싱 (```json ... ``` 블록 처리)
-            if content.startswith("```"):
-                content = re.sub(r'^```(?:json)?\s*', '', content)
-                content = re.sub(r'\s*```$', '', content)
+                # JSON 파싱 (```json ... ``` 블록 처리)
+                if content.startswith("```"):
+                    content = re.sub(r'^```(?:json)?\s*', '', content)
+                    content = re.sub(r'\s*```$', '', content)
 
-            terms = json.loads(content)
-            print(f"[Glossary] GPT 추출 완료: {len(terms)}개 전문용어")
-            return terms
+                chunk_terms = json.loads(content)
+                all_terms.update(chunk_terms)
+                print(f"  → {len(chunk_terms)}개 용어 추출")
 
-        except json.JSONDecodeError as e:
-            print(f"[Glossary] JSON 파싱 실패: {e}")
-            print(f"  응답: {content[:200]}...")
-            return {}
-        except Exception as e:
-            print(f"[Glossary] GPT API 호출 실패: {e}")
-            return {}
+            except json.JSONDecodeError as e:
+                print(f"[Glossary] JSON 파싱 실패 (청크 {chunk_num}): {e}")
+                print(f"  응답: {content[:200]}...")
+            except Exception as e:
+                print(f"[Glossary] GPT API 호출 실패 (청크 {chunk_num}): {e}")
+
+        print(f"[Glossary] GPT 추출 완료: 총 {len(all_terms)}개 전문용어")
+        return all_terms
 
     def build_glossary(
         self,

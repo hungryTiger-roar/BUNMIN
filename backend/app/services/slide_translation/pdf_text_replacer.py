@@ -164,20 +164,32 @@ def _render_multi_color_text(
     match = re.search(r'^([A-Za-z가-힣0-9\s]+?)([^A-Za-z가-힣0-9\s])\s*', translated)
 
     if not match:
-        # 패턴 없으면 단색 textbox
+        # 패턴 없으면 단색 textbox (배경과 대비 체크)
+        bg_brightness = (bg_color[0] * 299 + bg_color[1] * 587 + bg_color[2] * 114) / 1000
+        color_brightness = (first_color[0] * 299 + first_color[1] * 587 + first_color[2] * 114) / 1000
+        if abs(bg_brightness - color_brightness) < 0.3:
+            adjusted_color = (0, 0, 0) if bg_brightness > 0.5 else (1, 1, 1)
+        else:
+            adjusted_color = first_color
         return page.insert_textbox(
             rect, translated, fontname=font, fontsize=size,
-            color=first_color, align=fitz.TEXT_ALIGN_LEFT
+            color=adjusted_color, align=fitz.TEXT_ALIGN_LEFT
         )
 
     term = match.group(1).strip() + match.group(2)
     definition = translated[match.end():].strip()
 
     if not definition:
-        # definition 없으면 term만 렌더링
+        # definition 없으면 term만 렌더링 (배경과 대비 체크)
+        bg_brightness = (bg_color[0] * 299 + bg_color[1] * 587 + bg_color[2] * 114) / 1000
+        color_brightness = (first_color[0] * 299 + first_color[1] * 587 + first_color[2] * 114) / 1000
+        if abs(bg_brightness - color_brightness) < 0.3:
+            adjusted_color = (0, 0, 0) if bg_brightness > 0.5 else (1, 1, 1)
+        else:
+            adjusted_color = first_color
         page.insert_text(
             (rect.x0, rect.y0 + size), term,
-            fontname=font, fontsize=size, color=first_color
+            fontname=font, fontsize=size, color=adjusted_color
         )
         return 0
 
@@ -190,15 +202,25 @@ def _render_multi_color_text(
     # Term: Definition이 아닌 일반 multi-color:
     # - 기존 로직 유지
 
+    # 배경 밝기 계산 (대비 체크용)
+    bg_brightness = (bg_color[0] * 299 + bg_color[1] * 587 + bg_color[2] * 114) / 1000
+
+    def ensure_contrast(color, bg_brightness):
+        """배경과 대비가 충분하지 않으면 색상 조정"""
+        color_brightness = (color[0] * 299 + color[1] * 587 + color[2] * 114) / 1000
+        if abs(bg_brightness - color_brightness) < 0.3:
+            return (0, 0, 0) if bg_brightness > 0.5 else (1, 1, 1)
+        return color
+
     # 패턴이 매치되었으므로 Term: Definition 구조임
     # → definition은 반드시 term과 다른 색상 (없으면 black)
-    term_color = first_color  # term은 원본 색상 유지 (보통 빨강)
+    term_color = ensure_contrast(first_color, bg_brightness)  # 대비 체크 후 색상
 
     # definition 색상 결정: second_color가 있고 term과 다르면 사용, 아니면 black
     if second_color is not None and second_color != first_color:
-        def_color = second_color
+        def_color = ensure_contrast(second_color, bg_brightness)
     else:
-        def_color = (0, 0, 0)  # black fallback (NEVER term_color)
+        def_color = (0, 0, 0) if bg_brightness > 0.5 else (1, 1, 1)  # 배경에 맞는 기본색
 
     # DEBUG: 색상 결정 로그
     block_id = trans.get('block_id', 'unknown')
@@ -562,7 +584,20 @@ def _replace_single_block(
 
     # 2. 영어 폰트 및 색상 설정
     english_font = map_korean_to_english_font(original_font)
-    text_color = int_color_to_rgb(color_int) if isinstance(color_int, int) else (0, 0, 0)
+    original_text_color = int_color_to_rgb(color_int) if isinstance(color_int, int) else (0, 0, 0)
+
+    # 배경색과 텍스트색의 대비 확인 후 조정
+    bg_color = bg_info["color"]  # (r, g, b) 0-1 범위
+    bg_brightness = (bg_color[0] * 299 + bg_color[1] * 587 + bg_color[2] * 114) / 1000
+    text_brightness = (original_text_color[0] * 299 + original_text_color[1] * 587 + original_text_color[2] * 114) / 1000
+
+    # 배경과 텍스트 밝기 차이가 0.3 미만이면 대비 부족 → 색상 조정
+    if abs(bg_brightness - text_brightness) < 0.3:
+        # 배경이 밝으면 검정, 어두우면 흰색
+        text_color = (0, 0, 0) if bg_brightness > 0.5 else (1, 1, 1)
+        print(f"[Replace] 텍스트 색상 조정: bg={bg_brightness:.2f}, text={text_brightness:.2f} → {text_color}")
+    else:
+        text_color = original_text_color
     result.final_font = english_font
 
     # 3. 최소 폰트 크기 결정

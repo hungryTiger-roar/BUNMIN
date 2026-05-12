@@ -1394,25 +1394,28 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
                         image_paths_map[page_idx] = str(img_path)
                     doc.close()
 
-                # image_region_pages: 원본 PDF에서 추출 (번역 전 한글 텍스트 감지 위해)
-                if image_region_pages:
-                    orig_doc = fitz.open(str(pdf_path))
+                # image_region_pages: 번역된 PDF에서 추출 (PDF Layer로 텍스트 번역 후 이미지 영역만 OCR)
+                # 원본 PDF가 아닌 번역된 PDF를 사용해야 텍스트 레이어 번역 결과가 보존됨
+                if image_region_pages and translated_pdf_path.exists():
+                    trans_doc = fitz.open(str(translated_pdf_path))
                     for page_idx in image_region_pages:
                         if page_idx not in [p[0] for p in image_paths_for_ocr]:
-                            page = orig_doc[page_idx]
+                            page = trans_doc[page_idx]
                             mat = fitz.Matrix(2, 2)
                             pix = page.get_pixmap(matrix=mat)
                             img_path = IMAGES_DIR / f"{slide_id}_{page_idx}_region.png"
                             pix.save(str(img_path))
                             image_paths_for_ocr.append((page_idx, str(img_path)))
                             image_paths_map[page_idx] = str(img_path)
-                    orig_doc.close()
+                    trans_doc.close()
 
                 # 배치 OCR 실행 (Surya 한 번 로드)
                 ocr_results = await asyncio.to_thread(
                     batch_ocr_surya,
                     image_paths_for_ocr,
-                    slide_id
+                    slide_id,
+                    None,  # chunk_size (기본값)
+                    lambda: _is_cancelled(slide_id)  # 페이지별 취소 체크
                 )
 
                 print(f"  OCR 완료: {len(ocr_results)}개 페이지")
@@ -1464,7 +1467,9 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
                         pages_with_korean,
                         image_paths_map,
                         slide_id,
-                        glossary
+                        glossary,
+                        None,  # chunk_size (기본값)
+                        lambda: _is_cancelled(slide_id)  # 페이지별 취소 체크
                     )
 
                     print(f"  번역 완료: {len(translate_results)}개 페이지")
