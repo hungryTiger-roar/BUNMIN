@@ -84,6 +84,7 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
   // 각 setter를 개별 selector로 구독 — Zustand action은 stable 이므로 재렌더 트리거하지 않음
   // (전체 destructure 시 store 어떤 필드가 바뀌어도 useWebSocket 재렌더 → send/connect ref 흔들림)
   const addSubtitle = useLectureStore((s) => s.addSubtitle)
+  const clearSubtitles = useLectureStore((s) => s.clearSubtitles)
   const setConnected = useLectureStore((s) => s.setConnected)
   const setSlideId = useLectureStore((s) => s.setSlideId)
   const setSlideStatus = useLectureStore((s) => s.setSlideStatus)
@@ -336,6 +337,9 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
           pauseLectureTsRef.current = pauseTs
           const apply = () => {
             setPaused(true)
+            // 잔여 자막 제거 — pause 적용 직전 commit 된 자막이 일시정지 오버레이 위에
+            // 남는 현상 방지. resume 후엔 새 sentence commit 이 들어와 자연히 다시 표시됨.
+            clearSubtitles()
             // pause 가 학생측에서 실제 적용된 wall time — resume sleep elapsed 기준.
             pauseAppliedAtRef.current = Date.now()
             console.log('[WebSocket] 강의 일시정지')

@@ -370,6 +370,21 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
     }
   }, [enabled])
 
+  // Mid-play suspend watchdog — visibility/focus 이벤트만으로는 못 잡는
+  // "탭 활성 상태 + GainNode 가 long-mute (audioLang='original') → Chrome 이
+  // silent ctx 를 자동 suspend" 패턴 대응. 2초 주기, ctx.suspended 면 resume.
+  // (TTS audio 는 ctx.currentTime 기반 source.start(t) 라 ctx 가 suspend 된
+  //  상태로 다음 sentence schedule 되면 resume 까지 모두 대기 → desync.)
+  useEffect(() => {
+    if (!enabled) return
+    const id = window.setInterval(() => {
+      const ctx = audioCtxRef.current
+      if (!ctx || ctx.state !== 'suspended') return
+      ctx.resume().catch(() => { /* 다음 tick 재시도 */ })
+    }, 2000)
+    return () => window.clearInterval(id)
+  }, [enabled])
+
   // 컴포넌트 언마운트 시 AudioContext 완전 정리 — 페이지 재진입 시 누수 방지
   useEffect(() => {
     return () => {
@@ -422,8 +437,13 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
     const gain = gainRef.current
     const ctx = audioCtxRef.current
     if (gain && ctx) {
+      // ctx 가 suspended 상태에서 unmute 하면 ramp 값이 스케줄만 되고 실제 출력 안 됨.
+      //   → '원본' 모드로 오래 머무는 동안 ctx 가 자동 suspend 됐을 가능성 (탭 백그라운드 등).
+      //   → '영어' 토글 시 즉시 resume — playSentence 의 resume check 만 의지하지 않음.
+      if (ctx.state === 'suspended' && !muted) {
+        ctx.resume().catch((err) => console.warn('[TTS] setVolume resume 실패:', err))
+      }
       // 10ms 선형 ramp — 'en' ↔ 'original' 토글 시 sample boundary 클릭 방지 + 즉시 느낌.
-      // 이전엔 .gain.value = v 로 instant 였으나 mid-sentence 토글 시 짧은 click 발생 위험.
       const now = ctx.currentTime
       gain.gain.cancelScheduledValues(now)
       gain.gain.setValueAtTime(gain.gain.value, now)

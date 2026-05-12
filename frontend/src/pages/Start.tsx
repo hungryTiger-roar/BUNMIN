@@ -46,8 +46,12 @@ const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
   { value: 'ru', label: '러시아어 (Русский)' },
 ]
 
-// 음성 옵션 — 강의실에서 한국어는 직접 들리므로 제외
-const AUDIO_LANG_OPTIONS = LANG_OPTIONS.filter((o) => o.value !== 'ko')
+// 음성 옵션 — 강의실에서 한국어는 직접 들리므로 제외.
+// 'original' 은 강의자 원본 목소리 (WebRTC), 그 외는 TTS 음성.
+const AUDIO_LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
+  { value: 'original', label: '원본 (Original)' },
+  ...LANG_OPTIONS.filter((o) => o.value !== 'ko'),
+]
 
 export default function Start() {
   const navigate = useNavigate()
@@ -66,7 +70,8 @@ export default function Start() {
   const [error, setError] = useState('')
 
   const t = TEXT[lang]
-  const audioNeedsFallback = !TTS_SUPPORTED.includes(audioLang)
+  // 'original' 은 강의자 원본 음성을 직접 재생 (TTS 미사용) → 폴백 안내 대상 아님.
+  const audioNeedsFallback = audioLang !== 'original' && !TTS_SUPPORTED.includes(audioLang)
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY)

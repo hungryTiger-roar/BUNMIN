@@ -268,6 +268,11 @@ function Student() {
         }
       } else if (e.track.kind === 'audio') {
         const audioStream = new MediaStream([e.track])
+        // 트랙 상태 진단 — '첫 마디 후 무음' 류 증상 디버깅용. mute/unmute 가
+        // 강사 발화 silence 구간마다 fire 됨 — 정상 동작이지만 너무 자주 끊기면 의심.
+        e.track.onmute = () => console.log(`[OriginalAudio] track mute (readyState=${e.track.readyState})`)
+        e.track.onunmute = () => console.log(`[OriginalAudio] track unmute (readyState=${e.track.readyState})`)
+        e.track.onended = () => console.warn(`[OriginalAudio] track ended — WebRTC 재협상 필요`)
         // <audio> 엘리먼트: 트랙 keepalive 용 srcObject 만 유지, 출력은 항상 muted.
         // 실제 재생은 Web Audio API (DelayNode → GainNode) 라인 — 자막/그림과 같은
         // 박자로 wall-clock + delayMs 후 출력.
@@ -626,8 +631,9 @@ function Student() {
   //   N초 (= suspend 시간) desync 됨. 대신 resume 직후 DelayNode 와 MediaStreamSource 를
   //   재생성해 buffer 를 비우고 새로 15초 채우게 함 → 복귀 후 15초 무음 후 sync 그대로 복구.
   //   gainNode 는 유지 (audioLang 별 mute 상태 보존).
+  const rebuildOriginalPipelineRef = useRef<() => Promise<void>>(async () => {})
   useEffect(() => {
-    const rebuildPipeline = async () => {
+    rebuildOriginalPipelineRef.current = async () => {
       const ctx = audioContextRef.current
       const gain = gainNodeRef.current
       if (!ctx || !gain) return
@@ -667,27 +673,53 @@ function Student() {
         console.error('[OriginalAudio] resume/rebuild 실패:', err)
       }
     }
+  }, [delayMs])
 
+  useEffect(() => {
+    const trigger = () => { rebuildOriginalPipelineRef.current() }
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') rebuildPipeline()
+      if (document.visibilityState === 'visible') trigger()
     }
     document.addEventListener('visibilitychange', onVisibility)
-    window.addEventListener('pageshow', rebuildPipeline)
-    window.addEventListener('focus', rebuildPipeline)
+    window.addEventListener('pageshow', trigger)
+    window.addEventListener('focus', trigger)
     return () => {
       document.removeEventListener('visibilitychange', onVisibility)
-      window.removeEventListener('pageshow', rebuildPipeline)
-      window.removeEventListener('focus', rebuildPipeline)
+      window.removeEventListener('pageshow', trigger)
+      window.removeEventListener('focus', trigger)
     }
-  }, [delayMs])
+  }, [])
+
+  // 원본 재생 중 자동 suspend / 트랙 decoder back-off 방어 (watchdog).
+  //   - "TTS→원본 전환 시 무음" / "강의자 원본 첫 마디 후 끊김" 이슈는 둘 다 ctx.state 가
+  //     사용자 모르게 'suspended' 로 떨어지거나 <audio> 가 paused 로 전환되면서 WebRTC
+  //     트랙 디코더가 frame 흘리길 중단하는 패턴. visibility/focus 이벤트로는 잡히지 않음.
+  //   - 2초 주기로 점검 — ctx 가 suspended 면 rebuild (sync 보존), audio 가 paused 면 play().
+  //   - audioLang === 'original' && !isMuted && !isPaused 일 때만 동작 — TTS 모드에서는
+  //     원본 라인을 깨우지 않음 (불필요한 resume 으로 GainNode 0 인 채 트랙만 흘러 배터리만 소모).
+  useEffect(() => {
+    if (audioLang !== 'original' || isMuted || isPaused || !isAudioUnlocked) return
+    const id = window.setInterval(() => {
+      const ctx = audioContextRef.current
+      if (ctx && ctx.state === 'suspended') {
+        rebuildOriginalPipelineRef.current()
+      }
+      const audio = originalAudioRef.current
+      if (audio && audio.srcObject && audio.paused) {
+        audio.play().catch(() => { /* 다음 tick 에 재시도 */ })
+      }
+    }, 2000)
+    return () => window.clearInterval(id)
+  }, [audioLang, isMuted, isPaused, isAudioUnlocked])
 
   // volume/muted/audioLang → TTS GainNode 실시간 동기화.
   // audioLang !== 'en' 이면 강제 mute — 토글 시 in-flight TTS 가 원본 음성과 동시 출력되는 것 차단.
   // (큐 새 진입은 unitPlayer 의 gate 가 막지만, 이미 재생 중인 sentence 는 GainNode mute 로만 차단 가능)
+  // isPaused 도 강제 mute 조건 — 일시정지 오버레이 중 in-flight TTS 가 들리는 것 차단.
   useEffect(() => {
-    const ttsEffectiveMuted = isMuted || audioLang !== 'en'
+    const ttsEffectiveMuted = isMuted || audioLang !== 'en' || isPaused
     setTTSVolume(volume, ttsEffectiveMuted)
-  }, [volume, isMuted, audioLang, setTTSVolume])
+  }, [volume, isMuted, audioLang, isPaused, setTTSVolume])
 
   // audioLang/volume/muted → 원본 음성 GainNode 동기화 (Web Audio 라인이 실제 출력).
   // <audio> 엘리먼트 정책 — Chrome WebRTC 트랙은 attached 된 element 가 "playing" 상태일 때만
@@ -706,7 +738,12 @@ function Student() {
     const gain = gainNodeRef.current
     const ctx = audioContextRef.current
     if (gain && ctx) {
-      const target = (audioLang === 'original' && !isMuted) ? (volume / 100) : 0
+      // TTS→원본 전환 시 ctx 가 suspended 면 ramp 가 suspend 중에 완료돼 resume 후에도
+      // gain 0 인 채로 남음. audioLang === 'original' 이면 rebuild 우선 (sync 보존).
+      if (audioLang === 'original' && ctx.state === 'suspended') {
+        rebuildOriginalPipelineRef.current()
+      }
+      const target = (audioLang === 'original' && !isMuted && !isPaused) ? (volume / 100) : 0
       // 10ms 선형 ramp — 사람의 짧은 gap 감지 임계(~5-10ms) 아래라 "즉시" 로 느껴지면서
       // sample boundary 클릭/팝 차단. (이전 setTargetAtTime(0.05) 는 ~250ms 까지 끌어
       // 토글 시 부드럽지만 살짝 느린 감 있었음.)
@@ -715,7 +752,7 @@ function Student() {
       gain.gain.setValueAtTime(gain.gain.value, now)
       gain.gain.linearRampToValueAtTime(target, now + 0.01)
     }
-  }, [audioLang, volume, isMuted, isAudioUnlocked])
+  }, [audioLang, volume, isMuted, isAudioUnlocked, isPaused])
 
   useEffect(() => {
     chatScrollRef.current?.scrollTo({
@@ -771,7 +808,21 @@ function Student() {
       className="h-screen overflow-hidden flex flex-col bg-background text-onBackground"
     >
       {/* 원본 오디오 — audioLang=original 일 때만 언뮤트, 평소엔 muted */}
-      <audio ref={originalAudioRef} autoPlay muted playsInline style={{ display: 'none' }} />
+      <audio
+        ref={originalAudioRef}
+        autoPlay
+        muted
+        playsInline
+        style={{ display: 'none' }}
+        onPause={() => {
+          // audio element 가 의도치 않게 paused → WebRTC 디코더가 frame 흘리는 걸
+          // 중단하기 직전. watchdog 이 곧 play() 재시도하지만 진단 로그로 기록.
+          console.warn('[OriginalAudio] <audio> paused — watchdog 이 재생 시도 예정')
+        }}
+        onError={(e) => {
+          console.error('[OriginalAudio] <audio> error:', (e.target as HTMLAudioElement).error)
+        }}
+      />
 
       {/* 음성 활성화 오버레이 — 새로고침 / 직접 URL 진입 시 user gesture 확보 용도.
           브라우저 autoplay 정책상 사용자 클릭 없이 AudioContext.resume() 통과 불가 →
@@ -1080,8 +1131,8 @@ function Student() {
               </div>
             )}
 
-            {/* 자막 오버레이 */}
-            {ccEnabled && (primaryText || secondaryText) && (() => {
+            {/* 자막 오버레이 — pause 중에는 숨김 (오버레이 위 자막 잔류 방지) */}
+            {ccEnabled && !isPaused && (primaryText || secondaryText) && (() => {
               const isBg = subtitleSettings.style === 'background'
               const textShadowIfNotBg = isBg ? {} : subtitleStyleToCss(subtitleSettings.style)
               const bgSpanStyle = isBg ? {
