@@ -493,6 +493,91 @@ def _is_continuation(text: str) -> bool:
     return False
 
 
+def _is_principle_title(text: str) -> bool:
+    """
+    Principle title 패턴인지 확인 (병합 방지 대상)
+
+    예시:
+    - "기본원리 1: 모든 선택에는 대가가 있다"
+    - "원리 2: 선택의 비용은..."
+    - "Principle 1: Every choice has a cost"
+    - "Basic principle 3:"
+    """
+    import re
+    text = text.strip()
+
+    # 한글 패턴
+    korean_patterns = [
+        r'^기본원리\s*\d+',  # 기본원리 1, 기본원리 2
+        r'^원리\s*\d+',      # 원리 1, 원리 2
+        r'^원칙\s*\d+',      # 원칙 1, 원칙 2
+    ]
+
+    # 영어 패턴
+    english_patterns = [
+        r'^[Bb]asic\s+[Pp]rinciple\s*\d+',  # Basic principle 1
+        r'^[Pp]rinciple\s*\d+',              # Principle 1
+    ]
+
+    for pattern in korean_patterns + english_patterns:
+        if re.search(pattern, text):
+            return True
+
+    return False
+
+
+def _is_option_prefix(text: str) -> bool:
+    """
+    Option prefix 패턴인지 확인 (병합 방지 대상)
+
+    예시:
+    - "a. 10만원 이상"
+    - "b. 10만원"
+    - "A. 변속기가 작동하면..."
+    - "1) 첫 번째 옵션"
+    - "(가) 선택지"
+    """
+    import re
+    text = text.strip()
+
+    # 알파벳 prefix: a. b. c. d. A. B. C. D.
+    if re.match(r'^[a-dA-D][\.\)]\s', text):
+        return True
+
+    # 숫자 prefix: 1) 2) 3) 또는 1. 2. 3. (단, 소수점과 구분 필요)
+    if re.match(r'^[1-9][\)]\s', text):
+        return True
+
+    # 한글 prefix: (가) (나) (다) 또는 가. 나. 다.
+    if re.match(r'^[\(]?[가나다라마바사아][\.\)]\s', text):
+        return True
+
+    return False
+
+
+def _is_section_header(text: str) -> bool:
+    """
+    Section header 패턴인지 확인
+
+    예시:
+    - "개인의 의사결정과 관련된 4가지 기본원리"
+    - "사람들은 어떻게 상호작용하는가?"
+    """
+    import re
+    text = text.strip()
+
+    # "~와 관련된", "~에 관한" 패턴
+    if re.search(r'관련된|관한|관하여', text):
+        if not _is_principle_title(text):  # principle_title이 아닌 경우만
+            return True
+
+    # 물음표로 끝나는 제목
+    if text.endswith('?') and len(text) < 50:
+        return True
+
+    return False
+
+
 def _is_text_char(c: str) -> bool:
     """한글, 영어, 숫자인지 확인"""
     if not c:
@@ -765,6 +850,11 @@ def _group_adjacent_lines(
         # 도식 라벨은 항상 개별 그룹 (병합 안 함)
         is_diagram = _is_diagram_label(line, page_rect)
 
+        # 특수 패턴 감지 (병합 방지)
+        is_principle = _is_principle_title(text)  # "기본원리 1:", "Principle 1:" 등
+        is_option = _is_option_prefix(text)       # "a.", "b.", "A.", "1)" 등
+        is_section = _is_section_header(text)     # "~와 관련된", "~는가?" 등
+
         # 새 그룹 시작 조건 확인
         start_new_group = False
 
@@ -775,6 +865,15 @@ def _group_adjacent_lines(
             start_new_group = True
         elif current_group.get("is_diagram"):
             # 이전 그룹이 도식 라벨이었으면 새 그룹 시작
+            start_new_group = True
+        elif is_principle:
+            # principle_title은 항상 새 그룹 (section_header와 병합 방지)
+            start_new_group = True
+        elif is_option:
+            # option prefix는 항상 새 그룹 (다른 옵션과 병합 방지)
+            start_new_group = True
+        elif is_section and current_group:
+            # section_header가 새로 시작되면 새 그룹
             start_new_group = True
         else:
             prev_line = current_group["lines"][-1]
@@ -847,6 +946,8 @@ def _group_adjacent_lines(
                 "role": role,
                 "is_bullet": has_bullet or text.startswith("- "),
                 "is_diagram": is_diagram,
+                "is_principle": is_principle,
+                "is_option": is_option,
             }
         else:
             current_group["lines"].append(line)

@@ -348,9 +348,10 @@ class PDFLayerPipeline:
     def _translate_batch(
         self,
         items: list[dict],
-        target_lang: str = "en"
+        target_lang: str = "en",
+        max_retries: int = 3
     ) -> list[dict]:
-        """배치 번역 (LLM 호출)"""
+        """배치 번역 (LLM 호출) - 파싱 실패 시 최대 3번 재시도"""
         # 프롬프트 생성
         prompt = self._build_translation_prompt(items, target_lang)
 
@@ -363,12 +364,57 @@ class PDFLayerPipeline:
         # 응답 파싱
         translations = self._parse_translation_response(response, items)
 
-        # 파싱 결과 검증
-        parsed_count = len([t for t in translations if t.get("translated") != t.get("original")])
-        if parsed_count < len(items):
-            logger.warning(f"Only {parsed_count}/{len(items)} blocks were translated. Check LLM response format.")
+        # 파싱 실패한 블록 식별 (원본 == 번역인 경우)
+        failed_items = []
+        success_translations = []
+        for t in translations:
+            if t.get("translated") == t.get("original"):
+                # 원본이 유지된 경우 = 파싱 실패
+                original_item = next((i for i in items if i["block_id"] == t["block_id"]), None)
+                if original_item:
+                    failed_items.append(original_item)
+            else:
+                success_translations.append(t)
 
-        return translations
+        # 재시도 로직 (파싱 실패한 블록만)
+        retry_count = 0
+        while failed_items and retry_count < max_retries:
+            retry_count += 1
+            self._log(f"    [RETRY {retry_count}/{max_retries}] Retrying {len(failed_items)} failed blocks...")
+
+            # 실패한 블록만 재번역
+            retry_prompt = self._build_translation_prompt(failed_items, target_lang)
+            retry_response = self.llm_client.complete(retry_prompt)
+
+            logger.debug(f"Retry {retry_count} response: {retry_response[:500] if retry_response else 'EMPTY'}")
+
+            retry_translations = self._parse_translation_response(retry_response, failed_items)
+
+            # 이번에 성공한 것과 아직 실패한 것 분리
+            still_failed = []
+            for t in retry_translations:
+                if t.get("translated") == t.get("original"):
+                    original_item = next((i for i in failed_items if i["block_id"] == t["block_id"]), None)
+                    if original_item:
+                        still_failed.append(original_item)
+                else:
+                    success_translations.append(t)
+
+            failed_items = still_failed
+
+        # 최종 실패한 블록 처리: translations에서 제외 (redaction 안 함)
+        if failed_items:
+            failed_ids = [i["block_id"] for i in failed_items]
+            self._log(f"    [WARN] {len(failed_items)} blocks failed after {max_retries} retries: {failed_ids}")
+            logger.warning(f"Translation failed after {max_retries} retries for: {failed_ids}")
+            # 실패한 블록은 제외 (redaction 하지 않음 = 원본 PDF 유지)
+
+        # 파싱 결과 검증
+        parsed_count = len(success_translations)
+        if parsed_count < len(items):
+            logger.warning(f"Only {parsed_count}/{len(items)} blocks were translated successfully.")
+
+        return success_translations
 
     def _build_translation_prompt(
         self,
@@ -422,6 +468,9 @@ class PDFLayerPipeline:
             "7. ALWAYS translate parentheses and their contents",
             "8. If Korean has English in parentheses, keep ONLY the English",
             "9. Output format: [BLOCK_ID]: translated text",
+            "10. PRESERVE mathematical operators: +, -, ×, ÷, =, <, >, ≤, ≥, %, ( ) in formulas",
+            "    Example: '80만원(= 650 – 570)' → '800,000 won (= 6,500,000 - 5,700,000)'",
+            "11. Use CORRECT English spelling - double-check academic/technical terms",
         ])
 
         prompt_parts.append("")

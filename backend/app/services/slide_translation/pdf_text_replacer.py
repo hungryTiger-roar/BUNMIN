@@ -80,6 +80,11 @@ def pdf_log_warning(msg: str):
     _pdf_logger.warning(msg)
 
 
+def _get_min_font_size(role: str) -> float:
+    """최소 폰트 크기 반환 (모든 role에 대해 6pt)"""
+    return 6.0
+
+
 # =============================================================================
 # Invalid Output Gate (Final Rendering Gate)
 # =============================================================================
@@ -216,10 +221,11 @@ def _render_multi_color_text(
             adjusted_color = first_color
 
         # bbox 확장 없이 폰트 축소만으로 맞춤 (줄바꿈은 insert_textbox가 자동 처리)
+        min_size = _get_min_font_size(role)
         for font_scale in [1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.5, 0.4]:
             current_size = size * font_scale
-            if current_size < 6:  # 최소 6pt
-                current_size = 6
+            if current_size < min_size:
+                current_size = min_size
 
             result = page.insert_textbox(
                 rect, translated, fontname=font, fontsize=current_size,
@@ -228,9 +234,9 @@ def _render_multi_color_text(
             if result >= 0:
                 return result
 
-        # 최후의 수단: 6pt로 시도
+        # 최후의 수단: 최소 크기로 시도
         return page.insert_textbox(
-            rect, translated, fontname=font, fontsize=6,
+            rect, translated, fontname=font, fontsize=min_size,
             color=adjusted_color, align=fitz.TEXT_ALIGN_LEFT
         )
 
@@ -288,11 +294,14 @@ def _render_multi_color_text(
     pdf_log_debug(f"[MultiColor] {block_id}: line_colors={line_colors}, first_color={first_color}, second_color={second_color}")
     pdf_log_debug(f"[MultiColor] {block_id}: term_color={term_color}, def_color={def_color}")
 
+    # Role 기반 최소 폰트 크기
+    min_size = _get_min_font_size(role)
+
     # term > 40자 → 단색 textbox (안정적)
     if len(term) > 40:
         pdf_log_debug(f"[MultiColor] {block_id}: term {len(term)}자 > 40, 단색 fallback")
         for font_scale in [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4]:
-            current_size = max(6, size * font_scale)
+            current_size = max(min_size, size * font_scale)
             result = page.insert_textbox(
                 rect, translated,
                 fontname=font, fontsize=current_size, color=term_color,
@@ -300,13 +309,13 @@ def _render_multi_color_text(
             )
             if result >= 0:
                 return result
-        return page.insert_textbox(rect, translated, fontname=font, fontsize=6, color=term_color, align=fitz.TEXT_ALIGN_LEFT)
+        return page.insert_textbox(rect, translated, fontname=font, fontsize=min_size, color=term_color, align=fitz.TEXT_ALIGN_LEFT)
 
     # term ≤ 40자 → multi-color 시도
     font_scales = [1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.5, 0.4]
 
     for font_scale in font_scales:
-        current_size = max(6, size * font_scale)
+        current_size = max(min_size, size * font_scale)
         line_height = current_size * 1.2
 
         term_with_space = term + " "
@@ -327,7 +336,7 @@ def _render_multi_color_text(
     # Strategy C: 단색 fallback
     pdf_log_debug(f"[MultiColor] {block_id}: Strategy C fallback")
     for font_scale in [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4]:
-        current_size = max(6, size * font_scale)
+        current_size = max(min_size, size * font_scale)
 
         result = page.insert_textbox(
             rect, translated,
@@ -338,11 +347,11 @@ def _render_multi_color_text(
             pdf_log_debug(f"[MultiColor] {block_id}: Strategy C 성공, font_scale={font_scale}")
             return result
 
-    # 최후의 수단: 6pt로 시도
-    pdf_log_debug(f"[MultiColor] {block_id}: 최후 수단 6pt")
+    # 최후의 수단: 최소 크기로 시도
+    pdf_log_debug(f"[MultiColor] {block_id}: 최후 수단 {min_size}pt")
     return page.insert_textbox(
         rect, translated,
-        fontname=font, fontsize=6, color=(0, 0, 0),
+        fontname=font, fontsize=min_size, color=(0, 0, 0),
         align=fitz.TEXT_ALIGN_LEFT
     )
 
@@ -462,15 +471,18 @@ def replace_texts_in_pdf(
                     if is_white_bg:
                         # 배경이 흰색이면 일반 텍스트로 처리
                         page.add_redact_annot(rect, fill=(1, 1, 1))
+                        trans["redaction_fill_color"] = (1, 1, 1)  # 저장
                         redaction_data.append((trans, rect))
                     else:
                         # 실제 이미지/다이어그램 배경: 해당 색으로 redaction
                         page.add_redact_annot(rect, fill=bg_color)
+                        trans["redaction_fill_color"] = bg_color  # 저장
                         trans["expand_allowed"] = False
                         redaction_data.append((trans, rect))
                 else:
                     # 일반 텍스트: 흰색 배경으로 redaction
                     page.add_redact_annot(rect, fill=(1, 1, 1))
+                    trans["redaction_fill_color"] = (1, 1, 1)  # 저장
                     redaction_data.append((trans, rect))
 
         # 2단계: redaction 적용 (일반 배경만)
@@ -585,21 +597,22 @@ def _replace_single_block(
     x0_adjusted = x0 + prefix_width if (keep_prefix and prefix_width > 0) else x0
     original_rect = fitz.Rect(x0_adjusted, y0, x1, y1)
 
-    # 1. 배경 정보 사용 (이미 redaction에서 분석됨)
-    if bg_info is None:
-        bg_info = _analyze_background(page, original_rect)
-    result.redaction_fill_color = bg_info["color"]
+    # 1. 배경 정보: redaction fill color 사용 (정확한 대비 체크를 위해)
+    redaction_fill = trans.get("redaction_fill_color", (1, 1, 1))
+    result.redaction_fill_color = redaction_fill
 
-    # 이미지 위 텍스트도 교체 시도 (완벽하지 않을 수 있음)
-    if bg_info["type"] == "image":
+    # 이미지 위 텍스트 확인
+    on_image = trans.get("on_image_background", False)
+    if on_image:
         result.error = "Text on image background - may need review"
 
     # 2. 영어 폰트 및 색상 설정
     english_font = map_korean_to_english_font(original_font)
     original_text_color = int_color_to_rgb(color_int) if isinstance(color_int, int) else (0, 0, 0)
 
-    # 배경색과 텍스트색의 대비 확인 후 조정
-    bg_color = bg_info["color"]  # (r, g, b) 0-1 범위
+    # 배경색(redaction fill)과 텍스트색의 대비 확인 후 조정
+    # 핵심: redaction fill color와 원본 텍스트 색상을 비교해야 함!
+    bg_color = redaction_fill  # redaction 적용된 실제 배경색
     bg_brightness = (bg_color[0] * 299 + bg_color[1] * 587 + bg_color[2] * 114) / 1000
     text_brightness = (original_text_color[0] * 299 + original_text_color[1] * 587 + original_text_color[2] * 114) / 1000
 
@@ -607,9 +620,10 @@ def _replace_single_block(
     if abs(bg_brightness - text_brightness) < 0.3:
         # 배경이 밝으면 검정, 어두우면 흰색
         text_color = (0, 0, 0) if bg_brightness > 0.5 else (1, 1, 1)
-        pdf_log_debug(f"[Replace] {block_id}: 텍스트 색상 조정: bg={bg_brightness:.2f}, text={text_brightness:.2f} → {text_color}")
+        pdf_log_debug(f"[Replace] {block_id}: 텍스트 색상 조정 (redaction_fill 기준): bg={bg_brightness:.2f}, text={text_brightness:.2f} → {text_color}")
     else:
         text_color = original_text_color
+        pdf_log_debug(f"[Replace] {block_id}: 텍스트 색상 유지: bg={bg_brightness:.2f}, text={text_brightness:.2f}, color={text_color}")
     result.final_font = english_font
 
     # 3. 최소 폰트 크기 결정
@@ -646,7 +660,7 @@ def _replace_single_block(
         # multi-color 렌더러가 모든 fallback을 내부적으로 처리
         # (같은 줄 → 두 줄 → bbox 확장 → 폰트 축소 → 단색 fallback)
         insert_result = _render_multi_color_text(
-            page, trans, final_rect, english_font, final_size, bg_info["color"]
+            page, trans, final_rect, english_font, final_size, redaction_fill
         )
     else:
         # 단색 텍스트
