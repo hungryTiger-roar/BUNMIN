@@ -539,6 +539,80 @@ async def upload_slide(
     return {"slide_id": slide_id, "message": "업로드 완료, 처리 시작", "reused": False, "cancelled": False}
 
 
+@router.post("/upload-batch")
+async def upload_slide_batch(
+    background_tasks: BackgroundTasks,
+    files: list[UploadFile] = File(...),
+    client_token: Optional[str] = Form(None),
+):
+    """
+    PDF 슬라이드 다중 업로드 — VLM을 전체 배치에서 한 번만 로드해 처리 시간을 단축.
+    각 파일은 독립적인 slide_id 를 가지며 기존 /slides/status/{id} 로 폴링 가능.
+    client_token: 응답 전 abort 케이스에서 배치 전체를 취소하는 보류 토큰.
+    """
+    if not files:
+        raise HTTPException(400, "파일이 없습니다")
+
+    results = []
+    batch_items: list[tuple[str, Path]] = []  # 실제 처리할 (slide_id, path) 목록
+
+    for file in files:
+        if not file.filename.lower().endswith(".pdf"):
+            results.append({"filename": file.filename, "error": "PDF 파일만 업로드 가능합니다", "skipped": True})
+            continue
+
+        content = await file.read()
+        content_hash = hashlib.sha256(content).hexdigest()
+
+        # 동일 파일 dedup
+        existing_id = _hash_to_slide_id.get(content_hash)
+        if existing_id and (UPLOAD_DIR / f"{existing_id}.pdf").exists():
+            print(f"[Slides] 배치 중 동일 파일 감지 → 재사용: {existing_id} ({file.filename})")
+            results.append({"slide_id": existing_id, "filename": file.filename, "reused": True, "cancelled": False})
+            continue
+
+        slide_id = str(uuid.uuid4())[:8]
+        save_path = UPLOAD_DIR / f"{slide_id}.pdf"
+        with open(save_path, "wb") as f:
+            f.write(content)
+
+        now = time.time()
+        slide_status[slide_id] = {
+            "status": "pending",
+            "total_pages": 0,
+            "processed_pages": 0,
+            "stage": "pending",
+            "stage_current": 0,
+            "stage_total": 0,
+            "stage_started_at": now,
+            "last_page_at": now,
+            "avg_page_duration": 0.0,
+            "error": None,
+            "filename": file.filename or f"{slide_id}.pdf",
+            "uploaded_at": datetime.now().isoformat(timespec="seconds"),
+            "content_hash": content_hash,
+            "cancelled": False,
+            "client_token": client_token,
+        }
+
+        results.append({"slide_id": slide_id, "filename": file.filename, "reused": False, "cancelled": False})
+        batch_items.append((slide_id, save_path))
+
+    # 응답 전 취소 토큰 처리 — 배치 전체 취소
+    if _consume_pending_cancel_token(client_token) or not batch_items:
+        if batch_items:
+            print(f"[Slides] 배치 업로드 응답 전 취소 → {len(batch_items)}개 처리 스킵")
+            for slide_id, _ in batch_items:
+                _delete_slide_files(slide_id)
+                for r in results:
+                    if r.get("slide_id") == slide_id:
+                        r["cancelled"] = True
+        return {"results": results}
+
+    background_tasks.add_task(process_slide_batch, batch_items)
+    return {"results": results}
+
+
 @router.get("/list")
 async def list_slides():
     """업로드된 강의자료 전체 목록 — 수강자가 번역본 다운로드용으로 조회"""
@@ -1004,11 +1078,12 @@ async def delete_slides_batch(payload: BatchDeleteRequest):
     return BatchDeleteResponse(deleted=deleted, failed=failed)
 
 
-async def process_slide(slide_id: str, pdf_path: Path):
+async def process_slide(slide_id: str, pdf_path: Path, _skip_vlm_unload: bool = False):
     """
     슬라이드 전처리 (백그라운드)
     PDF 텍스트 레이어가 있으면 → PDF 레이어 방식 (고품질)
     없으면 → 기존 OCR/VLM 방식
+    _skip_vlm_unload: 배치 처리 시 마지막 파일이 아니면 True — VLM을 언로드하지 않고 다음 파일에서 재사용
     """
     try:
         slide_status[slide_id]["status"] = "processing"
@@ -1033,7 +1108,7 @@ async def process_slide(slide_id: str, pdf_path: Path):
         # 텍스트 레이어가 충분하면 PDF 레이어 방식 사용
         if has_text_layer and text_coverage >= 0.8:
             print(f"[Slides] PDF 레이어 방식으로 처리 시작...")
-            await process_slide_pdf_layer(slide_id, pdf_path)
+            await process_slide_pdf_layer(slide_id, pdf_path, _skip_vlm_unload=_skip_vlm_unload)
             return
 
         print(f"[Slides] 기존 OCR/VLM 방식으로 처리...")
@@ -1169,7 +1244,8 @@ async def process_slide(slide_id: str, pdf_path: Path):
             return
 
         # VLM 모델 언로드 (GPU 메모리 해제 — ASR과 VRAM 경합 방지)
-        if vlm_available:
+        # 배치 처리 중이면 다음 파일이 VLM을 재사용하므로 마지막 파일까지 언로드 보류
+        if vlm_available and not _skip_vlm_unload:
             print(f"[Slides] VLM 번역 완료, 모델 언로드...")
             await asyncio.to_thread(unload_vlm_model)
 
@@ -1219,12 +1295,13 @@ async def process_slide(slide_id: str, pdf_path: Path):
         slide_status[slide_id]["stage"] = "failed"
         slide_status[slide_id]["error"] = str(e)
         print(f"[Slides] {slide_id} 처리 실패: {e}")
-        # 예외 발생 시에도 VLM 언로드 보장
-        try:
-            from app.services.slide_translation.image_pipeline import unload_vlm_model
-            await asyncio.to_thread(unload_vlm_model)
-        except Exception:
-            pass
+        # 예외 발생 시 VLM 언로드 — 배치 중이면 process_slide_batch finally 에서 처리하므로 여기선 스킵
+        if not _skip_vlm_unload:
+            try:
+                from app.services.slide_translation.image_pipeline import unload_vlm_model
+                await asyncio.to_thread(unload_vlm_model)
+            except Exception:
+                pass
 
 
 def pdf_to_images(pdf_path: Path) -> list[bytes]:
@@ -1247,7 +1324,7 @@ def pdf_to_images(pdf_path: Path) -> list[bytes]:
     return images
 
 
-async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
+async def process_slide_pdf_layer(slide_id: str, pdf_path: Path, _skip_vlm_unload: bool = False):
     """
     PDF 레이어 방식 슬라이드 처리 (Stage 기반 배치 구조)
 
@@ -1257,6 +1334,7 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
     Stage 4: VLM 번역 배치 (VLM 한 번 로드)
     Stage 5: Overlay/rendering (CPU)
     Stage 6: PDF 합성
+    _skip_vlm_unload: 배치 처리 시 True — VLM을 언로드하지 않고 다음 파일에서 재사용
     """
     import fitz
     import re
@@ -1474,8 +1552,9 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
 
                     print(f"  번역 완료: {len(translate_results)}개 페이지")
 
-                    # VLM 언로드
-                    await asyncio.to_thread(unload_vlm_model)
+                    # 배치 처리 중이면 다음 파일이 VLM을 재사용하므로 마지막 파일까지 언로드 보류
+                    if not _skip_vlm_unload:
+                        await asyncio.to_thread(unload_vlm_model)
 
                 except Exception as e:
                     print(f"  VLM 번역 배치 실패: {e}")
@@ -1640,6 +1719,26 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
         slide_status[slide_id]["status"] = "failed"
         slide_status[slide_id]["stage"] = "failed"
         slide_status[slide_id]["error"] = str(e)
+        # 배치 중이면 process_slide_batch finally 에서 언로드 처리
+        if not _skip_vlm_unload:
+            try:
+                from app.services.slide_translation.image_pipeline import unload_vlm_model
+                await asyncio.to_thread(unload_vlm_model)
+            except Exception:
+                pass
+
+
+async def process_slide_batch(items: list[tuple[str, Path]]):
+    """
+    배치 슬라이드 처리 — 파일들을 순차 처리하되 VLM은 전체 배치에서 한 번만 로드/언로드.
+    items: [(slide_id, pdf_path), ...]
+    """
+    try:
+        for i, (slide_id, pdf_path) in enumerate(items):
+            is_last = (i == len(items) - 1)
+            await process_slide(slide_id, pdf_path, _skip_vlm_unload=not is_last)
+    finally:
+        # 중간 예외/전체 취소 시에도 VLM 언로드 보장 (이미 언로드됐으면 no-op)
         try:
             from app.services.slide_translation.image_pipeline import unload_vlm_model
             await asyncio.to_thread(unload_vlm_model)

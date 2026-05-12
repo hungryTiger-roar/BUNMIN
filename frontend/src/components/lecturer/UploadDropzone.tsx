@@ -30,6 +30,13 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
   const cancelledRef = useRef(false)
   const clientTokenRef = useRef<string | null>(null)
   const slideIdRef = useRef<string | null>(null)
+
+  // 다중 파일 큐
+  const fileQueueRef = useRef<File[]>([])
+  const [queueTotal, setQueueTotal] = useState(0)
+  const [queueProcessed, setQueueProcessed] = useState(0)
+  const [currentFileName, setCurrentFileName] = useState('')
+
   const [stage, setStage] = useState<Stage>('pending')
   const [stageCurrent, setStageCurrent] = useState(0)
   const [stageTotal, setStageTotal] = useState(0)
@@ -75,16 +82,8 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
     return () => clearInterval(id)
   }, [etaAnchor])
 
-  const handleFileSelect = useCallback(async (file: File) => {
-    if (file.type !== 'application/pdf') {
-      setError('PDF 파일만 업로드 가능합니다.')
-      return
-    }
-    if (file.size > 200 * 1024 * 1024) {
-      setError('파일 크기는 200MB 이하여야 합니다.')
-      return
-    }
-
+  const processOneFile = useCallback(async (file: File) => {
+    setCurrentFileName(file.name)
     setError(null)
     setSlideStatus('uploading')
     cancelledRef.current = false
@@ -100,6 +99,56 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
         : `${Date.now()}-${Math.random().toString(36).slice(2)}`
     clientTokenRef.current = token
 
+    const pollStatus = async (slideId: string, onDone: () => void) => {
+      const checkStatus = async () => {
+        if (cancelledRef.current) return
+        try {
+          const response = await fetch(`${API_BASE}/slides/status/${slideId}`)
+          const data = await response.json()
+
+          if (data.status === 'completed') {
+            setStage('completed')
+            setEtaAnchor(null)
+            setDisplayEta(0)
+            setSlideId(null)
+            setSlideStatus('none')
+            slideIdRef.current = null
+            clientTokenRef.current = null
+            onUploadComplete?.()
+            onDone()
+            return
+          }
+
+          if (data.status === 'failed') {
+            setStage('failed')
+            setError('강의자료 처리에 실패했습니다.')
+            setSlideStatus('none')
+            return
+          }
+
+          const nextStage = (data.stage ?? 'pending') as Stage
+          const current = data.stage_current ?? 0
+          const total = data.stage_total ?? 0
+          setStage(nextStage)
+          setStageCurrent(current)
+          setStageTotal(total)
+
+          const eta = data.eta_seconds
+          if (typeof eta === 'number') {
+            setEtaAnchor({ value: eta, at: Date.now() })
+          } else {
+            setEtaAnchor(null)
+          }
+
+          if (!cancelledRef.current) setTimeout(checkStatus, 2000)
+        } catch (err) {
+          if (!cancelledRef.current) console.error('[UploadDropzone] 상태 확인 실패:', err)
+        }
+      }
+
+      checkStatus()
+    }
+
     try {
       const formData = new FormData()
       formData.append('file', file)
@@ -112,13 +161,10 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
       })
       abortControllerRef.current = null
 
-      if (!response.ok) {
-        throw new Error('업로드에 실패했습니다.')
-      }
+      if (!response.ok) throw new Error('업로드에 실패했습니다.')
 
       const data = await response.json()
       // 응답 도착 전에 사용자가 취소했으면 토큰이 매칭되어 백엔드가 cancelled=true 로 회신
-      // 또는 응답 도착 후 cancelled flag 가 set 됐다면 ref 가 true
       if (data.cancelled || cancelledRef.current) {
         setSlideStatus('none')
         clientTokenRef.current = null
@@ -128,66 +174,58 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
       slideIdRef.current = data.slide_id
       setSlideId(data.slide_id)
       setSlideStatus('processing')
-      pollStatus(data.slide_id)
+
+      pollStatus(data.slide_id, () => {
+        const nextFile = fileQueueRef.current.shift()
+        if (nextFile) {
+          setQueueProcessed((p) => p + 1)
+          processOneFile(nextFile)
+        } else {
+          setQueueTotal(0)
+          setQueueProcessed(0)
+          setCurrentFileName('')
+        }
+      })
     } catch (err) {
       if ((err as Error).name === 'AbortError') return
       console.error('[UploadDropzone] 에러:', err)
       setError('업로드에 실패했습니다. 다시 시도해주세요.')
       setSlideStatus('none')
     }
-  }, [setSlideId, setSlideStatus])
+  }, [setSlideId, setSlideStatus, onUploadComplete])
 
-  const pollStatus = async (slideId: string) => {
-    const checkStatus = async () => {
-      if (cancelledRef.current) return
-      try {
-        const response = await fetch(`${API_BASE}/slides/status/${slideId}`)
-        const data = await response.json()
+  const handleFilesSelect = useCallback((files: File[]) => {
+    const validFiles: File[] = []
+    const skipped: string[] = []
 
-        if (data.status === 'completed') {
-          setStage('completed')
-          setEtaAnchor(null)
-          setDisplayEta(0)
-          setSlideId(null)
-          setSlideStatus('none')
-          slideIdRef.current = null
-          clientTokenRef.current = null
-          onUploadComplete?.()
-          return
-        }
-
-        if (data.status === 'failed') {
-          setStage('failed')
-          setError('강의자료 처리에 실패했습니다.')
-          setSlideStatus('none')
-          return
-        }
-
-        const nextStage = (data.stage ?? 'pending') as Stage
-        const current = data.stage_current ?? 0
-        const total = data.stage_total ?? 0
-        setStage(nextStage)
-        setStageCurrent(current)
-        setStageTotal(total)
-
-        const eta = data.eta_seconds
-        if (typeof eta === 'number') {
-          setEtaAnchor({ value: eta, at: Date.now() })
-        } else {
-          setEtaAnchor(null)
-        }
-
-        if (!cancelledRef.current) setTimeout(checkStatus, 2000)
-      } catch (err) {
-        if (!cancelledRef.current) console.error('[UploadDropzone] 상태 확인 실패:', err)
+    for (const f of files) {
+      if (f.type !== 'application/pdf') {
+        skipped.push(`${f.name}(PDF 아님)`)
+      } else if (f.size > 200 * 1024 * 1024) {
+        skipped.push(`${f.name}(200MB 초과)`)
+      } else {
+        validFiles.push(f)
       }
     }
 
-    checkStatus()
-  }
+    if (validFiles.length === 0) {
+      setError(skipped.length > 0 ? `제외된 파일: ${skipped.join(', ')}` : 'PDF 파일만 업로드 가능합니다.')
+      return
+    }
+
+    setError(skipped.length > 0 ? `일부 제외: ${skipped.join(', ')}` : null)
+    fileQueueRef.current = validFiles.slice(1)
+    setQueueTotal(validFiles.length)
+    setQueueProcessed(0)
+    processOneFile(validFiles[0])
+  }, [processOneFile])
 
   const handleCancel = useCallback(() => {
     cancelledRef.current = true
+    fileQueueRef.current = []
+    setQueueTotal(0)
+    setQueueProcessed(0)
+    setCurrentFileName('')
     abortControllerRef.current?.abort()
     abortControllerRef.current = null
 
@@ -215,9 +253,9 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
-    const file = e.dataTransfer.files[0]
-    if (file) handleFileSelect(file)
-  }, [handleFileSelect])
+    const files = Array.from(e.dataTransfer.files)
+    if (files.length > 0) handleFilesSelect(files)
+  }, [handleFilesSelect])
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
@@ -228,11 +266,13 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
   }
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) handleFileSelect(file)
+    const files = Array.from(e.target.files ?? [])
+    if (files.length > 0) handleFilesSelect(files)
+    e.target.value = ''
   }
 
   const showAILoading = slideStatus === 'processing' && etaReachedZero
+  const isMultiple = queueTotal > 1
 
   return (
     <div className="text-onSurface min-h-[140px]">
@@ -240,6 +280,7 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
         ref={inputRef}
         type="file"
         accept=".pdf"
+        multiple
         onChange={handleChange}
         className="hidden"
       />
@@ -255,7 +296,7 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
           </svg>
           <p className="text-sm text-onSurface/70">PDF 파일을 드래그하거나 클릭하세요</p>
-          <p className="text-xs text-onSurface/50 mt-1">업로드 즉시 번역이 시작됩니다</p>
+          <p className="text-xs text-onSurface/50 mt-1">여러 파일 동시 선택 가능 · 업로드 즉시 번역이 시작됩니다</p>
         </div>
       ) : showAILoading ? (
         <div className="flex flex-col items-center gap-3 py-8 px-2">
@@ -264,11 +305,14 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
           </svg>
           <p className="text-base font-semibold text-onSurface">AI 번역중...</p>
+          {isMultiple && (
+            <p className="text-xs text-onSurface/50">{queueProcessed + 1} / {queueTotal} 번째 파일</p>
+          )}
           <p className="text-sm text-onSurface/60">잠시만 기다려주세요</p>
         </div>
       ) : slideStatus === 'uploading' || slideStatus === 'processing' ? (
         <div className="py-4 px-2">
-          <div className="flex items-center gap-2 mb-3">
+          <div className="flex items-center gap-2 mb-1">
             <svg className="animate-spin w-5 h-5 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24">
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
@@ -284,7 +328,18 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
                       ? `${STAGE_LABELS[stage]} ${stageCurrent}/${stageTotal}`
                       : `${STAGE_LABELS[stage]}...`}
             </p>
+            {isMultiple && (
+              <span className="ml-auto text-xs text-onSurface/50 flex-shrink-0">
+                {queueProcessed + 1}/{queueTotal}
+              </span>
+            )}
           </div>
+
+          {currentFileName && (
+            <p className="text-xs text-onSurface/50 mb-2 truncate" title={currentFileName}>
+              {currentFileName}
+            </p>
+          )}
 
           <div className="w-full h-2 bg-primaryContainer/40 rounded-full overflow-hidden">
             {stage === 'bundling' ? (
