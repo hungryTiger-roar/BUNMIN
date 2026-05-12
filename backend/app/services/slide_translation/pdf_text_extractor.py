@@ -387,7 +387,7 @@ def extract_korean_texts_for_translation(
 
                 # 숫자/페이지 번호 스킵 (숫자가 주된 내용인 경우)
                 text_without_numbers = re.sub(r'[0-9.,/:%\s-]', '', full_text)
-                if len(text_without_numbers) < 2:  # 거의 숫자로만 구성된 경우
+                if len(text_without_numbers) < 1:  # 숫자/기호만으로 구성된 경우
                     continue
 
 
@@ -958,8 +958,15 @@ def _group_adjacent_lines(
             # 현재 줄이 continuation인지
             curr_is_continuation = _is_continuation(text)
 
+            # 이전 줄이 option (A., B., a., b.)이고 현재 줄이 continuation인 경우 병합 (최우선)
+            if current_group.get("is_option") and not prev_ends_sentence and y_close:
+                # 현재 줄이 새로운 option이 아니면 병합
+                if not is_option:
+                    start_new_group = False
+                else:
+                    start_new_group = True
             # title/heading은 개별 유지 (단, 이전 줄이 문장 미종결이고 Y가 가까우면 continuation)
-            if role in ("title", "heading"):
+            elif role in ("title", "heading"):
                 # 이전 줄이 문장 종결이 아니고, Y가 가깝고, 폰트가 비슷하면 continuation으로 병합
                 if not prev_ends_sentence and y_close and size_similar:
                     start_new_group = False
@@ -971,13 +978,6 @@ def _group_adjacent_lines(
             # 이전 줄이 bullet이고 현재 줄이 continuation인 경우 병합
             elif current_group.get("is_bullet") and not prev_ends_sentence and y_close and size_similar:
                 start_new_group = False
-            # 이전 줄이 option (A., B., a., b.)이고 현재 줄이 continuation인 경우 병합
-            elif current_group.get("is_option") and not prev_ends_sentence and y_close and size_similar:
-                # 현재 줄이 새로운 option이 아닌 경우에만 병합
-                if not is_option:
-                    start_new_group = False
-                else:
-                    start_new_group = True
             # 같은 block이고, Y가 가깝고, X가 비슷하거나 들여쓰기
             elif same_block and y_close and (x_similar or x_indented):
                 # 폰트/색상이 같고, 문장 종결이 아니면 병합
