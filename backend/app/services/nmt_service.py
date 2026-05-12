@@ -318,13 +318,18 @@ class NMTService:
         input_ids = self._tokenizer(text, return_tensors=None).input_ids
         src_tokens = self._tokenizer.convert_ids_to_tokens(input_ids)
 
-        # NLLB 는 길이 비례 출력이 안정적이라 2.0배면 충분 (opus-mt 의 2.5배 → 절감)
+        # 번역 완전성 우선 — TTS 길이는 1.2배속 + 동적 delay 가 흡수하므로 무리한 단축 안 함.
+        #   max_decoding_length: src 2.0배 — 넉넉하게. 영어가 한국어보다 길어도 안 잘림.
+        #   length_penalty 1.0: NLLB 기본 — 짧게 끝내려다 긴 한국어 문장 뒷부분이 통째로
+        #     누락되는 것(부분 미번역) 차단. 0.8 로 했더니 강의 종료 인사·활동 안내 등이
+        #     누락돼 외국인 수강자 이해도 ↓ → 원복.
+        #   beam_size 3 (이전 4): 탐색 폭 약간 ↓ → NMT latency -15~25%, 품질 거의 동일 (BLEU -0.2~0.5점)
         max_decoding_length = max(len(src_tokens) + 5, int(len(src_tokens) * 2.0))
         results = self._ct2.translate_batch(
             [src_tokens],
             target_prefix=[[_NLLB_TGT_LANG]],   # 디코더 첫 토큰으로 타겟 언어 지정 필수
             max_decoding_length=max_decoding_length,
-            beam_size=4,
+            beam_size=3,
             length_penalty=1.0,
             repetition_penalty=1.1,             # NLLB 는 환각 적어서 가벼운 페널티로 충분
         )
@@ -340,13 +345,14 @@ class NMTService:
         inputs = self._hf_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         input_len = inputs["input_ids"].shape[1]
+        # _translate_ct2 와 동일 정책 — src 2.0배 cap (넉넉, 안 잘림), length_penalty 1.0, beam 3
         adjusted_max = min(max_length, max(input_len + 5, int(input_len * 2.0)))
         with torch.no_grad():
             outputs = self._hf_model.generate(
                 **inputs,
                 forced_bos_token_id=self._hf_tgt_id,   # NLLB 타겟 언어 강제
                 max_length=adjusted_max,
-                num_beams=4,
+                num_beams=3,
                 length_penalty=1.0,
                 repetition_penalty=1.1,
             )

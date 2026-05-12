@@ -110,8 +110,12 @@ export function useAudioCapture({
       const { MicVAD } = window.vad
       // 한 발화의 최대 지속 시간 — 이를 넘으면 강제 분할 (chunk 송출).
       // 강사가 호흡 없이 길게 말해도 worklet 누적 프레임을 직접 chunk 로 송출
-      // (VAD 는 그대로 둠 → pause/start 사이 음성 손실 차단). 정상 강의에선 거의 발동 안 됨.
-      const MAX_SPEECH_DURATION_MS = 20000
+      // (VAD 는 그대로 둠 → pause/start 사이 음성 손실 차단).
+      // 8초로 짧게 — 긴 발화를 잘게 나눠 ASR/NMT/TTS 처리시간 분산을 줄이고
+      // wall-clock delay (VITE_SYNC_DELAY_MS) 를 그만큼 짧게 잡을 수 있게 함.
+      // trade-off: 문장 중간에서 끊기면 한→영 어순 차이로 약간의 오역 가능
+      // (한국어 동사/부정/시제가 문장 끝). 대부분 발화는 8초 안에 자연 종료되어 영향 작음.
+      const MAX_SPEECH_DURATION_MS = 8000
       // 발동 시 chunk 송출 헬퍼. 발화 도중 호출 시 누적 프레임만 송출, VAD 는 계속 듣는 중.
       const flushChunkAccum = (label: string) => {
         const frames = chunkAccumRef.current
@@ -162,7 +166,7 @@ export function useAudioCapture({
           isSpeakingRef.current = true
           // 발화 시작 직전 preroll 을 chunk 누적에 미리 넣음 — 단어 첫 자모 잘림 방지
           chunkAccumRef.current = [...prerollRef.current]
-          // 20s 마다 chunk 강제 송출 (worklet 누적 프레임 사용, VAD 는 그대로 둠)
+          // MAX_SPEECH_DURATION_MS 마다 chunk 강제 송출 (worklet 누적 프레임 사용, VAD 는 그대로 둠)
           const scheduleForceSplit = () => {
             maxDurationTimerRef.current = window.setTimeout(() => {
               if (!isSpeakingRef.current) return

@@ -80,6 +80,38 @@ _TRAILING_HALLUCINATION = re.compile(
 # 환각으로 같은 표현이 또 와도 차단. 30초면 강의 흐름에 자연스러운 길이.
 _POLITE_DEDUP_WINDOW_SEC = 30.0
 
+# ASR 어휘 힌트 (hotwords / initial_prompt) — 슬라이드 용어집 한국어 키 + 강의 제목을
+# 짧게 넘겨 Whisper 가 도메인 단어("객체 지향", 제품명 등)를 더 정확히 받아쓰도록 약하게
+# 편향. 짧게 유지하는 게 핵심: 긴 프롬프트는 디코더 attention 이 길어지고 무엇보다
+# 안 들린 hint 단어를 토하는 환각이 늘어남. 빈 입력이면 None → 기존 동작과 100% 동일.
+_MAX_HINT_TERMS = 32
+_MAX_HINT_CHARS = 280
+_MAX_HINT_TERM_LEN = 40   # 이보다 긴 항목(문장 등)은 hint 로 부적절 → 제외
+
+
+def _build_asr_hint(hint_terms) -> 'str | None':
+    if not hint_terms:
+        return None
+    seen: set = set()
+    picked: list = []
+    for t in hint_terms:
+        if not isinstance(t, str):
+            continue
+        t = t.strip()
+        if not t or len(t) > _MAX_HINT_TERM_LEN or t in seen:
+            continue
+        seen.add(t)
+        picked.append(t)
+        if len(picked) >= _MAX_HINT_TERMS:
+            break
+    if not picked:
+        return None
+    text = ", ".join(picked)
+    if len(text) > _MAX_HINT_CHARS:
+        # 글자 수 상한 — 마지막 콤마 기준으로 잘라 단어 중간 절단 방지.
+        text = text[:_MAX_HINT_CHARS].rsplit(",", 1)[0].strip()
+    return text or None
+
 
 class ASRService:
     def __init__(self, model_name: str = "models/whisper-large-v3-turbo-ct2-int8", device: str = "cpu", dtype: str = "float32"):
@@ -89,6 +121,9 @@ class ASRService:
         # dtype 대신 compute_type 사용 (bfloat16 미지원 → float16으로 대체)
         self.compute_type = "float16" if self.device == "cuda" else "float32"
         self.model = None
+        # faster-whisper 버전별 hotwords 지원 여부 — _load_model 에서 시그니처 검사 후 설정.
+        # 미지원(구버전)이면 initial_prompt 로 폴백 (모든 버전에 존재).
+        self._supports_hotwords: bool = False
         # 짧은 인사 중복 차단 — 진짜 끝 인사 1번만 통과시키기 위한 캐시
         self._last_polite_text: str = ""
         self._last_polite_at: float = 0.0
@@ -102,7 +137,17 @@ class ASRService:
                 device=self.device,
                 compute_type=self.compute_type,
             )
-            print(f"[ASR] {self.model_name} 로드 완료 ({self.compute_type}, {self.device})")
+            try:
+                import inspect
+                self._supports_hotwords = (
+                    "hotwords" in inspect.signature(self.model.transcribe).parameters
+                )
+            except (TypeError, ValueError):
+                self._supports_hotwords = False
+            print(
+                f"[ASR] {self.model_name} 로드 완료 ({self.compute_type}, {self.device}, "
+                f"hotwords={'지원' if self._supports_hotwords else '미지원(initial_prompt 폴백)'})"
+            )
             if self.device == "cuda":
                 try:
                     import torch
@@ -122,22 +167,31 @@ class ASRService:
                 f"faster-whisper 패키지가 필요합니다: pip install faster-whisper\n{e}"
             )
 
-    def transcribe(self, audio_bytes: bytes, language: str = "ko") -> str:
+    def transcribe(self, audio_bytes: bytes, language: str = "ko", hint_terms=None) -> str:
         """기존 호환 — 텍스트만 반환. 내부적으로 transcribe_with_words 호출."""
-        text, _ = self.transcribe_with_words(audio_bytes, language)
+        text, _ = self.transcribe_with_words(audio_bytes, language, hint_terms)
         return text
 
     def transcribe_with_words(
-        self, audio_bytes: bytes, language: str = "ko"
+        self, audio_bytes: bytes, language: str = "ko", hint_terms: 'list[str] | None' = None
     ) -> tuple[str, list[dict]]:
         """텍스트 + 단어별 시간 정보 함께 반환.
         words = [{'text': str, 'start': float, 'end': float}, ...]  (start/end: chunk 시작 기준 초)
         chunk 안 multi-sentence 의 정확한 sub-sentence 시간 분배에 사용.
-        word_timestamps=True 로 ASR 5~10% 느려짐 (Whisper 가 단어별 alignment 수행)."""
+        word_timestamps=True 로 ASR 5~10% 느려짐 (Whisper 가 단어별 alignment 수행).
+
+        hint_terms: 도메인 어휘 힌트 (슬라이드 용어집 한국어 키 + 강의 제목 등). 지정 시
+        hotwords (또는 구버전이면 initial_prompt) 로 전달 — ASR 이 해당 단어를 더 정확히
+        받아쓰도록 약하게 편향. None/빈 리스트면 추가 인자 없이 호출 → 기존 동작과 동일."""
         if self.model is None:
             return ("", [])
         try:
             audio_array = self._bytes_to_array(audio_bytes)
+            # 어휘 힌트 — finite·짧게 정제. 빈 결과면 추가 인자 자체를 안 넘김 (기존 경로 그대로).
+            hint = _build_asr_hint(hint_terms)
+            hint_kwargs: dict = {}
+            if hint:
+                hint_kwargs["hotwords" if self._supports_hotwords else "initial_prompt"] = hint
             segments, _ = self.model.transcribe(
                 audio_array,
                 language=language,
@@ -145,6 +199,7 @@ class ASRService:
                 condition_on_previous_text=False,  # 이전 발화 컨텍스트 무시 → hallucination 차단
                 vad_filter=True,                   # 무음 구간 자동 필터
                 word_timestamps=True,              # 단어별 시간 정보 — sub-sentence sync 용
+                **hint_kwargs,                     # hotwords/initial_prompt — 어휘 힌트 (있을 때만)
             )
             texts = []
             all_words: list[dict] = []
