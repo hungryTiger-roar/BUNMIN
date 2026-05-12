@@ -36,6 +36,8 @@ F. review_needed 처리
 import fitz
 import os
 import re
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass, field, asdict
 import logging
@@ -47,6 +49,40 @@ from .pdf_font_handler import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ============================================================
+# 파일 로깅 설정 (디버깅용)
+# ============================================================
+_BASE_DIR = Path(__file__).parent.parent.parent.parent.parent
+LOG_DIR = _BASE_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+_log_date = datetime.now().strftime("%Y%m%d")
+LOG_FILE = LOG_DIR / f"pdf_replacer_{_log_date}.log"
+
+_pdf_logger = logging.getLogger("pdf_replacer")
+_pdf_logger.setLevel(logging.DEBUG)
+
+if not _pdf_logger.handlers:
+    _file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    _file_handler.setLevel(logging.DEBUG)
+    _file_formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)-7s | %(funcName)-25s | %(message)s",
+        datefmt="%H:%M:%S"
+    )
+    _file_handler.setFormatter(_file_formatter)
+    _pdf_logger.addHandler(_file_handler)
+
+def pdf_log_debug(msg: str):
+    _pdf_logger.debug(msg)
+
+def pdf_log_warning(msg: str):
+    _pdf_logger.warning(msg)
+
+
+def _get_min_font_size(role: str) -> float:
+    """최소 폰트 크기 반환 (모든 role에 대해 6pt)"""
+    return 6.0
 
 
 # =============================================================================
@@ -135,7 +171,7 @@ def _render_multi_color_text(
 
     # DEBUG: 함수 진입 확인
     block_id = trans.get('block_id', 'unknown')
-    print(f"[MultiColor-ENTER] {block_id}: translated='{translated[:50]}...', line_colors={line_colors}")
+    pdf_log_debug(f"[MultiColor-ENTER] {block_id}: translated='{translated}', line_colors={line_colors}")
 
     # 색상 준비
     first_color = (0, 0, 0)
@@ -160,27 +196,58 @@ def _render_multi_color_text(
                     break
 
     # "Term[구분자] Definition" 패턴 감지
-    # 구분자: 한글, 영문, 숫자, 공백을 제외한 모든 기호
-    match = re.search(r'^([A-Za-z가-힣0-9\s]+?)([^A-Za-z가-힣0-9\s])\s*', translated)
+    # 구분자로 인식할 문자: : ; → 등
+    # 구분자로 인식하지 않을 문자 (제외):
+    #   - (하이픈): decision-making, cost-benefit
+    #   . (마침표): Dr., U.S.A., 3.14
+    #   , (쉼표): 1,000, A, B, C
+    #   ' (아포스트로피): don't, it's
+    #   " (따옴표): "quoted"
+    #   / (슬래시): and/or, I/O
+    #   ( ) (괄호): (example)
+    #   & (앰퍼샌드): Q&A, R&D
+    #   @ # % + = _ (기타 일반 기호)
+    excluded_chars = r'\-\.\,\'\"\/\(\)\&\@\#\%\+\=\_'
+    match = re.search(rf'^([A-Za-z가-힣0-9\s{excluded_chars}]+?)([^A-Za-z가-힣0-9\s{excluded_chars}])\s*', translated)
 
     if not match:
-        # 패턴 없으면 단색 textbox (배경과 대비 체크)
+        # 패턴 없으면 단색 textbox (배경과 대비 체크 + 폰트 축소로 bbox 내 맞춤)
+        pdf_log_debug(f"[MultiColor] {block_id}: Term:Def 패턴 미감지, 단색 렌더링")
         bg_brightness = (bg_color[0] * 299 + bg_color[1] * 587 + bg_color[2] * 114) / 1000
         color_brightness = (first_color[0] * 299 + first_color[1] * 587 + first_color[2] * 114) / 1000
         if abs(bg_brightness - color_brightness) < 0.3:
             adjusted_color = (0, 0, 0) if bg_brightness > 0.5 else (1, 1, 1)
         else:
             adjusted_color = first_color
+
+        # bbox 확장 없이 폰트 축소만으로 맞춤 (줄바꿈은 insert_textbox가 자동 처리)
+        min_size = _get_min_font_size(role)
+        for font_scale in [1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.5, 0.4]:
+            current_size = size * font_scale
+            if current_size < min_size:
+                current_size = min_size
+
+            result = page.insert_textbox(
+                rect, translated, fontname=font, fontsize=current_size,
+                color=adjusted_color, align=fitz.TEXT_ALIGN_LEFT
+            )
+            if result >= 0:
+                return result
+
+        # 최후의 수단: 최소 크기로 시도
         return page.insert_textbox(
-            rect, translated, fontname=font, fontsize=size,
+            rect, translated, fontname=font, fontsize=min_size,
             color=adjusted_color, align=fitz.TEXT_ALIGN_LEFT
         )
 
-    term = match.group(1).strip() + match.group(2)
+    term = match.group(1).strip() + match.group(2)  # Term + 구분자
     definition = translated[match.end():].strip()
+
+    pdf_log_debug(f"[MultiColor] {block_id}: 패턴 감지 - term='{term}', definition='{definition}'")
 
     if not definition:
         # definition 없으면 term만 렌더링 (배경과 대비 체크)
+        pdf_log_warning(f"[MultiColor] {block_id}: Definition 없음! term만 렌더링: '{term}'")
         bg_brightness = (bg_color[0] * 299 + bg_color[1] * 587 + bg_color[2] * 114) / 1000
         color_brightness = (first_color[0] * 299 + first_color[1] * 587 + first_color[2] * 114) / 1000
         if abs(bg_brightness - color_brightness) < 0.3:
@@ -223,116 +290,70 @@ def _render_multi_color_text(
         def_color = (0, 0, 0) if bg_brightness > 0.5 else (1, 1, 1)  # 배경에 맞는 기본색
 
     # DEBUG: 색상 결정 로그
-    block_id = trans.get('block_id', 'unknown')
-    print(f"[MultiColor] {block_id}: term='{term}', def='{definition[:30]}...'")
-    print(f"[MultiColor] {block_id}: line_colors={line_colors}, first_color={first_color}, second_color={second_color}")
-    print(f"[MultiColor] {block_id}: term_color={term_color}, def_color={def_color}")
+    pdf_log_debug(f"[MultiColor] {block_id}: term='{term}', def='{definition[:50] if len(definition) > 50 else definition}'")
+    pdf_log_debug(f"[MultiColor] {block_id}: line_colors={line_colors}, first_color={first_color}, second_color={second_color}")
+    pdf_log_debug(f"[MultiColor] {block_id}: term_color={term_color}, def_color={def_color}")
 
-    # 시도할 폰트 스케일
-    font_scales = [1.0, 0.95, 0.9, 0.85]
-    # bbox 아래 확장 비율
-    expand_ratios = [0, 0.3, 0.5, 0.8]
+    # Role 기반 최소 폰트 크기
+    min_size = _get_min_font_size(role)
 
-    for font_scale in font_scales:
-        current_size = size * font_scale
-        line_height = current_size * 1.2
-
-        for expand_ratio in expand_ratios:
-            # 확장된 rect 계산
-            expanded_y1 = min(
-                rect.y1 + rect.height * expand_ratio,
-                page_rect.height - 5
-            )
-            expanded_rect = fitz.Rect(rect.x0, rect.y0, rect.x1, expanded_y1)
-
-            if expanded_rect.is_empty or expanded_rect.height < current_size:
-                continue
-
-            # === Strategy A: 같은 줄 multi-color ===
-            term_with_space = term + " "
-            term_width = fitz.get_text_length(term_with_space, fontname=font, fontsize=current_size)
-            full_width = fitz.get_text_length(term_with_space + definition, fontname=font, fontsize=current_size)
-
-            if full_width <= expanded_rect.width:
-                # Layout Plan 성공 → 렌더링
-                baseline_y = expanded_rect.y0 + current_size
-                page.insert_text(
-                    (expanded_rect.x0, baseline_y), term_with_space,
-                    fontname=font, fontsize=current_size, color=term_color
-                )
-                page.insert_text(
-                    (expanded_rect.x0 + term_width, baseline_y), definition,
-                    fontname=font, fontsize=current_size, color=def_color
-                )
-                return 0  # 성공
-
-            # === Strategy B/C: 두 줄 multi-color ===
-            def_rect = fitz.Rect(
-                expanded_rect.x0, expanded_rect.y0 + line_height,
-                expanded_rect.x1, expanded_rect.y1
-            )
-
-            if def_rect.is_empty or def_rect.height < current_size:
-                continue
-
-            # Definition이 들어갈 수 있는지 시뮬레이션
-            char_width = current_size * 0.55  # 보수적 추정
-            chars_per_line = max(1, int(def_rect.width / char_width))
-            lines_needed = (len(definition) + chars_per_line - 1) // chars_per_line
-            height_needed = lines_needed * line_height
-
-            # 여유 있게 체크 (약간의 overflow 허용)
-            if height_needed <= def_rect.height + line_height * 0.3:
-                # Layout Plan 성공 → 렌더링
-                baseline_y = expanded_rect.y0 + current_size
-                page.insert_text(
-                    (expanded_rect.x0, baseline_y), term,
-                    fontname=font, fontsize=current_size, color=term_color
-                )
-                page.insert_textbox(
-                    def_rect, definition,
-                    fontname=font, fontsize=current_size, color=def_color,
-                    align=fitz.TEXT_ALIGN_LEFT
-                )
-                return 0  # 성공
-
-    # === Strategy E: 단색 textbox fallback ===
-    # multi-color 포기, 전체 문장을 단색으로
-    for font_scale in [1.0, 0.9, 0.8, 0.7]:
-        current_size = size * font_scale
-        for expand_ratio in [0, 0.5, 1.0]:
-            expanded_y1 = min(
-                rect.y1 + rect.height * expand_ratio,
-                page_rect.height - 5
-            )
-            expanded_rect = fitz.Rect(rect.x0, rect.y0, rect.x1, expanded_y1)
-
-            if expanded_rect.is_empty:
-                continue
-
+    # term > 40자 → 단색 textbox (안정적)
+    if len(term) > 40:
+        pdf_log_debug(f"[MultiColor] {block_id}: term {len(term)}자 > 40, 단색 fallback")
+        for font_scale in [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4]:
+            current_size = max(min_size, size * font_scale)
             result = page.insert_textbox(
-                expanded_rect, translated,
-                fontname=font, fontsize=current_size, color=(0, 0, 0),
+                rect, translated,
+                fontname=font, fontsize=current_size, color=term_color,
                 align=fitz.TEXT_ALIGN_LEFT
             )
             if result >= 0:
-                return result  # 성공
+                return result
+        return page.insert_textbox(rect, translated, fontname=font, fontsize=min_size, color=term_color, align=fitz.TEXT_ALIGN_LEFT)
 
-    # === Strategy F: 최후의 수단 ===
-    # 최대 확장 + 최소 폰트로 시도
-    max_rect = fitz.Rect(
-        rect.x0, rect.y0, rect.x1,
-        min(rect.y1 + rect.height * 1.5, page_rect.height - 5)
-    )
-    result = page.insert_textbox(
-        max_rect, translated,
-        fontname=font, fontsize=size * 0.6, color=(0, 0, 0),
+    # term ≤ 40자 → multi-color 시도
+    font_scales = [1.0, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.5, 0.4]
+
+    for font_scale in font_scales:
+        current_size = max(min_size, size * font_scale)
+        line_height = current_size * 1.2
+
+        term_with_space = term + " "
+        term_width = fitz.get_text_length(term_with_space, fontname=font, fontsize=current_size)
+        full_width = fitz.get_text_length(term_with_space + definition, fontname=font, fontsize=current_size)
+
+        # Strategy A: 같은 줄 multi-color (term + definition이 한 줄에 들어갈 때만)
+        if full_width <= rect.width and line_height <= rect.height:
+            baseline_y = rect.y0 + current_size
+            page.insert_text((rect.x0, baseline_y), term_with_space, fontname=font, fontsize=current_size, color=term_color)
+            page.insert_text((rect.x0 + term_width, baseline_y), definition, fontname=font, fontsize=current_size, color=def_color)
+            pdf_log_debug(f"[MultiColor] {block_id}: Strategy A 성공, font_scale={font_scale}")
+            return 0
+
+        # Strategy B 비활성화: definition이 제대로 렌더링되지 않는 문제로 인해 비활성화
+        # 대신 바로 Strategy C (단색 textbox)로 넘어감
+
+    # Strategy C: 단색 fallback
+    pdf_log_debug(f"[MultiColor] {block_id}: Strategy C fallback")
+    for font_scale in [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4]:
+        current_size = max(min_size, size * font_scale)
+
+        result = page.insert_textbox(
+            rect, translated,
+            fontname=font, fontsize=current_size, color=(0, 0, 0),
+            align=fitz.TEXT_ALIGN_LEFT
+        )
+        if result >= 0:
+            pdf_log_debug(f"[MultiColor] {block_id}: Strategy C 성공, font_scale={font_scale}")
+            return result
+
+    # 최후의 수단: 최소 크기로 시도
+    pdf_log_debug(f"[MultiColor] {block_id}: 최후 수단 {min_size}pt")
+    return page.insert_textbox(
+        rect, translated,
+        fontname=font, fontsize=min_size, color=(0, 0, 0),
         align=fitz.TEXT_ALIGN_LEFT
     )
-    if result >= 0:
-        return result
-
-    return -1  # review_needed (모든 전략 실패)
 
 
 
@@ -450,15 +471,18 @@ def replace_texts_in_pdf(
                     if is_white_bg:
                         # 배경이 흰색이면 일반 텍스트로 처리
                         page.add_redact_annot(rect, fill=(1, 1, 1))
+                        trans["redaction_fill_color"] = (1, 1, 1)  # 저장
                         redaction_data.append((trans, rect))
                     else:
                         # 실제 이미지/다이어그램 배경: 해당 색으로 redaction
                         page.add_redact_annot(rect, fill=bg_color)
+                        trans["redaction_fill_color"] = bg_color  # 저장
                         trans["expand_allowed"] = False
                         redaction_data.append((trans, rect))
                 else:
                     # 일반 텍스트: 흰색 배경으로 redaction
                     page.add_redact_annot(rect, fill=(1, 1, 1))
+                    trans["redaction_fill_color"] = (1, 1, 1)  # 저장
                     redaction_data.append((trans, rect))
 
         # 2단계: redaction 적용 (일반 배경만)
@@ -573,21 +597,22 @@ def _replace_single_block(
     x0_adjusted = x0 + prefix_width if (keep_prefix and prefix_width > 0) else x0
     original_rect = fitz.Rect(x0_adjusted, y0, x1, y1)
 
-    # 1. 배경 정보 사용 (이미 redaction에서 분석됨)
-    if bg_info is None:
-        bg_info = _analyze_background(page, original_rect)
-    result.redaction_fill_color = bg_info["color"]
+    # 1. 배경 정보: redaction fill color 사용 (정확한 대비 체크를 위해)
+    redaction_fill = trans.get("redaction_fill_color", (1, 1, 1))
+    result.redaction_fill_color = redaction_fill
 
-    # 이미지 위 텍스트도 교체 시도 (완벽하지 않을 수 있음)
-    if bg_info["type"] == "image":
+    # 이미지 위 텍스트 확인
+    on_image = trans.get("on_image_background", False)
+    if on_image:
         result.error = "Text on image background - may need review"
 
     # 2. 영어 폰트 및 색상 설정
     english_font = map_korean_to_english_font(original_font)
     original_text_color = int_color_to_rgb(color_int) if isinstance(color_int, int) else (0, 0, 0)
 
-    # 배경색과 텍스트색의 대비 확인 후 조정
-    bg_color = bg_info["color"]  # (r, g, b) 0-1 범위
+    # 배경색(redaction fill)과 텍스트색의 대비 확인 후 조정
+    # 핵심: redaction fill color와 원본 텍스트 색상을 비교해야 함!
+    bg_color = redaction_fill  # redaction 적용된 실제 배경색
     bg_brightness = (bg_color[0] * 299 + bg_color[1] * 587 + bg_color[2] * 114) / 1000
     text_brightness = (original_text_color[0] * 299 + original_text_color[1] * 587 + original_text_color[2] * 114) / 1000
 
@@ -595,9 +620,10 @@ def _replace_single_block(
     if abs(bg_brightness - text_brightness) < 0.3:
         # 배경이 밝으면 검정, 어두우면 흰색
         text_color = (0, 0, 0) if bg_brightness > 0.5 else (1, 1, 1)
-        print(f"[Replace] 텍스트 색상 조정: bg={bg_brightness:.2f}, text={text_brightness:.2f} → {text_color}")
+        pdf_log_debug(f"[Replace] {block_id}: 텍스트 색상 조정 (redaction_fill 기준): bg={bg_brightness:.2f}, text={text_brightness:.2f} → {text_color}")
     else:
         text_color = original_text_color
+        pdf_log_debug(f"[Replace] {block_id}: 텍스트 색상 유지: bg={bg_brightness:.2f}, text={text_brightness:.2f}, color={text_color}")
     result.final_font = english_font
 
     # 3. 최소 폰트 크기 결정
@@ -619,20 +645,22 @@ def _replace_single_block(
     # multi-color 렌더러 사용 조건:
     # 1. has_multi_color=True (여러 색상 감지)
     # 2. role == "term_definition"
-    # 3. 번역문에 "Term: Definition" 패턴이 있음 (콜론 뒤에 텍스트)
-    # 주의: hyphen은 제외 (Real-Time 같은 복합어 오인식 방지)
-    # Term: 40자 이하, Definition: 5자 이상, 콜론 뒤 공백 필수
-    has_term_definition_pattern = bool(re.match(r'^[A-Za-z가-힣0-9\s]{1,40}:\s+.{5,}', translated))
+    # 3. 번역문에 "Term[구분자] Definition" 패턴이 있음
+    # Term: 40자 이하, Definition: 5자 이상
+    # 제외 문자: - . , ' " / ( ) & @ # % + = _
+    _excluded = r'\-\.\,\'\"\/\(\)\&\@\#\%\+\=\_'
+    has_term_definition_pattern = bool(re.match(rf'^[A-Za-z가-힣0-9\s{_excluded}]{{1,40}}[^A-Za-z가-힣0-9\s{_excluded}]\s*.{{5,}}', translated))
     use_multi_color_renderer = has_multi_color or role == "term_definition" or has_term_definition_pattern
 
     # DEBUG: multi-color 렌더러 호출 여부 확인
-    print(f"[Replace] {block_id}: has_multi_color={has_multi_color}, role={role}, has_pattern={has_term_definition_pattern}, use_renderer={use_multi_color_renderer}")
+    pdf_log_debug(f"[Replace] {block_id}: original='{original[:30]}...' → translated='{translated[:50]}...'")
+    pdf_log_debug(f"[Replace] {block_id}: has_multi_color={has_multi_color}, role={role}, has_pattern={has_term_definition_pattern}, use_renderer={use_multi_color_renderer}")
 
     if use_multi_color_renderer:
         # multi-color 렌더러가 모든 fallback을 내부적으로 처리
         # (같은 줄 → 두 줄 → bbox 확장 → 폰트 축소 → 단색 fallback)
         insert_result = _render_multi_color_text(
-            page, trans, final_rect, english_font, final_size, bg_info["color"]
+            page, trans, final_rect, english_font, final_size, redaction_fill
         )
     else:
         # 단색 텍스트
@@ -646,47 +674,32 @@ def _replace_single_block(
         )
     result.insert_result = insert_result
 
-    # 단색 텍스트의 overflow 처리 (multi-color 렌더러는 이미 내부에서 처리됨)
+    # 단색 텍스트의 overflow 처리 (bbox 확장 없이 폰트 축소만)
     if insert_result < 0 and not use_multi_color_renderer:
-        retry_rect = final_rect
-
-        if expand_allowed:
-            orig_len = len(original) if original else 1
-            trans_len = len(translated) if translated else 1
-            expansion_factor = max(0.5, min(2.0, trans_len / orig_len - 1))
-
-            retry_rect = fitz.Rect(
-                final_rect.x0,
-                final_rect.y0,
-                min(final_rect.x1 + final_rect.width * expansion_factor, page_rect.width - 5),
-                min(final_rect.y1 + final_rect.height * 0.3, page_rect.height - 5)
-            )
-
-            # 재시도 - 확장된 rect로 렌더링
+        # 폰트 축소로 bbox 내에 맞춤 (확장 X)
+        for font_scale in [0.9, 0.8, 0.7, 0.6, 0.5, 0.4]:
+            smaller_size = max(6, final_size * font_scale)
             insert_result = page.insert_textbox(
-                retry_rect,
+                final_rect,
                 translated,
                 fontname=english_font,
-                fontsize=final_size,
+                fontsize=smaller_size,
                 color=text_color,
                 align=fitz.TEXT_ALIGN_LEFT
             )
-            result.insert_result = insert_result
-            result.expanded_bbox = (retry_rect.x0, retry_rect.y0, retry_rect.x1, retry_rect.y1)
-
-            # 여전히 overflow면 폰트를 더 줄여서 시도
-            if insert_result < 0 and final_size > 8.0:
-                smaller_size = max(8.0, final_size * 0.7)
-                insert_result = page.insert_textbox(
-                    retry_rect,
-                    translated,
-                    fontname=english_font,
-                    fontsize=smaller_size,
-                    color=text_color,
-                    align=fitz.TEXT_ALIGN_LEFT
-                )
+            if insert_result >= 0:
                 result.insert_result = insert_result
                 result.final_size = smaller_size
+                break
+        else:
+            # 최후: 6pt로 시도
+            insert_result = page.insert_textbox(
+                final_rect, translated,
+                fontname=english_font, fontsize=6,
+                color=text_color, align=fitz.TEXT_ALIGN_LEFT
+            )
+            result.insert_result = insert_result
+            result.final_size = 6
 
     if insert_result >= 0:
         result.status = "replaced"

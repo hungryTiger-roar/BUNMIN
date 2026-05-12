@@ -329,7 +329,35 @@ def extract_korean_texts_for_translation(
                                 symbol_width = span_bbox[2] - line_bbox[0]
                             continue  # 기호는 번역하지 않음
 
-                        line_texts.append(span_text)
+                        # 공백이 많으면 분리 (8개 이상 연속 공백)
+                        if re.search(r'\s{8,}', span_text):
+                            parts = re.split(r'\s{8,}', span_text)
+                            parts = [p.strip() for p in parts if p.strip()]
+                            if len(parts) > 1:
+                                # 여러 부분으로 분리 - 첫 번째만 현재 라인에 추가
+                                line_texts.append(parts[0])
+                                # 나머지 부분들을 별도 라인으로 저장 (나중에 처리)
+                                if '_extra_parts' not in line:
+                                    line['_extra_parts'] = []
+                                # bbox를 텍스트 길이 비율로 분할
+                                total_len = sum(len(p) for p in parts)
+                                span_width = span_bbox[2] - span_bbox[0]
+                                current_x = span_bbox[0] + (len(parts[0]) / total_len) * span_width
+                                for extra_part in parts[1:]:
+                                    part_width = (len(extra_part) / total_len) * span_width
+                                    part_bbox = (current_x, span_bbox[1], current_x + part_width, span_bbox[3])
+                                    line['_extra_parts'].append({
+                                        'text': extra_part,
+                                        'font': span_font,
+                                        'size': span.get("size", 12.0),
+                                        'color': span.get("color", 0),
+                                        'bbox': part_bbox,
+                                    })
+                                    current_x += part_width
+                            else:
+                                line_texts.append(span_text)
+                        else:
+                            line_texts.append(span_text)
                         if not line_font:
                             line_font = span_font
                             line_size = span.get("size", 12.0)
@@ -411,6 +439,30 @@ def extract_korean_texts_for_translation(
                     "has_bullet": has_bullet,
                 })
 
+                # 공백으로 분리된 추가 부분들 처리
+                if '_extra_parts' in line:
+                    for extra in line['_extra_parts']:
+                        extra_text = extra['text']
+                        # 한글 포함 여부 확인
+                        if not re.search(r'[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]', extra_text):
+                            continue
+                        extra_role = _infer_line_role(
+                            extra_text, extra['bbox'], extra['size'],
+                            page_rect, False
+                        )
+                        page_lines.append({
+                            "page_num": page_num + 1,
+                            "text": extra_text,
+                            "bbox": extra['bbox'],
+                            "block_bbox": tuple(block_bbox),
+                            "block_idx": block_idx,
+                            "font": extra['font'],
+                            "size": extra['size'],
+                            "color": extra['color'],
+                            "role": extra_role,
+                            "has_bullet": False,
+                        })
+
             block_idx += 1
 
         # 그룹화 여부에 따라 처리
@@ -490,6 +542,91 @@ def _is_continuation(text: str) -> bool:
     continuation_starts = ['고', '며', '면', '니', '라', '를', '을', '는', '은', '이', '가', '에', '로', '와', '과']
     if text[0] in continuation_starts:
         return True
+    return False
+
+
+def _is_principle_title(text: str) -> bool:
+    """
+    Principle title 패턴인지 확인 (병합 방지 대상)
+
+    예시:
+    - "기본원리 1: 모든 선택에는 대가가 있다"
+    - "원리 2: 선택의 비용은..."
+    - "Principle 1: Every choice has a cost"
+    - "Basic principle 3:"
+    """
+    import re
+    text = text.strip()
+
+    # 한글 패턴
+    korean_patterns = [
+        r'^기본원리\s*\d+',  # 기본원리 1, 기본원리 2
+        r'^원리\s*\d+',      # 원리 1, 원리 2
+        r'^원칙\s*\d+',      # 원칙 1, 원칙 2
+    ]
+
+    # 영어 패턴
+    english_patterns = [
+        r'^[Bb]asic\s+[Pp]rinciple\s*\d+',  # Basic principle 1
+        r'^[Pp]rinciple\s*\d+',              # Principle 1
+    ]
+
+    for pattern in korean_patterns + english_patterns:
+        if re.search(pattern, text):
+            return True
+
+    return False
+
+
+def _is_option_prefix(text: str) -> bool:
+    """
+    Option prefix 패턴인지 확인 (병합 방지 대상)
+
+    예시:
+    - "a. 10만원 이상"
+    - "b. 10만원"
+    - "A. 변속기가 작동하면..."
+    - "1) 첫 번째 옵션"
+    - "(가) 선택지"
+    """
+    import re
+    text = text.strip()
+
+    # 알파벳 prefix: a. b. c. d. A. B. C. D. (공백 유무 무관)
+    if re.match(r'^[a-dA-D][\.\)]\s?', text):
+        return True
+
+    # 숫자 prefix: 1) 2) 3) 또는 1. 2. 3. (단, 소수점과 구분 필요)
+    if re.match(r'^[1-9][\)]\s?', text):
+        return True
+
+    # 한글 prefix: (가) (나) (다) 또는 가. 나. 다.
+    if re.match(r'^[\(]?[가나다라마바사아][\.\)]\s?', text):
+        return True
+
+    return False
+
+
+def _is_section_header(text: str) -> bool:
+    """
+    Section header 패턴인지 확인
+
+    예시:
+    - "개인의 의사결정과 관련된 4가지 기본원리"
+    - "사람들은 어떻게 상호작용하는가?"
+    """
+    import re
+    text = text.strip()
+
+    # "~와 관련된", "~에 관한" 패턴
+    if re.search(r'관련된|관한|관하여', text):
+        if not _is_principle_title(text):  # principle_title이 아닌 경우만
+            return True
+
+    # 물음표로 끝나는 제목
+    if text.endswith('?') and len(text) < 50:
+        return True
+
     return False
 
 
@@ -765,6 +902,11 @@ def _group_adjacent_lines(
         # 도식 라벨은 항상 개별 그룹 (병합 안 함)
         is_diagram = _is_diagram_label(line, page_rect)
 
+        # 특수 패턴 감지 (병합 방지)
+        is_principle = _is_principle_title(text)  # "기본원리 1:", "Principle 1:" 등
+        is_option = _is_option_prefix(text)       # "a.", "b.", "A.", "1)" 등
+        is_section = _is_section_header(text)     # "~와 관련된", "~는가?" 등
+
         # 새 그룹 시작 조건 확인
         start_new_group = False
 
@@ -775,6 +917,15 @@ def _group_adjacent_lines(
             start_new_group = True
         elif current_group.get("is_diagram"):
             # 이전 그룹이 도식 라벨이었으면 새 그룹 시작
+            start_new_group = True
+        elif is_principle:
+            # principle_title은 항상 새 그룹 (section_header와 병합 방지)
+            start_new_group = True
+        elif is_option:
+            # option prefix는 항상 새 그룹 (다른 옵션과 병합 방지)
+            start_new_group = True
+        elif is_section and current_group:
+            # section_header가 새로 시작되면 새 그룹
             start_new_group = True
         else:
             prev_line = current_group["lines"][-1]
@@ -820,6 +971,13 @@ def _group_adjacent_lines(
             # 이전 줄이 bullet이고 현재 줄이 continuation인 경우 병합
             elif current_group.get("is_bullet") and not prev_ends_sentence and y_close and size_similar:
                 start_new_group = False
+            # 이전 줄이 option (A., B., a., b.)이고 현재 줄이 continuation인 경우 병합
+            elif current_group.get("is_option") and not prev_ends_sentence and y_close and size_similar:
+                # 현재 줄이 새로운 option이 아닌 경우에만 병합
+                if not is_option:
+                    start_new_group = False
+                else:
+                    start_new_group = True
             # 같은 block이고, Y가 가깝고, X가 비슷하거나 들여쓰기
             elif same_block and y_close and (x_similar or x_indented):
                 # 폰트/색상이 같고, 문장 종결이 아니면 병합
@@ -847,6 +1005,8 @@ def _group_adjacent_lines(
                 "role": role,
                 "is_bullet": has_bullet or text.startswith("- "),
                 "is_diagram": is_diagram,
+                "is_principle": is_principle,
+                "is_option": is_option,
             }
         else:
             current_group["lines"].append(line)
