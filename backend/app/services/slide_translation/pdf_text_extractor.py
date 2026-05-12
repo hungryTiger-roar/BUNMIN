@@ -329,7 +329,35 @@ def extract_korean_texts_for_translation(
                                 symbol_width = span_bbox[2] - line_bbox[0]
                             continue  # 기호는 번역하지 않음
 
-                        line_texts.append(span_text)
+                        # 공백이 많으면 분리 (8개 이상 연속 공백)
+                        if re.search(r'\s{8,}', span_text):
+                            parts = re.split(r'\s{8,}', span_text)
+                            parts = [p.strip() for p in parts if p.strip()]
+                            if len(parts) > 1:
+                                # 여러 부분으로 분리 - 첫 번째만 현재 라인에 추가
+                                line_texts.append(parts[0])
+                                # 나머지 부분들을 별도 라인으로 저장 (나중에 처리)
+                                if '_extra_parts' not in line:
+                                    line['_extra_parts'] = []
+                                # bbox를 텍스트 길이 비율로 분할
+                                total_len = sum(len(p) for p in parts)
+                                span_width = span_bbox[2] - span_bbox[0]
+                                current_x = span_bbox[0] + (len(parts[0]) / total_len) * span_width
+                                for extra_part in parts[1:]:
+                                    part_width = (len(extra_part) / total_len) * span_width
+                                    part_bbox = (current_x, span_bbox[1], current_x + part_width, span_bbox[3])
+                                    line['_extra_parts'].append({
+                                        'text': extra_part,
+                                        'font': span_font,
+                                        'size': span.get("size", 12.0),
+                                        'color': span.get("color", 0),
+                                        'bbox': part_bbox,
+                                    })
+                                    current_x += part_width
+                            else:
+                                line_texts.append(span_text)
+                        else:
+                            line_texts.append(span_text)
                         if not line_font:
                             line_font = span_font
                             line_size = span.get("size", 12.0)
@@ -410,6 +438,30 @@ def extract_korean_texts_for_translation(
                     "role": role,
                     "has_bullet": has_bullet,
                 })
+
+                # 공백으로 분리된 추가 부분들 처리
+                if '_extra_parts' in line:
+                    for extra in line['_extra_parts']:
+                        extra_text = extra['text']
+                        # 한글 포함 여부 확인
+                        if not re.search(r'[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]', extra_text):
+                            continue
+                        extra_role = _infer_line_role(
+                            extra_text, extra['bbox'], extra['size'],
+                            page_rect, False
+                        )
+                        page_lines.append({
+                            "page_num": page_num + 1,
+                            "text": extra_text,
+                            "bbox": extra['bbox'],
+                            "block_bbox": tuple(block_bbox),
+                            "block_idx": block_idx,
+                            "font": extra['font'],
+                            "size": extra['size'],
+                            "color": extra['color'],
+                            "role": extra_role,
+                            "has_bullet": False,
+                        })
 
             block_idx += 1
 
@@ -540,16 +592,16 @@ def _is_option_prefix(text: str) -> bool:
     import re
     text = text.strip()
 
-    # 알파벳 prefix: a. b. c. d. A. B. C. D.
-    if re.match(r'^[a-dA-D][\.\)]\s', text):
+    # 알파벳 prefix: a. b. c. d. A. B. C. D. (공백 유무 무관)
+    if re.match(r'^[a-dA-D][\.\)]\s?', text):
         return True
 
     # 숫자 prefix: 1) 2) 3) 또는 1. 2. 3. (단, 소수점과 구분 필요)
-    if re.match(r'^[1-9][\)]\s', text):
+    if re.match(r'^[1-9][\)]\s?', text):
         return True
 
     # 한글 prefix: (가) (나) (다) 또는 가. 나. 다.
-    if re.match(r'^[\(]?[가나다라마바사아][\.\)]\s', text):
+    if re.match(r'^[\(]?[가나다라마바사아][\.\)]\s?', text):
         return True
 
     return False
@@ -919,6 +971,13 @@ def _group_adjacent_lines(
             # 이전 줄이 bullet이고 현재 줄이 continuation인 경우 병합
             elif current_group.get("is_bullet") and not prev_ends_sentence and y_close and size_similar:
                 start_new_group = False
+            # 이전 줄이 option (A., B., a., b.)이고 현재 줄이 continuation인 경우 병합
+            elif current_group.get("is_option") and not prev_ends_sentence and y_close and size_similar:
+                # 현재 줄이 새로운 option이 아닌 경우에만 병합
+                if not is_option:
+                    start_new_group = False
+                else:
+                    start_new_group = True
             # 같은 block이고, Y가 가깝고, X가 비슷하거나 들여쓰기
             elif same_block and y_close and (x_similar or x_indented):
                 # 폰트/색상이 같고, 문장 종결이 아니면 병합
