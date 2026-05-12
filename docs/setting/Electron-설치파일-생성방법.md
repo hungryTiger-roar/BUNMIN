@@ -454,6 +454,78 @@ begin KillAunionProcesses(); Result := True; end;
 
 ---
 
+## 언인스톨 시 사용자 데이터 삭제 프롬프트 ([installer.iss](../../installer.iss) `[Code]`)
+
+기본 Inno Setup uninstall 은 `{app}` (설치 위치) 만 삭제. `%LOCALAPPDATA%\Aunion AI\` (HF 모델 캐시 ~14GB+, 로그, 설정) 는 그대로 남아 사용자 디스크 영구 점유.
+
+해결: 메인 uninstall 끝난 후 (`usPostUninstall`) 프롬프트로 yes/no 받기.
+
+```pascal
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var UserDataDir: String; Response: Integer;
+begin
+  if CurUninstallStep <> usPostUninstall then Exit;
+  if UninstallSilent then Exit;  { 무인 제거 시엔 안전하게 데이터 유지 }
+
+  UserDataDir := ExpandConstant('{localappdata}\Aunion AI');
+  if not DirExists(UserDataDir) then Exit;
+
+  Response := MsgBox(
+    '사용자 데이터를 함께 삭제하시겠습니까?'#13#10#13#10 +
+    '위치: ' + UserDataDir + #13#10 +
+    '내용: 다운받은 AI 모델 캐시(~14GB+), 로그, 설정'#13#10#13#10 +
+    '[예] 함께 삭제 — 디스크 공간 회복'#13#10 +
+    '[아니오] 데이터 유지 — 재설치 시 모델 재다운로드 안 받음 (권장)',
+    mbConfirmation, MB_YESNO);
+
+  if Response = IDYES then
+    DelTree(UserDataDir, True, True, True);
+end;
+```
+
+### UX 디테일
+
+| 결정 | 이유 |
+|---|---|
+| 디폴트 권장 = "아니오" | 14GB 모델 캐시 보존이 안전. 재설치 시 다운로드 X |
+| `UninstallSilent` 면 스킵 | 자동 업데이트 / 무인 제거에서 의도치 않게 날리는 것 차단 |
+| `DirExists` 체크 | 이미 깨끗하면 프롬프트 안 뜸 |
+| 삭제 실패 안내 | 권한 / 파일 락 문제 시 수동 삭제 경로 안내 |
+
+---
+
+## 인스톨러 비주얼 자산 ([installer-assets/](../../installer-assets/))
+
+마법사를 줄글 위주에서 브랜드 색 사이드바 + 아이콘으로 강화. 모두 placeholder — 정식 디자인 나오면 동일 경로 파일 교체만 하면 됨.
+
+### 자산 3종
+
+| 파일 | 크기 / 포맷 | 용도 |
+|---|---|---|
+| [installer-assets/icon.ico](../../installer-assets/icon.ico) | multi-resolution ICO (256/128/64/48/32/16) | `SetupIconFile` — setup.exe 파일 아이콘 + 마법사 창 타이틀바 |
+| [installer-assets/wizard-image.bmp](../../installer-assets/wizard-image.bmp) | 497x312 24-bit BMP | `WizardImageFile` — Welcome / Finished 페이지 좌측 사이드바 |
+| [installer-assets/wizard-small.bmp](../../installer-assets/wizard-small.bmp) | 55x55 24-bit BMP | `WizardSmallImageFile` — 설치 진행 페이지 우상단 코너 |
+
+### installer.iss 디렉티브 (4줄)
+
+```ini
+[Setup]
+SetupIconFile=installer-assets\icon.ico
+WizardImageFile=installer-assets\wizard-image.bmp
+WizardSmallImageFile=installer-assets\wizard-small.bmp
+WizardImageStretch=no
+```
+
+### 정식 디자인 도입 시
+
+- Figma / Photoshop 등에서 디자인 → 위 사이즈로 export
+- `installer-assets/` 의 4개 파일 (icon.ico + wizard-image.bmp + wizard-small.bmp + [frontend/electron/assets/icon.ico](../../frontend/electron/assets/icon.ico)) 교체
+- Inno Setup 재컴파일 — 코드 변경 없음
+
+> Electron 빌드 자산 (`frontend/electron/assets/icon.ico`) 도 같은 .ico 로 자동 배치. 추후 앱 아이콘 작업 시 그대로 활용.
+
+---
+
 ## 모델별 분리 다운로드 UI (`_model_status["downloads"]`)
 
 병렬 다운로드 (예: VLM + Surya OCR) 가 동시에 진행될 때 단일 `_model_status["download"]` 필드를 두 watcher 가 덮어쓰면서 UI 가 한 모델 / 다른 모델 사이로 깜빡이던 문제 해소.
