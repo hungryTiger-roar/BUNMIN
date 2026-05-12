@@ -336,6 +336,10 @@ function createWindow() {
     height: 800,
     minWidth: 900,
     minHeight: 600,
+    // OS 기본 frame 제거 — renderer 가 자체 타이틀바를 그림 (frontend/src/components/common/TitleBar.tsx).
+    // Windows 에선 frame: false 라도 윈도우 가장자리 8px 리사이즈 영역은 그대로 유효.
+    frame: false,
+    backgroundColor: '#f5f5f4',  // 첫 페인트 전 흰 깜빡임 차단 (stone-100)
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
@@ -388,6 +392,18 @@ function createWindow() {
       mainWindow.loadURL(url)
     })
   }
+
+  // 자체 타이틀바 (frame: false) 에서 max/restore 아이콘 토글에 필요한 상태 통지
+  mainWindow.on('maximize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window-maximized-change', true)
+    }
+  })
+  mainWindow.on('unmaximize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window-maximized-change', false)
+    }
+  })
 
   mainWindow.webContents.on('did-finish-load', () => {
     devLog('renderer did-finish-load')
@@ -464,6 +480,9 @@ app.on('second-instance', (_event, commandLine) => {
 
 app.whenReady().then(() => {
   devLog('app.whenReady → createWindow + createTray + startBackend')
+  // 기본 Electron 메뉴바 제거 (File/Edit/View/Window/Help). 모든 BrowserWindow 에 적용.
+  // dev devtools 는 createWindow 에서 openDevTools 로 직접 열고 있어 단축키 없어도 무방.
+  Menu.setApplicationMenu(null)
   createWindow()
   createTray()
   startBackend()
@@ -480,6 +499,23 @@ app.whenReady().then(() => {
     devLog('renderer quit-app 요청 → app.quit()')
     isQuitting = true
     app.quit()
+  })
+
+  // ─── 윈도우 컨트롤 (자체 타이틀바용) ────────────────────────────────
+  // close 는 mainWindow.close() → close 이벤트 → isQuitting 분기 (트레이 hide 흐름과 일치).
+  ipcMain.on('window-minimize', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize()
+  })
+  ipcMain.on('window-toggle-maximize', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (mainWindow.isMaximized()) mainWindow.unmaximize()
+    else mainWindow.maximize()
+  })
+  ipcMain.on('window-close', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close()
+  })
+  ipcMain.handle('window-is-maximized', () => {
+    return !!(mainWindow && !mainWindow.isDestroyed() && mainWindow.isMaximized())
   })
 
   // 화면 공유 picker용 — desktopCapturer로 화면/창 목록 + 썸네일 반환.

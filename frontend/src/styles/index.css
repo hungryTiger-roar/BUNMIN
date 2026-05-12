@@ -2,6 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Electron frame: false + 자체 타이틀바(32px)용 — 페이지의 min-h-screen / h-screen 이
+   타이틀바 영역을 침범하지 않도록 viewport 에서 32px 차감. App.tsx 의 wrapper 가
+   pt-8(32px) 로 콘텐츠를 아래로 밀고, 페이지는 남은 영역만 채우게 됨. */
+@layer utilities {
+  .min-h-screen {
+    min-height: calc(100vh - 32px);
+  }
+  .h-screen {
+    height: calc(100vh - 32px);
+  }
+}
+
 @font-face {
   font-family: 'Pretendard Variable';
   font-weight: 45 920;
@@ -49,6 +61,10 @@
     /* 채팅 강사 강조색 — 모드별로 살짝 보라톤이 섞인 색.
        일반 텍스트와 너무 같지도(다크 #FFFFFF), 너무 강하지도(#6650a4) 않게 톤 다운. */
     --color-lecturer-accent: #7858B0;
+
+    /* 자체 타이틀바 (Electron frame: false) — 테마별로 재정의 */
+    --titlebar-bg: #FFFFFF;
+    --titlebar-fg: #2A2F4A;
   }
 
   .dark {
@@ -74,6 +90,10 @@
 
     /* 다크 배경에서도 일반 텍스트(#E8E9F5)와 구별되도록 라벤더 톤 */
     --color-lecturer-accent: #D8C5F0;
+
+    /* 자체 타이틀바 다크 */
+    --titlebar-bg: #1E2142;
+    --titlebar-fg: #E8E9F5;
   }
 
   /* ---- Gradient Mode ---- 움직이는 하늘-보라 배경 + 글래스 서피스
@@ -91,6 +111,10 @@
     --color-tertiary: #FFFFFF;
 
     --color-overlay-border: rgba(255, 255, 255, 0.2);
+
+    /* 자체 타이틀바 — 그라데이션 위에 어두운 글래스 (텍스트 가독성) */
+    --titlebar-bg: rgba(46, 50, 87, 0.75);
+    --titlebar-fg: #FFFFFF;
   }
 
   html.theme-gradient body {

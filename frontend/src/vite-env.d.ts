@@ -55,5 +55,11 @@ interface Window {
     getBackendState: () => Promise<BackendState>
     getScreenSources: () => Promise<ScreenSource[]>
     quitApp: () => void
+    // 윈도우 컨트롤 (자체 타이틀바)
+    minimizeWindow: () => void
+    toggleMaximizeWindow: () => void
+    closeWindow: () => void
+    isWindowMaximized: () => Promise<boolean>
+    onWindowMaximizedChange: (callback: (maximized: boolean) => void) => () => void
   }
 }
