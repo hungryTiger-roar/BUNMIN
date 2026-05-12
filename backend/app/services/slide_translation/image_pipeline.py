@@ -51,9 +51,11 @@ __all__ = [
     "clear_cache",
 ]
 import gc
+import logging
 import os
 import re
 import unicodedata
+from datetime import datetime
 from pathlib import Path
 
 import cv2
@@ -68,6 +70,56 @@ _BASE_DIR = Path(_sys_init.executable).parent if getattr(_sys_init, 'frozen', Fa
 
 # .env 로드
 load_dotenv(_BASE_DIR / ".env")
+
+# ============================================================
+# 파일 로깅 설정
+# ============================================================
+LOG_DIR = _BASE_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+# 로그 파일명: image_pipeline_YYYYMMDD.log
+_log_date = datetime.now().strftime("%Y%m%d")
+LOG_FILE = LOG_DIR / f"image_pipeline_{_log_date}.log"
+
+# 로거 설정
+_logger = logging.getLogger("image_pipeline")
+_logger.setLevel(logging.DEBUG)
+
+# 파일 핸들러 (상세 로그)
+_file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+_file_handler.setLevel(logging.DEBUG)
+_file_formatter = logging.Formatter(
+    "%(asctime)s | %(levelname)-7s | %(funcName)-25s | %(message)s",
+    datefmt="%H:%M:%S"
+)
+_file_handler.setFormatter(_file_formatter)
+
+# 콘솔 핸들러 (요약 로그)
+_console_handler = logging.StreamHandler()
+_console_handler.setLevel(logging.INFO)
+_console_formatter = logging.Formatter("%(message)s")
+_console_handler.setFormatter(_console_formatter)
+
+# 핸들러 중복 방지
+if not _logger.handlers:
+    _logger.addHandler(_file_handler)
+    _logger.addHandler(_console_handler)
+
+def log_debug(msg: str):
+    """디버그 로그 (파일에만 기록)"""
+    _logger.debug(msg)
+
+def log_info(msg: str):
+    """정보 로그 (파일 + 콘솔)"""
+    _logger.info(msg)
+
+def log_warning(msg: str):
+    """경고 로그 (파일 + 콘솔)"""
+    _logger.warning(msg)
+
+def log_error(msg: str):
+    """에러 로그 (파일 + 콘솔)"""
+    _logger.error(msg)
 
 
 # ============================================================
@@ -443,6 +495,27 @@ def has_korean(text: str) -> bool:
     return bool(re.search(r'[가-힣]', text))
 
 
+def is_leaked_prompt(text: str) -> bool:
+    """VLM이 프롬프트 지시문을 그대로 반환했는지 감지"""
+    if not text:
+        return False
+    lower = text.lower()
+    # VLM 프롬프트 지시문 패턴 감지
+    prompt_patterns = [
+        "output exactly",
+        "format: ",
+        "1. translation",
+        "translate:",
+        "rules:",
+        "glossary:",
+        "page context:",
+        "[translate]",
+        "[glossary]",
+        "[rules]",
+    ]
+    return any(p in lower for p in prompt_patterns)
+
+
 def is_vertical_text_region(bbox: list, text: str) -> bool:
     """세로 텍스트 영역 감지"""
     x_min, y_min, x_max, y_max = bbox
@@ -784,9 +857,11 @@ def stage_ocr_surya(image_path: str) -> list:
 # ============================================================
 def stage_translate(image_path: str, regions: list, glossary: dict = None) -> list:
     """VLM으로 번역"""
-    print("\n" + "=" * 60)
-    print("[2/3] 번역: VLM")
-    print("=" * 60)
+    log_info("\n" + "=" * 60)
+    log_info("[2/3] 번역: VLM")
+    log_info("=" * 60)
+    log_debug(f"[stage_translate] 시작: {image_path}")
+    log_debug(f"  입력 regions: {len(regions)}개, glossary: {len(glossary) if glossary else 0}개")
 
     original_image = Image.open(image_path).convert("RGB")
     image_size = original_image.size
@@ -797,6 +872,7 @@ def stage_translate(image_path: str, regions: list, glossary: dict = None) -> li
     for i, region in enumerate(regions):
         if region.get("skip_translate", False):
             region["english"] = region["ocr_text"]
+            log_debug(f"  [Region {i}] 스킵 (skip_translate): {region['ocr_text'][:30]}...")
             continue
         bbox = region["bbox"]
         x_min, y_min, x_max, y_max = bbox
@@ -805,17 +881,19 @@ def stage_translate(image_path: str, regions: list, glossary: dict = None) -> li
         min_area = cfg('ocr.min_area', 500)
         if width * height < min_area:
             region["english"] = region["ocr_text"]
+            log_debug(f"  [Region {i}] 스킵 (영역 작음 {width*height:.0f}px²): {region['ocr_text'][:30]}...")
             continue
         br_lines = split_br_lines(region["ocr_text"])
         if len(br_lines) > 1:
             region["br_lines"] = br_lines
         to_translate.append((i, region))
+        log_debug(f"  [Region {i}] 번역 대상: {region['ocr_text'][:50]}...")
 
     if not to_translate:
-        print("  번역할 텍스트 없음")
+        log_info("  번역할 텍스트 없음")
         return regions
 
-    print(f"\n  번역 대상: {len(to_translate)}개")
+    log_info(f"\n  번역 대상: {len(to_translate)}개")
 
     model, processor = get_vlm_model()
 
@@ -888,15 +966,35 @@ Translate:"""
         outputs = model.generate(**inputs, max_new_tokens=2048, temperature=0.3, do_sample=True)
 
     input_len = inputs["input_ids"].shape[1]
+    output_len = outputs[0].shape[0] - input_len
     response = processor.decode(outputs[0][input_len:], skip_special_tokens=True).strip()
 
-    # 응답 파싱
+    # 로그: VLM 응답 원본
+    log_debug(f"[VLM Response] 원본 응답 ({len(response)} chars, {output_len} tokens):\n{response}")
+
+    # 텍스트 잘림 감지 (출력 토큰이 max_new_tokens에 가까우면 경고)
+    MAX_NEW_TOKENS = 2048
+    if output_len >= MAX_NEW_TOKENS - 10:
+        log_warning(f"[VLM] 응답이 잘렸을 수 있음! output_tokens={output_len}/{MAX_NEW_TOKENS}")
+
+    # 프롬프트 유출 감지
+    if is_leaked_prompt(response):
+        log_warning(f"[VLM] 프롬프트 유출 감지! 원본 텍스트 유지")
+        for _, (orig_idx, region) in enumerate(to_translate):
+            region["english"] = region["ocr_text"]
+        return regions
+
+    # 응답 파싱 (다양한 형식 지원)
     lines = response.strip().split("\n")
     translation_map = {}
+    unparsed_lines = []
+
     for line in lines:
         line = line.strip()
         if not line:
             continue
+
+        # 패턴 1: "1. translation" 또는 "1) translation" 또는 "1: translation"
         match = re.match(r'^(\d+)\s*[\.:\)\-]\s*(.+)$', line)
         if match:
             try:
@@ -904,10 +1002,25 @@ Translate:"""
                 trans = match.group(2).strip().strip('"\'')
                 if trans:
                     translation_map[num] = trans
+                    log_debug(f"  [Parse] Line {num}: {trans[:50]}...")
             except ValueError:
-                pass
+                unparsed_lines.append(line)
+        else:
+            unparsed_lines.append(line)
+
+    # 파싱 실패한 라인 로그
+    if unparsed_lines:
+        log_warning(f"[VLM] 파싱 실패 라인 {len(unparsed_lines)}개:")
+        for ul in unparsed_lines[:5]:  # 최대 5개만 로그
+            log_warning(f"  → {ul[:80]}...")
 
     valid_map = {k: v for k, v in translation_map.items() if 1 <= k <= total_lines}
+    log_debug(f"[VLM] 파싱 결과: {len(valid_map)}/{total_lines} 라인 매핑됨")
+
+    # 매핑 누락 경고
+    missing_lines = [i for i in range(1, total_lines + 1) if i not in valid_map]
+    if missing_lines:
+        log_warning(f"[VLM] 번역 누락된 라인: {missing_lines}")
 
     region_translations = {}
     for line_num, (region_idx, br_idx, code_string) in enumerate(line_mapping, start=1):
@@ -916,6 +1029,12 @@ Translate:"""
             trans = re.sub(r'^\d+\s*[\.:\)\-]\s*', '', trans)
             trans = re.sub(r'<br\s*/?>', ' ', trans)
             trans = re.sub(r'\s+', ' ', trans).strip()
+
+            # 개별 번역 결과도 프롬프트 유출 체크
+            if is_leaked_prompt(trans):
+                log_warning(f"  [Line {line_num}] 프롬프트 유출 감지, 스킵")
+                continue
+
             if code_string is None and line_num in prefix_mapping:
                 trans = restore_prefix_symbol(prefix_mapping[line_num], trans)
             if br_idx is not None:
@@ -932,9 +1051,12 @@ Translate:"""
                 english = " / ".join(trans_result)
             else:
                 english = trans_result
-            region["english"] = strip_html_tags(english.strip())
+            final_english = strip_html_tags(english.strip())
+            region["english"] = final_english
+            log_debug(f"  [Region {region_idx}] '{region['ocr_text'][:30]}...' → '{final_english[:30]}...'")
         else:
             region["english"] = region["ocr_text"]
+            log_debug(f"  [Region {region_idx}] 번역 없음, 원본 유지: '{region['ocr_text'][:30]}...'")
 
     # 세로 텍스트 감지
     for region in regions:
@@ -959,9 +1081,11 @@ Translate:"""
 # ============================================================
 def stage_overlay(image_path: str, regions: list, output_path: str):
     """번역된 텍스트 오버레이"""
-    print("\n" + "=" * 60)
-    print("[3/3] 오버레이: Inpainting + 텍스트 렌더링")
-    print("=" * 60)
+    log_info("\n" + "=" * 60)
+    log_info("[3/3] 오버레이: Inpainting + 텍스트 렌더링")
+    log_info("=" * 60)
+    log_debug(f"[stage_overlay] 시작: {image_path} → {output_path}")
+    log_debug(f"  입력 regions: {len(regions)}개")
 
     img = Image.open(image_path).convert("RGB")
     img_np = np.array(img)
@@ -1146,7 +1270,8 @@ def stage_overlay(image_path: str, regions: list, output_path: str):
         r, g, b = int(bg_color[0]), int(bg_color[1]), int(bg_color[2])
         brightness = (r * 299 + g * 587 + b * 114) / 1000
         text_color = (0, 0, 0) if brightness > 128 else (255, 255, 255)
-        print(f"      [Overlay] bg_color={bg_color}, brightness={brightness:.1f}, text_color={text_color}")
+        log_debug(f"  [Render] bbox=({x_min:.0f},{y_min:.0f},{x_max:.0f},{y_max:.0f}), bg={bg_color}, brightness={brightness:.1f}, text_color={text_color}")
+        log_debug(f"    text='{english[:50]}...' → {len(lines)} lines, font_size={final_font_size}")
         total_text_height = line_height * len(lines)
         start_y = y_min + (height - total_text_height) / 2
 
@@ -1157,7 +1282,8 @@ def stage_overlay(image_path: str, regions: list, output_path: str):
 
     img.save(output_path)
     img.close()
-    print(f"\n  저장됨: {output_path}")
+    log_info(f"\n  저장됨: {output_path}")
+    log_debug(f"[stage_overlay] 완료: {len(translate_regions)}개 영역 렌더링")
 
 
 # ============================================================
@@ -1267,21 +1393,23 @@ def batch_ocr_surya(
         if slide_id:
             cached = load_ocr_cache(slide_id, page_idx)
             if cached is not None:
-                print(f"  [OCR] 페이지 {page_idx+1}: 캐시 사용")
+                log_info(f"  [OCR] 페이지 {page_idx+1}: 캐시 사용")
+                log_debug(f"    캐시 로드: {len(cached)}개 영역")
                 results[page_idx] = cached
                 continue
         pending_pages.append((page_idx, img_path))
 
     if not pending_pages:
-        print("[OCR Batch] 모든 페이지 캐시 히트")
+        log_info("[OCR Batch] 모든 페이지 캐시 히트")
         return results
 
-    print("\n" + "=" * 60)
-    print(f"[OCR Batch] {len(pending_pages)}개 페이지 처리 (Surya)")
-    print("=" * 60)
+    log_info("\n" + "=" * 60)
+    log_info(f"[OCR Batch] {len(pending_pages)}개 페이지 처리 (Surya)")
+    log_info("=" * 60)
+    log_debug(f"[batch_ocr_surya] slide_id={slide_id}, chunk_size={chunk_size}")
 
     # GPU 메모리 정리 (VLM 등 이전 모델 해제)
-    print("  GPU 메모리 정리 중...")
+    log_info("  GPU 메모리 정리 중...")
     unload_vlm_model()
     gc.collect()
     if torch.cuda.is_available():
@@ -1293,22 +1421,22 @@ def batch_ocr_surya(
     from surya.detection import DetectionPredictor
     from surya.recognition import RecognitionPredictor
 
-    print("  Surya 모델 로드 중...")
+    log_info("  Surya 모델 로드 중...")
     foundation_predictor = FoundationPredictor()
     det_predictor = DetectionPredictor()
     rec_predictor = RecognitionPredictor(foundation_predictor)
-    print("  Surya 모델 로드 완료")
+    log_info("  Surya 모델 로드 완료")
 
     # 청크 단위로 처리
     for chunk_start in range(0, len(pending_pages), chunk_size):
         chunk = pending_pages[chunk_start:chunk_start + chunk_size]
         chunk_end = min(chunk_start + chunk_size, len(pending_pages))
-        print(f"\n  [Chunk {chunk_start//chunk_size + 1}] 페이지 {chunk_start+1}-{chunk_end}/{len(pending_pages)}")
+        log_info(f"\n  [Chunk {chunk_start//chunk_size + 1}] 페이지 {chunk_start+1}-{chunk_end}/{len(pending_pages)}")
 
         for page_idx, img_path in chunk:
             # 페이지 처리 전 취소 체크
             if is_cancelled_callback and is_cancelled_callback():
-                print(f"  [OCR Batch] 취소됨 - 처리 중단")
+                log_warning(f"  [OCR Batch] 취소됨 - 처리 중단")
                 del foundation_predictor, det_predictor, rec_predictor
                 gc.collect()
                 if torch.cuda.is_available():
@@ -1317,7 +1445,8 @@ def batch_ocr_surya(
 
             try:
                 image = Image.open(img_path).convert("RGB")
-                print(f"    페이지 {page_idx+1}: {image.size[0]}x{image.size[1]}px")
+                log_info(f"    페이지 {page_idx+1}: {image.size[0]}x{image.size[1]}px")
+                log_debug(f"    이미지 경로: {img_path}")
 
                 rec_results = rec_predictor([image], det_predictor=det_predictor)
 
@@ -1345,24 +1474,29 @@ def batch_ocr_surya(
 
                 image.close()
                 results[page_idx] = regions
-                print(f"    → {len(regions)}개 영역 감지")
+                log_info(f"    → {len(regions)}개 영역 감지")
+                # 상세 로그: 각 영역의 텍스트
+                for idx, r in enumerate(regions):
+                    log_debug(f"      [{idx}] conf={r['confidence']:.2f}, skip={r.get('skip_translate', False)}: {r['ocr_text'][:50]}...")
 
                 # 캐시 저장
                 if slide_id:
                     save_ocr_cache(slide_id, page_idx, regions)
+                    log_debug(f"    캐시 저장됨")
 
             except Exception as e:
-                print(f"    페이지 {page_idx+1} OCR 실패: {e}")
+                log_error(f"    페이지 {page_idx+1} OCR 실패: {e}")
                 results[page_idx] = []
 
     # Surya 모델 해제
-    print("\n  Surya 모델 메모리 해제 중...")
+    log_info("\n  Surya 모델 메모리 해제 중...")
     del foundation_predictor, det_predictor, rec_predictor
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
-    print("  Surya 모델 메모리 해제 완료")
+    log_info("  Surya 모델 메모리 해제 완료")
+    log_debug(f"[batch_ocr_surya] 완료: {len(results)}개 페이지 처리됨")
 
     return results
 
@@ -1405,45 +1539,48 @@ def batch_translate_vlm(
         if slide_id:
             cached = load_translate_cache(slide_id, page_idx)
             if cached is not None:
-                print(f"  [VLM] 페이지 {page_idx+1}: 캐시 사용")
+                log_info(f"  [VLM] 페이지 {page_idx+1}: 캐시 사용")
+                log_debug(f"    캐시 로드: {len(cached)}개 영역")
                 results[page_idx] = cached
                 continue
         if regions:  # OCR 결과가 있는 경우만
             pending_pages.append((page_idx, regions))
 
     if not pending_pages:
-        print("[VLM Batch] 모든 페이지 캐시 히트 또는 OCR 결과 없음")
+        log_info("[VLM Batch] 모든 페이지 캐시 히트 또는 OCR 결과 없음")
         return results
 
-    print("\n" + "=" * 60)
-    print(f"[VLM Batch] {len(pending_pages)}개 페이지 번역")
-    print("=" * 60)
+    log_info("\n" + "=" * 60)
+    log_info(f"[VLM Batch] {len(pending_pages)}개 페이지 번역")
+    log_info("=" * 60)
+    log_debug(f"[batch_translate_vlm] slide_id={slide_id}, glossary={len(glossary)}개, chunk_size={chunk_size}")
 
     # VLM 모델 로드 (한 번만)
-    print("  VLM 모델 로드 중...")
+    log_info("  VLM 모델 로드 중...")
     model, processor = get_vlm_model()
-    print("  VLM 모델 로드 완료")
+    log_info("  VLM 모델 로드 완료")
 
     # 청크 단위로 처리
     for chunk_start in range(0, len(pending_pages), chunk_size):
         chunk = pending_pages[chunk_start:chunk_start + chunk_size]
         chunk_end = min(chunk_start + chunk_size, len(pending_pages))
-        print(f"\n  [Chunk {chunk_start//chunk_size + 1}] 페이지 {chunk_start+1}-{chunk_end}/{len(pending_pages)}")
+        log_info(f"\n  [Chunk {chunk_start//chunk_size + 1}] 페이지 {chunk_start+1}-{chunk_end}/{len(pending_pages)}")
 
         for page_idx, regions in chunk:
             # 페이지 처리 전 취소 체크
             if is_cancelled_callback and is_cancelled_callback():
-                print(f"  [VLM Batch] 취소됨 - 처리 중단")
+                log_warning(f"  [VLM Batch] 취소됨 - 처리 중단")
                 return results
 
             try:
                 img_path = image_paths.get(page_idx)
                 if not img_path:
-                    print(f"    페이지 {page_idx+1}: 이미지 경로 없음")
+                    log_warning(f"    페이지 {page_idx+1}: 이미지 경로 없음")
                     results[page_idx] = regions
                     continue
 
-                print(f"    페이지 {page_idx+1}: {len(regions)}개 영역 번역 중...")
+                log_info(f"    페이지 {page_idx+1}: {len(regions)}개 영역 번역 중...")
+                log_debug(f"    이미지 경로: {img_path}")
 
                 # 기존 stage_translate 로직 재사용 (모델 로드 제외)
                 translated = _translate_regions_with_vlm(
@@ -1451,17 +1588,23 @@ def batch_translate_vlm(
                 )
 
                 results[page_idx] = translated
-                print(f"    → 번역 완료")
+                log_info(f"    → 번역 완료")
+                # 상세 로그: 번역 결과
+                for idx, r in enumerate(translated):
+                    if r.get("english") and r.get("english") != r.get("ocr_text"):
+                        log_debug(f"      [{idx}] '{r.get('ocr_text', '')[:30]}...' → '{r.get('english', '')[:30]}...'")
 
                 # 캐시 저장
                 if slide_id:
                     save_translate_cache(slide_id, page_idx, translated)
+                    log_debug(f"    캐시 저장됨")
 
             except Exception as e:
-                print(f"    페이지 {page_idx+1} 번역 실패: {e}")
+                log_error(f"    페이지 {page_idx+1} 번역 실패: {e}")
                 results[page_idx] = regions  # 원본 유지
 
-    print("\n[VLM Batch] 번역 완료")
+    log_info("\n[VLM Batch] 번역 완료")
+    log_debug(f"[batch_translate_vlm] 완료: {len(results)}개 페이지 처리됨")
     return results
 
 
@@ -1555,19 +1698,56 @@ Translate:"""
                 pad_token_id=processor.tokenizer.pad_token_id,
             )
 
-        response = processor.batch_decode(output_ids[:, inputs.input_ids.shape[1]:], skip_special_tokens=True)[0]
+        input_len = inputs.input_ids.shape[1]
+        output_len = output_ids[0].shape[0] - input_len
+        response = processor.batch_decode(output_ids[:, input_len:], skip_special_tokens=True)[0]
 
-        # 응답 파싱
+        # 로그: VLM 응답 원본
+        log_debug(f"[VLM Batch Response] 원본 응답 ({len(response)} chars, {output_len} tokens):\n{response}")
+
+        # 텍스트 잘림 감지
+        MAX_NEW_TOKENS = 2048
+        if output_len >= MAX_NEW_TOKENS - 10:
+            log_warning(f"[VLM Batch] 응답이 잘렸을 수 있음! output_tokens={output_len}/{MAX_NEW_TOKENS}")
+
+        # 프롬프트 유출 감지
+        if is_leaked_prompt(response):
+            log_warning(f"[VLM Batch] 프롬프트 유출 감지! 원본 텍스트 유지")
+            for _, (orig_idx, region) in enumerate(to_translate):
+                regions[orig_idx]["english"] = region["ocr_text"]
+            original_image.close()
+            return regions
+
+        # 응답 파싱 (다양한 형식 지원)
         translated_lines = {}
+        unparsed_lines = []
+
         for line in response.strip().split("\n"):
             line = line.strip()
             if not line:
                 continue
-            match = re.match(r'^(\d+)\.\s*(.+)$', line)
+            # 패턴: "1. translation" 또는 "1) translation" 또는 "1: translation"
+            match = re.match(r'^(\d+)\s*[\.:\)\-]\s*(.+)$', line)
             if match:
                 line_num = int(match.group(1))
-                translation = match.group(2).strip()
+                translation = match.group(2).strip().strip('"\'')
                 translated_lines[line_num] = translation
+                log_debug(f"  [Parse] Line {line_num}: {translation[:50]}...")
+            else:
+                unparsed_lines.append(line)
+
+        # 파싱 실패한 라인 로그
+        if unparsed_lines:
+            log_warning(f"[VLM Batch] 파싱 실패 라인 {len(unparsed_lines)}개:")
+            for ul in unparsed_lines[:5]:
+                log_warning(f"  → {ul[:80]}...")
+
+        log_debug(f"[VLM Batch] 파싱 결과: {len(translated_lines)}/{total_lines} 라인 매핑됨")
+
+        # 매핑 누락 경고
+        missing_lines = [i for i in range(1, total_lines + 1) if i not in translated_lines]
+        if missing_lines:
+            log_warning(f"[VLM Batch] 번역 누락된 라인: {missing_lines}")
 
         # 결과 매핑
         for idx, (orig_idx, region) in enumerate(to_translate):
@@ -1575,15 +1755,24 @@ Translate:"""
             if line_num in translated_lines:
                 prefix = prefix_mapping.get(line_num, "")
                 translation = translated_lines[line_num]
+
+                # 개별 번역 결과도 프롬프트 유출 체크
+                if is_leaked_prompt(translation):
+                    log_warning(f"  [Line {line_num}] 프롬프트 유출 감지, 원본 유지")
+                    regions[orig_idx]["english"] = region["ocr_text"]
+                    continue
+
                 if prefix:
                     regions[orig_idx]["english"] = f"{prefix} {translation}"
                 else:
                     regions[orig_idx]["english"] = translation
+                log_debug(f"  [Region {orig_idx}] '{region['ocr_text'][:30]}...' → '{translation[:30]}...'")
             else:
                 regions[orig_idx]["english"] = region["ocr_text"]
+                log_debug(f"  [Region {orig_idx}] 번역 없음, 원본 유지")
 
     except Exception as e:
-        print(f"      VLM 번역 오류: {e}")
+        log_error(f"VLM 번역 오류: {e}")
         for _, (orig_idx, region) in enumerate(to_translate):
             regions[orig_idx]["english"] = region["ocr_text"]
 
@@ -1612,15 +1801,17 @@ def batch_overlay(
     Returns:
         {page_idx: output_path, ...}
     """
-    print("\n" + "=" * 60)
-    print(f"[Overlay Batch] {len(translate_results)}개 페이지 렌더링")
-    print("=" * 60)
+    log_info("\n" + "=" * 60)
+    log_info(f"[Overlay Batch] {len(translate_results)}개 페이지 렌더링")
+    log_info("=" * 60)
+    log_debug(f"[batch_overlay] output_dir={output_dir}, slide_id={slide_id}")
 
     output_paths = {}
 
     for page_idx, regions in translate_results.items():
         img_path = image_paths.get(page_idx)
         if not img_path:
+            log_warning(f"  페이지 {page_idx}: 이미지 경로 없음, 스킵")
             continue
 
         output_path = os.path.join(output_dir, f"{slide_id}_{page_idx}.png")
@@ -1628,8 +1819,9 @@ def batch_overlay(
         try:
             stage_overlay(img_path, regions, output_path)
             output_paths[page_idx] = output_path
-            print(f"  페이지 {page_idx+1}: 완료")
+            log_info(f"  페이지 {page_idx+1}: 완료")
         except Exception as e:
-            print(f"  페이지 {page_idx+1}: 실패 - {e}")
+            log_error(f"  페이지 {page_idx+1}: 실패 - {e}")
 
+    log_debug(f"[batch_overlay] 완료: {len(output_paths)}개 이미지 생성됨")
     return output_paths
