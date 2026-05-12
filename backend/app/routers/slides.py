@@ -1628,24 +1628,24 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path, _skip_vlm_unloa
         print("=" * 60)
         _set_stage(slide_id, "bundling", total_pages)
 
-        # PDF 레이어 페이지 이미지 추출
+        # PDF 레이어 페이지 이미지 추출 (번역된 PDF에서 항상 새로 추출)
         if translated_pdf_path.exists():
             trans_doc = fitz.open(str(translated_pdf_path))
             for i, page in enumerate(trans_doc):
                 if i in pdf_layer_pages:
                     img_path = TRANSLATED_DIR / f"{slide_id}_{i}.png"
-                    if not img_path.exists():
-                        mat = fitz.Matrix(2, 2)
-                        pix = page.get_pixmap(matrix=mat)
-                        pix.save(str(img_path))
+                    # 항상 새로 추출 (기존 PNG가 번역 전 이미지일 수 있음)
+                    mat = fitz.Matrix(2, 2)
+                    pix = page.get_pixmap(matrix=mat)
+                    pix.save(str(img_path))
 
-                        slide_data[slide_id][i] = {
-                            "page_number": i,
-                            "ocr_text": None,
-                            "overlay_items": [],
-                            "has_translation": True,
-                            "method": "pdf_layer",
-                        }
+                    slide_data[slide_id][i] = {
+                        "page_number": i,
+                        "ocr_text": None,
+                        "overlay_items": [],
+                        "has_translation": True,
+                        "method": "pdf_layer",
+                    }
             trans_doc.close()
 
         # 원본 이미지 추출
