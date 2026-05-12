@@ -23,6 +23,11 @@ ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
 PrivilegesRequired=lowest
 WizardStyle=modern
+; 비주얼 — placeholder 자산 (정식 디자인 나오면 같은 경로 파일 교체)
+SetupIconFile=installer-assets\icon.ico
+WizardImageFile=installer-assets\wizard-image.bmp
+WizardSmallImageFile=installer-assets\wizard-small.bmp
+WizardImageStretch=no
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName} {#MyAppVersion}
 ; 17GB+ 동봉이라 디스크 여유 체크
@@ -137,4 +142,39 @@ function InitializeUninstall(): Boolean;
 begin
   KillAunionProcesses();
   Result := True;
+end;
+
+{
+  메인 uninstall 끝난 후 사용자 데이터(%LOCALAPPDATA%\Aunion AI\) 삭제 여부 묻기.
+    - 내용: HF 모델 캐시(VLM ~14GB+), 다운받은 모델, error_log, 설정
+    - 기본 권장 = "아니오" (재설치 시 14GB 재다운로드 회피)
+    - silent uninstall (/VERYSILENT 등) 일 때는 안전하게 데이터 유지 (프롬프트 X, 삭제 X)
+}
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  UserDataDir: String;
+  Response: Integer;
+begin
+  if CurUninstallStep <> usPostUninstall then Exit;
+  if UninstallSilent then Exit;
+
+  UserDataDir := ExpandConstant('{localappdata}\Aunion AI');
+  if not DirExists(UserDataDir) then Exit;
+
+  Response := MsgBox(
+    '사용자 데이터를 함께 삭제하시겠습니까?' + #13#10 + #13#10 +
+    '위치: ' + UserDataDir + #13#10 +
+    '내용: 다운받은 AI 모델 캐시(~14GB+), 로그, 설정' + #13#10 + #13#10 +
+    '[예] 함께 삭제 — 디스크 공간 회복' + #13#10 +
+    '[아니오] 데이터 유지 — 재설치 시 모델 재다운로드 안 받음 (권장)',
+    mbConfirmation, MB_YESNO);
+
+  if Response = IDYES then
+  begin
+    if not DelTree(UserDataDir, True, True, True) then
+      MsgBox(
+        '일부 파일 삭제에 실패했습니다 (앱이 아직 살아있거나 권한 문제).' + #13#10 + #13#10 +
+        '수동 삭제 경로: ' + UserDataDir,
+        mbInformation, MB_OK);
+  end;
 end;
