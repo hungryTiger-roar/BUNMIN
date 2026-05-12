@@ -352,12 +352,14 @@ function createWindow() {
     show: false,
   })
 
-  // 마이크/카메라/클립보드 권한 자동 허가 (Electron 단독 앱 — 외부 사이트 아님)
+  // 마이크/카메라/클립보드/전체화면 권한 자동 허가 (Electron 단독 앱 — 외부 사이트 아님).
+  // fullscreen: 강의자 발표 모드 (Lecturer.tsx) 에서 requestFullscreen() 호출용. 없으면 deny.
   const _allowedPermissions = new Set([
     'media',
     'mediaKeySystem',
     'clipboard-read',
     'clipboard-sanitized-write',
+    'fullscreen',
   ])
   mainWindow.webContents.session.setPermissionRequestHandler((_wc, permission, callback) => {
     const ok = _allowedPermissions.has(permission)
