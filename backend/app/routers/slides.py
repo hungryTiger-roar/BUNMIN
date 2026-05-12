@@ -1096,8 +1096,11 @@ async def process_slide(slide_id: str, pdf_path: Path):
             return
 
         # ========== 용어집 빌드 (전체 슬라이드 1회) ==========
-        glossary = {}
-        if vlm_available:
+        # 기존 용어집 확인 (PDF Layer에서 이미 빌드했을 수 있음)
+        glossary = slide_glossary.get(slide_id, {})
+        if glossary:
+            print(f"[Slides] {slide_id} 기존 용어집 재사용: {len(glossary)}개")
+        elif vlm_available:
             try:
                 # 강의 제목: 첫 페이지 첫 번째 텍스트 또는 기본값
                 lecture_title = "Lecture"
@@ -1315,6 +1318,39 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
         # 출력 경로
         translated_pdf_path = TRANSLATED_DIR / f"{slide_id}_translated.pdf"
 
+        # ========== 용어집 빌드 (PDF Layer용) ==========
+        glossary = slide_glossary.get(slide_id, {})
+        if not glossary and pdf_layer_pages:
+            try:
+                from app.services.slide_translation.pdf_text_extractor import extract_korean_texts_for_translation
+                from app.services.glossary_builder import GlossaryBuilder
+
+                # PDF에서 한글 텍스트 추출
+                korean_texts_data = extract_korean_texts_for_translation(str(pdf_path))
+
+                if korean_texts_data:
+                    # 텍스트 목록 추출
+                    all_texts = [item.get("text", "") for item in korean_texts_data if item.get("text")]
+
+                    # 강의 제목: 첫 페이지 첫 텍스트
+                    lecture_title = all_texts[0][:50] if all_texts else "Lecture"
+
+                    # Glossary 빌드
+                    print(f"\n[Glossary] PDF Layer 용어집 빌드 시작...")
+                    builder = GlossaryBuilder()
+                    glossary = await asyncio.to_thread(
+                        builder.build_glossary, all_texts, lecture_title
+                    )
+
+                    if glossary:
+                        slide_glossary[slide_id] = glossary
+                        print(f"[Slides] {slide_id} PDF Layer 용어집 생성: {len(glossary)}개 (실시간 NMT 활용)")
+
+            except Exception as e:
+                print(f"[Slides] PDF Layer 용어집 빌드 실패 (무시): {e}")
+                import traceback
+                traceback.print_exc()
+
         # ========== Stage 2: PDF Layer 처리 ==========
         _set_stage(slide_id, "translate", total_pages)
 
@@ -1327,7 +1363,6 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
                 _page_completed(slide_id, current_page)
                 slide_status[slide_id]["processed_pages"] = current_page
 
-            glossary = slide_glossary.get(slide_id, {})
             if glossary:
                 print(f"  용어집 {len(glossary)}개 용어 적용")
 
