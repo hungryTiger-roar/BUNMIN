@@ -306,9 +306,33 @@ class PDFLayerPipeline:
 
         translations = []
 
+        # 화살표 블록 분리 (번역 불필요)
+        arrow_blocks = []
+        translatable_texts = []
+        for item in korean_texts:
+            if item.get("is_arrow", False):
+                # 화살표 기호: 번역 없이 원본 유지
+                arrow_blocks.append({
+                    "page_num": item["page_num"],
+                    "block_id": item["block_id"],
+                    "original": item["text"],
+                    "translated": item["text"],  # 원본 유지
+                    "bbox": item["bbox"],
+                    "font": item["font"],
+                    "size": item["size"],
+                    "color": item.get("color", 0),
+                    "role": "symbol",
+                    "is_arrow": True,
+                })
+            else:
+                translatable_texts.append(item)
+
+        if arrow_blocks:
+            self._log(f"  - Arrow symbols (preserved): {len(arrow_blocks)}")
+
         # 배치 처리 (페이지별로 그룹화)
         page_groups = {}
-        for item in korean_texts:
+        for item in translatable_texts:
             page = item["page_num"]
             if page not in page_groups:
                 page_groups[page] = []
@@ -342,6 +366,9 @@ class PDFLayerPipeline:
                     self.on_page_complete(processed_pages)
                 except Exception as cb_err:
                     self._log(f"    [WARN] Page complete callback error: {cb_err}")
+
+        # 화살표 블록 합치기 (번역 없이 원본 유지)
+        translations.extend(arrow_blocks)
 
         return translations
 
@@ -421,64 +448,78 @@ class PDFLayerPipeline:
         items: list[dict],
         target_lang: str = "en"
     ) -> str:
-        """번역 프롬프트 생성 (role 기반 차별화)"""
+        """번역 프롬프트 생성 (role 기반 + layout-aware compact translation)"""
         prompt_parts = [
             f"Translate the following Korean texts to {target_lang.upper()}.",
+            "This is for slide/PDF layout replacement, so translations must be concise and fit the original text boxes.",
         ]
 
-        # Glossary 먼저 (가장 중요)
         if self.glossary:
             prompt_parts.append("")
-            prompt_parts.append("=== MANDATORY TERMINOLOGY (YOU MUST USE THESE EXACT WORDS) ===")
+            prompt_parts.append("=== MANDATORY TERMINOLOGY ===")
+            prompt_parts.append("Use these exact terms when the Korean source term appears with the same meaning.")
             for ko, en in self.glossary.items():
                 prompt_parts.append(f"  {ko} = {en}")
             prompt_parts.append("=== END TERMINOLOGY ===")
 
-        # 현재 배치에서 반복되는 한국어 단어 감지
         from collections import Counter
-        all_text = " ".join(item.get("text_for_translation", item["text"]) for item in items)
-        # 2글자 이상 한글 단어 추출
         import re
+
+        all_text = " ".join(item.get("text_for_translation", item["text"]) for item in items)
         korean_words = re.findall(r'[가-힣]{2,}', all_text)
         word_counts = Counter(korean_words)
         repeated_words = [word for word, count in word_counts.items() if count >= 2]
 
         if repeated_words:
             prompt_parts.append("")
-            prompt_parts.append(f"WARNING: These Korean words appear multiple times. Use the SAME English word for each:")
+            prompt_parts.append(
+                "Terminology consistency hint: The following Korean terms appear multiple times. "
+                "Use consistent English terms when they have the same meaning in context. "
+                "Do not force the same translation if the context requires a different expression."
+            )
             prompt_parts.append(f"  {', '.join(repeated_words)}")
 
         prompt_parts.extend([
             "",
             "Rules by text type:",
-            "- TITLE: Keep concise and impactful (max 8 words)",
-            "- HEADING: Clear section header (max 6 words)",
-            "- BODY: Natural, flowing translation",
-            "- BULLET: Sentence case (capitalize first word only), keep concise (bullet symbols preserved separately)",
-            "- CAPTION: Brief description (max 10 words)",
-            "- FOOTER/SOURCE: Keep as brief as possible",
+            "- TITLE: Use a concise slide title. Do not omit essential meaning.",
+            "- HEADING: Use a clear, compact section heading.",
+            "- SECTION_HEADER: Use a short section label.",
+            "- PRINCIPLE_TITLE: Preserve the principle/rule number and translate compactly.",
+            "- TERM_DEFINITION: Preserve the 'Term: Definition' structure. Keep the term concise and the definition clear.",
+            "- BODY: Translate naturally but compactly.",
+            "- BULLET: Use sentence case. Keep it concise. Bullet symbols are preserved separately.",
+            "- OPTION: Preserve option labels such as a., b., c., d. Do not merge options.",
+            "- CAPTION: Use a brief description.",
+            "- FOOTER/SOURCE: Keep as brief as possible.",
+            "",
+            "Length and layout rules:",
+            "1. Translate compactly so the English text fits in the original Korean text box.",
+            "2. Keep the translation roughly similar in visual length to the Korean source.",
+            "3. Prefer concise slide-style wording over long explanatory prose.",
+            "4. Do not expand, explain, or add details beyond the source meaning.",
+            "5. If a literal translation is too long, use a shorter natural phrase that preserves the core meaning.",
+            "6. Avoid unnecessarily long phrases such as 'the principle of how...' when a shorter phrase is natural.",
             "",
             "General rules:",
-            "1. Translate to fit the overall context and flow of the document",
-            "2. Keep proper nouns as-is if uncertain",
-            "3. Keep numbers as digits (10 → 10, not Ten)",
-            "4. NEVER add bullet symbols (-, *, •, ■) - preserved from original",
-            "5. Do NOT add extra punctuation or quotes",
-            "6. Keep symbols (⇒, →, ·) exactly in place",
-            "7. ALWAYS translate parentheses and their contents",
-            "8. If Korean has English in parentheses, keep ONLY the English",
-            "9. Output format: [BLOCK_ID]: translated text",
-            "10. PRESERVE mathematical operators: +, -, ×, ÷, =, <, >, ≤, ≥, %, ( ) in formulas",
-            "    Example: '80만원(= 650 – 570)' → '800,000 won (= 6,500,000 - 5,700,000)'",
-            "11. Use CORRECT English spelling - double-check academic/technical terms",
+            "1. Translate according to the overall context and flow of the document.",
+            "2. Keep proper nouns as-is if uncertain.",
+            "3. Keep numbers as digits (10 → 10, not Ten).",
+            "4. NEVER add bullet symbols (-, *, •, ■) because they are preserved from the original.",
+            "5. Do NOT add extra punctuation or quotes.",
+            "6. Keep symbols (⇒, →, ·) exactly in place.",
+            "7. Always translate parentheses and their contents.",
+            "8. If Korean has English in parentheses, keep only the English term when appropriate.",
+            "9. Output format: [BLOCK_ID]: translated text.",
+            "10. Preserve mathematical operators: +, -, ×, ÷, =, <, >, ≤, ≥, %, ( ).",
+            "11. Do not remove operators from formulas or calculations.",
+            "12. Use correct English spelling. Double-check academic and technical terms.",
+            "",
+            "Texts to translate:",
         ])
-
-        prompt_parts.append("")
-        prompt_parts.append("Texts to translate:")
 
         for item in items:
             block_id = item["block_id"]
-            # prefix 제외한 텍스트로 번역 (원본 기호 보존)
             text = item.get("text_for_translation", item["text"]).strip()
             role = item.get("role", "body").upper()
             prompt_parts.append(f"[{block_id}] ({role}): {text}")
@@ -501,23 +542,34 @@ class PDFLayerPipeline:
         # 블록 ID → 원본 데이터 매핑
         item_map = {item["block_id"]: item for item in items}
 
-        # 응답 파싱 (패턴: [block_id]: translated text)
+        # 응답 파싱 (패턴: [block_id]: translated text 또는 [block_id] (ROLE): translated text)
         import re
 
-        # 1차 시도: 정규식 파싱
-        pattern = r'\[([^\]]+)\]:\s*(.+?)(?=\n\[|\Z)'
+        # 1차 시도: 정규식 파싱 - role 포함/미포함 모두 지원
+        # [block_id]: text 또는 [block_id] (ROLE): text
+        pattern = r'\[([^\]]+)\](?:\s*\([^)]+\))?:\s*(.+?)(?=\n\[|\Z)'
         matches = re.findall(pattern, response, re.DOTALL)
 
         # 2차 시도: 라인별 파싱 (1차 실패 시)
         if not matches:
             for line in response.strip().split('\n'):
                 line = line.strip()
-                if line.startswith('[') and ']:' in line:
-                    bracket_end = line.index(']:')
-                    block_id = line[1:bracket_end]
-                    translated = line[bracket_end + 2:].strip()
-                    if block_id and translated:
-                        matches.append((block_id, translated))
+                if not line.startswith('['):
+                    continue
+                # [block_id]: 또는 [block_id] (ROLE): 형식 모두 처리
+                # block_id 추출: 첫 번째 ] 까지
+                if ']' not in line:
+                    continue
+                first_bracket = line.index(']')
+                block_id = line[1:first_bracket]
+                # 나머지에서 ': ' 찾기
+                rest = line[first_bracket + 1:]
+                colon_idx = rest.find(':')
+                if colon_idx == -1:
+                    continue
+                translated = rest[colon_idx + 1:].strip()
+                if block_id and translated:
+                    matches.append((block_id, translated))
 
         invalid_ids = []
         for block_id, translated in matches:

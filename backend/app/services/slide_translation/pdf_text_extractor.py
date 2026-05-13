@@ -387,7 +387,7 @@ def extract_korean_texts_for_translation(
 
                 # 숫자/페이지 번호 스킵 (숫자가 주된 내용인 경우)
                 text_without_numbers = re.sub(r'[0-9.,/:%\s-]', '', full_text)
-                if len(text_without_numbers) < 2:  # 거의 숫자로만 구성된 경우
+                if len(text_without_numbers) < 1:  # 숫자/기호만으로 구성된 경우
                     continue
 
 
@@ -619,8 +619,16 @@ def _is_section_header(text: str) -> bool:
     text = text.strip()
 
     # "~와 관련된", "~에 관한" 패턴
-    if re.search(r'관련된|관한|관하여', text):
-        if not _is_principle_title(text):  # principle_title이 아닌 경우만
+    match = re.search(r'(관련된|관한|관하여)', text)
+    if match:
+        # 패턴 위치 확인: 뒤에 충분한 내용이 있어야 섹션 헤더
+        # 섹션 헤더: "X와 관련된 Y기본원리" → 패턴 뒤에 의미있는 내용
+        # 연속 문장: "방법에 관한 연구" → 패턴 뒤에 짧은 명사만
+        after_pattern = text[match.end():].strip()
+
+        # 패턴 뒤 내용이 5자 이상이어야 섹션 헤더
+        # "관련된 4가지 기본원리" (O) vs "관한 연구" (X)
+        if len(after_pattern) >= 5 and not _is_principle_title(text):
             return True
 
     # 물음표로 끝나는 제목
@@ -821,6 +829,76 @@ def _is_connector_symbol(text: str) -> bool:
     return text.strip() in CONNECTORS or _is_symbol_only(text.strip())
 
 
+# 분리 대상 화살표 기호 (위치 보존 필요)
+ARROW_SYMBOLS = {'⇒', '→', '➡', '↔', '←', '⟹', '⟸', '⇔', '⇨', '⇦', '➔', '➜', '➝', '➞'}
+
+
+def _split_at_arrows(text: str, bbox: tuple, font_size: float) -> list[dict]:
+    """
+    텍스트를 화살표 기호 기준으로 분리
+
+    예: "국방비의 증액 ⇒ 복지비의 감소"
+    → [{"text": "국방비의 증액 ", "is_arrow": False, "bbox": (...)},
+       {"text": "⇒", "is_arrow": True, "bbox": (...)},
+       {"text": " 복지비의 감소", "is_arrow": False, "bbox": (...)}]
+    """
+    import re
+
+    if not text:
+        return []
+
+    # 화살표 기호 패턴
+    arrow_pattern = '(' + '|'.join(re.escape(a) for a in ARROW_SYMBOLS) + ')'
+
+    # 화살표가 없으면 원본 반환
+    if not re.search(arrow_pattern, text):
+        return [{"text": text, "is_arrow": False, "bbox": bbox}]
+
+    x0, y0, x1, y1 = bbox
+    total_width = x1 - x0
+    total_chars = len(text)
+
+    if total_chars == 0:
+        return []
+
+    avg_char_width = total_width / total_chars
+
+    # 화살표 기준으로 분리
+    parts = re.split(arrow_pattern, text)
+
+    segments = []
+    current_pos = 0
+
+    for part in parts:
+        if not part:  # 빈 문자열 스킵
+            continue
+
+        part_len = len(part)
+        seg_x0 = x0 + current_pos * avg_char_width
+        seg_x1 = x0 + (current_pos + part_len) * avg_char_width
+
+        is_arrow = part in ARROW_SYMBOLS
+
+        # 텍스트 부분은 앞뒤 공백 정리 (bbox는 유지)
+        display_text = part if is_arrow else part
+
+        if display_text.strip() or is_arrow:  # 빈 문자열이 아니거나 화살표면 추가
+            segments.append({
+                "text": display_text,
+                "is_arrow": is_arrow,
+                "bbox": (seg_x0, y0, seg_x1, y1)
+            })
+
+        current_pos += part_len
+
+    return segments
+
+
+def _has_arrow_symbols(text: str) -> bool:
+    """텍스트에 화살표 기호가 있는지 확인"""
+    return any(arrow in text for arrow in ARROW_SYMBOLS)
+
+
 def _is_diagram_label(line: dict, page_rect) -> bool:
     """
     도식/다이어그램 라벨인지 확인
@@ -958,8 +1036,15 @@ def _group_adjacent_lines(
             # 현재 줄이 continuation인지
             curr_is_continuation = _is_continuation(text)
 
+            # 이전 줄이 option (A., B., a., b.)이고 현재 줄이 continuation인 경우 병합 (최우선)
+            if current_group.get("is_option") and not prev_ends_sentence and y_close:
+                # 현재 줄이 새로운 option이 아니면 병합
+                if not is_option:
+                    start_new_group = False
+                else:
+                    start_new_group = True
             # title/heading은 개별 유지 (단, 이전 줄이 문장 미종결이고 Y가 가까우면 continuation)
-            if role in ("title", "heading"):
+            elif role in ("title", "heading"):
                 # 이전 줄이 문장 종결이 아니고, Y가 가깝고, 폰트가 비슷하면 continuation으로 병합
                 if not prev_ends_sentence and y_close and size_similar:
                     start_new_group = False
@@ -971,13 +1056,6 @@ def _group_adjacent_lines(
             # 이전 줄이 bullet이고 현재 줄이 continuation인 경우 병합
             elif current_group.get("is_bullet") and not prev_ends_sentence and y_close and size_similar:
                 start_new_group = False
-            # 이전 줄이 option (A., B., a., b.)이고 현재 줄이 continuation인 경우 병합
-            elif current_group.get("is_option") and not prev_ends_sentence and y_close and size_similar:
-                # 현재 줄이 새로운 option이 아닌 경우에만 병합
-                if not is_option:
-                    start_new_group = False
-                else:
-                    start_new_group = True
             # 같은 block이고, Y가 가깝고, X가 비슷하거나 들여쓰기
             elif same_block and y_close and (x_similar or x_indented):
                 # 폰트/색상이 같고, 문장 종결이 아니면 병합
@@ -1018,6 +1096,8 @@ def _group_adjacent_lines(
     result = []
     page_num = lines[0]["page_num"] if lines else 1
 
+    block_idx = 0  # 전체 블록 인덱스 (화살표 분리 포함)
+
     for idx, group in enumerate(groups):
         group_lines = group["lines"]
         role = group["role"]
@@ -1054,27 +1134,82 @@ def _group_adjacent_lines(
         line_texts = [l["text"] for l in group_lines]
         has_multi_color = len(set(line_colors)) > 1
 
-        # 인라인 기호를 공백으로 변환 (번역 텍스트에서만)
-        # bbox 분리는 하지 않음 (여러 줄 텍스트에서 문제 발생)
-        text_for_trans_clean = _remove_inline_symbols(text_for_trans)
+        # 단일 라인 + 화살표 기호 포함 → 화살표 기준 분리
+        if len(group_lines) == 1 and _has_arrow_symbols(text_for_trans):
+            bbox_for_split = (x0 + prefix_width, y0, x1, y1)  # prefix 제외한 영역
+            arrow_segments = _split_at_arrows(text_for_trans, bbox_for_split, first_line["size"])
 
-        result.append({
-            "page_num": page_num,
-            "block_id": f"p{page_num}_b{idx}",
-            "text": text,
-            "text_for_translation": text_for_trans_clean.strip() if text_for_trans_clean.strip() else text_for_trans,
-            "prefix": prefix,
-            "prefix_width": prefix_width,
-            "bbox": (x0, y0, x1, y1),
-            "font": first_line["font"],
-            "size": first_line["size"],
-            "color": first_line["color"],
-            "role": role,
-            # 다중 색상 span 정보
-            "line_colors": line_colors,
-            "line_texts": line_texts,
-            "has_multi_color": has_multi_color,
-        })
+            for seg in arrow_segments:
+                seg_text = seg["text"].strip()
+                if not seg_text:
+                    continue
+
+                if seg["is_arrow"]:
+                    # 화살표 기호: 번역 안 함, 원본 유지
+                    result.append({
+                        "page_num": page_num,
+                        "block_id": f"p{page_num}_b{block_idx}",
+                        "text": seg_text,
+                        "text_for_translation": seg_text,  # 원본 유지
+                        "prefix": "",
+                        "prefix_width": 0.0,
+                        "bbox": seg["bbox"],
+                        "font": first_line["font"],
+                        "size": first_line["size"],
+                        "color": first_line["color"],
+                        "role": "symbol",  # 기호 역할
+                        "is_arrow": True,  # 화살표 표시
+                        "line_colors": [first_line["color"]],
+                        "line_texts": [seg_text],
+                        "has_multi_color": False,
+                    })
+                else:
+                    # 일반 텍스트: 번역 대상
+                    seg_text_clean = _remove_inline_symbols(seg_text)
+                    result.append({
+                        "page_num": page_num,
+                        "block_id": f"p{page_num}_b{block_idx}",
+                        "text": seg_text,
+                        "text_for_translation": seg_text_clean.strip() if seg_text_clean.strip() else seg_text,
+                        "prefix": prefix if block_idx == 0 else "",  # prefix는 첫 블록에만
+                        "prefix_width": prefix_width if block_idx == 0 else 0.0,
+                        "bbox": seg["bbox"],
+                        "font": first_line["font"],
+                        "size": first_line["size"],
+                        "color": first_line["color"],
+                        "role": role,
+                        "is_arrow": False,
+                        "line_colors": [first_line["color"]],
+                        "line_texts": [seg_text],
+                        "has_multi_color": False,
+                    })
+                    prefix = ""  # prefix는 첫 세그먼트에만
+                    prefix_width = 0.0
+
+                block_idx += 1
+        else:
+            # 기존 로직: 화살표 없거나 여러 줄
+            text_for_trans_clean = _remove_inline_symbols(text_for_trans)
+
+            result.append({
+                "page_num": page_num,
+                "block_id": f"p{page_num}_b{block_idx}",
+                "text": text,
+                "text_for_translation": text_for_trans_clean.strip() if text_for_trans_clean.strip() else text_for_trans,
+                "prefix": prefix,
+                "prefix_width": prefix_width,
+                "bbox": (x0, y0, x1, y1),
+                "font": first_line["font"],
+                "size": first_line["size"],
+                "color": first_line["color"],
+                "role": role,
+                "is_arrow": False,
+                # 다중 색상 span 정보
+                "line_colors": line_colors,
+                "line_texts": line_texts,
+                "has_multi_color": has_multi_color,
+            })
+            block_idx += 1
 
     return result
 
