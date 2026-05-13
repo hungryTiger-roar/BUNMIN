@@ -93,6 +93,11 @@ async function prefetchVoice(voice: string): Promise<void> {
 export type TTSMode   = 'piper' | null
 export type TTSStatus = 'idle' | 'loading' | 'ready' | 'error'
 
+// TTS 재생 배속 — 1.2x. wall-clock delay 단축 목적으로 영어 TTS 음성을 약간 빠르게 재생.
+// 1.2배는 청취 부담 없는 상한 (그 이상은 비영어권 학습자에게 부담). pitch 가 1.2배 살짝
+// 올라가지만 거의 인지 안 됨. AudioBufferSourceNode 는 preservesPitch 미지원이라 감수.
+const TTS_PLAYBACK_RATE = 1.2
+
 // TranslationLang → Piper voice ID (https://huggingface.co/rhasspy/piper-voices)
 // ko, both 등 미지원 언어는 영어로 fallback. off만 명시적 끄기.
 const VOICE_MAP: Partial<Record<TranslationLang, string>> = {
@@ -496,13 +501,16 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
     const sourceGain = ctx.createGain()
     sourceGain.gain.value = 1
     source.buffer = audioBuffer
+    // 1.2배속 재생 — 실제 재생 시간 = buffer.duration / 1.2. endTime / durationMs 도 동일 반영.
+    source.playbackRate.value = TTS_PLAYBACK_RATE
     source.connect(sourceGain)
     sourceGain.connect(gainRef.current ?? ctx.destination)
     source.start(startCtxTime)
 
     const ttsMs = Math.max(0, Math.round(performance.now() - requestedAt))
 
-    const newTask: CurrentTask = { source, gain: sourceGain, endTime: startCtxTime + audioBuffer.duration }
+    const playbackDurationSec = audioBuffer.duration / TTS_PLAYBACK_RATE
+    const newTask: CurrentTask = { source, gain: sourceGain, endTime: startCtxTime + playbackDurationSec }
     currentTaskRef.current = newTask
 
     const ended = new Promise<void>((resolve) => {
@@ -522,7 +530,7 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
       }
     })
 
-    return { audioStartedAt, durationMs: audioBuffer.duration * 1000, ended, ttsMs }
+    return { audioStartedAt, durationMs: playbackDurationSec * 1000, ended, ttsMs }
   }, [])
 
   return { status, loadingProgress, error, mode, playSentence, unlockAudio, setVolume }

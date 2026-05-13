@@ -165,12 +165,21 @@ function Lecturer() {
 
   // WebRTC: 학생별 RTCPeerConnection 관리. participants로부터 학생 ID 추적.
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
+  // 학생별 — setRemoteDescription(answer) 전에 도착한 ICE candidate 버퍼 (표준 패턴).
+  //   (없으면 answer 처리 중 도착한 candidate 가 버려져 LAN 에서도 간헐적 연결 실패)
+  const pendingIceByStudentRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map())
 
   const handleWebRtcAnswer = useCallback(async (sender: string, sdp: RTCSessionDescriptionInit) => {
     const pc = peerConnectionsRef.current.get(sender)
     if (!pc) return
     try {
       await pc.setRemoteDescription(sdp)
+      // remoteDescription 세팅 완료 — 그 사이 큐에 모인 ICE candidate 일괄 추가.
+      const queued = pendingIceByStudentRef.current.get(sender) ?? []
+      pendingIceByStudentRef.current.set(sender, [])
+      for (const c of queued) {
+        try { await pc.addIceCandidate(c) } catch (e) { console.warn('[Lecturer] queued ICE 추가 실패:', e) }
+      }
     } catch (err) {
       console.error('[Lecturer] setRemoteDescription failed:', err)
     }
@@ -179,8 +188,14 @@ function Lecturer() {
   const handleWebRtcIce = useCallback((sender: string | null, candidate: RTCIceCandidateInit) => {
     if (!sender) return
     const pc = peerConnectionsRef.current.get(sender)
-    if (!pc) return
-    pc.addIceCandidate(candidate).catch(() => { /* 핸드셰이크 도중 도착 가능 — 무시 */ })
+    if (!pc || !pc.remoteDescription) {
+      // PC 없음 / setRemoteDescription 아직 안 끝남 — 큐에 보관, handleWebRtcAnswer 가 처리.
+      const q = pendingIceByStudentRef.current.get(sender) ?? []
+      q.push(candidate)
+      pendingIceByStudentRef.current.set(sender, q)
+      return
+    }
+    pc.addIceCandidate(candidate).catch((e) => console.warn('[Lecturer] ICE 추가 실패:', e))
   }, [])
 
   const { isConnected, connect, send, sendChat, sendLectureTitle, sendLecturerName } =
@@ -276,6 +291,7 @@ function Lecturer() {
       peerConnectionsRef.current.delete(studentId)
       peerTransceiversRef.current.delete(studentId)
     }
+    pendingIceByStudentRef.current.set(studentId, [])  // 새 PC — 옛 큐 비움
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     })
@@ -285,10 +301,15 @@ function Lecturer() {
         send({ type: 'webrtc_ice', target: studentId, candidate: e.candidate.toJSON() })
       }
     }
+    // WebRTC 연결 진단 — 'failed' / 계속 'checking' 이면 학생과 P2P 안 닿음 (클라이언트 격리/방화벽)
+    //   → 학생측 원본 음성 무음. host candidate(같은 LAN)로 연결돼야 정상.
+    pc.oniceconnectionstatechange = () => console.log(`[Lecturer] ICE state (${studentId.slice(0, 8)}): ${pc.iceConnectionState}`)
     pc.onconnectionstatechange = () => {
+      console.log(`[Lecturer] PC state (${studentId.slice(0, 8)}): ${pc.connectionState}`)
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         peerConnectionsRef.current.delete(studentId)
         peerTransceiversRef.current.delete(studentId)
+        pendingIceByStudentRef.current.delete(studentId)
       }
     }
 
@@ -324,6 +345,7 @@ function Lecturer() {
       pc.close()
       peerConnectionsRef.current.delete(studentId)
       peerTransceiversRef.current.delete(studentId)
+      pendingIceByStudentRef.current.delete(studentId)
     }
   }, [send])
 
@@ -349,6 +371,7 @@ function Lecturer() {
       peerConnectionsRef.current.forEach((pc) => pc.close())
       peerConnectionsRef.current.clear()
       peerTransceiversRef.current.clear()
+      pendingIceByStudentRef.current.clear()
     } else {
       // 1) 기존 PC 트랙 교체 (재협상 X) — 학생 측 ontrack 재발화 없음.
       if (micChanged || screenChanged) {
@@ -378,6 +401,7 @@ function Lecturer() {
             peerConnectionsRef.current.delete(id)
             peerTransceiversRef.current.delete(id)
           }
+          pendingIceByStudentRef.current.delete(id)
         }
       })
     }
