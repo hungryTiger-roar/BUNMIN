@@ -428,12 +428,13 @@ function createWindow() {
   }
   mainWindow = new BrowserWindow(winOpts)
 
+  // 초기 normal bounds 기록 — maximize() 호출 *전* 시점의 실제 적용된 bounds 사용.
+  // 멀티모니터 가드로 winOpts 의 x/y 가 빠진 경우 (보조 모니터 분리 후 재실행 등) Electron 이
+  // 중앙 배치한 실제 좌표를 반환하므로, saved 값을 직접 쓰는 것보다 안전 (화면 밖 좌표 회피).
+  _lastNormalBounds = mainWindow.getBounds()
+
   // maximize 였으면 복원
   if (saved?.isMaximized) mainWindow.maximize()
-  // 초기 normal bounds 기록 (maximize 상태에선 unmaximize 시점에 갱신됨)
-  _lastNormalBounds = saved?.isMaximized
-    ? { x: saved.x, y: saved.y, width: saved.width, height: saved.height }
-    : mainWindow.getBounds()
 
   // 상태 변경 이벤트 → 저장 (debounced)
   mainWindow.on('resize', () => { _trackNormalBounds(); saveWindowState() })
