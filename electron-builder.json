@@ -43,6 +43,7 @@
     "target": [
       { "target": "dir", "arch": ["x64"] }
     ],
-    "requestedExecutionLevel": "asInvoker"
+    "requestedExecutionLevel": "asInvoker",
+    "icon": "frontend/electron/assets/icon.ico"
   }
 }

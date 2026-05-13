@@ -404,6 +404,7 @@ function createWindow() {
     height: saved?.height ?? 800,
     minWidth: 900,
     minHeight: 600,
+    icon: path.join(__dirname, 'assets', 'icon.ico'),
     // OS 기본 frame 제거 — renderer 가 자체 타이틀바를 그림 (frontend/src/components/common/TitleBar.tsx).
     // Windows 에선 frame: false 라도 윈도우 가장자리 8px 리사이즈 영역은 그대로 유효.
     frame: false,
