@@ -67,6 +67,15 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
     }
   }, [slideStatus])
 
+  // 컴포넌트 언마운트 시 진행 중인 업로드/폴링 정리
+  useEffect(() => {
+    return () => {
+      cancelledRef.current = true
+      abortControllerRef.current?.abort()
+      abortControllerRef.current = null
+    }
+  }, [])
+
   // displayEta 1초 카운트다운
   useEffect(() => {
     if (etaAnchor === null) {
@@ -271,7 +280,6 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
     e.target.value = ''
   }
 
-  const showAILoading = slideStatus === 'processing' && etaReachedZero
   const isMultiple = queueTotal > 1
 
   return (
@@ -298,77 +306,34 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
           <p className="text-sm text-onSurface/70">PDF 파일을 드래그하거나 클릭하세요</p>
           <p className="text-xs text-onSurface/50 mt-1">여러 파일 동시 선택 가능 · 업로드 즉시 번역이 시작됩니다</p>
         </div>
-      ) : showAILoading ? (
-        <div className="flex flex-col items-center gap-3 py-8 px-2">
+      ) : slideStatus === 'uploading' || slideStatus === 'processing' ? (
+        <div className="flex flex-col items-center gap-3 py-6 px-2">
           <svg className="animate-spin w-12 h-12 text-primary" fill="none" viewBox="0 0 24 24">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
           </svg>
-          <p className="text-base font-semibold text-onSurface">AI 번역중...</p>
+          <p className="text-base font-semibold text-onSurface">
+            {slideStatus === 'uploading' ? '업로드 중...' : 'AI 번역중...'}
+          </p>
+          {currentFileName && (
+            <p className="text-xs text-onSurface/60 truncate max-w-full px-2" title={currentFileName}>
+              {currentFileName}{stageTotal > 0 ? ` (${stageCurrent} / ${stageTotal} 페이지)` : ''}
+            </p>
+          )}
           {isMultiple && (
             <p className="text-xs text-onSurface/50">{queueProcessed + 1} / {queueTotal} 번째 파일</p>
           )}
-          <p className="text-sm text-onSurface/60">잠시만 기다려주세요</p>
-        </div>
-      ) : slideStatus === 'uploading' || slideStatus === 'processing' ? (
-        <div className="py-4 px-2">
-          <div className="flex items-center gap-2 mb-1">
-            <svg className="animate-spin w-5 h-5 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-            <p className="text-base font-medium text-onSurface">
-              {slideStatus === 'uploading'
-                ? '업로드 중...'
-                : stage === 'bundling'
-                  ? 'PDF 생성 중...'
-                  : stage === 'pending'
-                    ? '준비 중...'
-                    : stageTotal > 0
-                      ? `${STAGE_LABELS[stage]} ${stageCurrent}/${stageTotal}`
-                      : `${STAGE_LABELS[stage]}...`}
-            </p>
-            {isMultiple && (
-              <span className="ml-auto text-xs text-onSurface/50 flex-shrink-0">
-                {queueProcessed + 1}/{queueTotal}
-              </span>
-            )}
-          </div>
-
-          {currentFileName && (
-            <p className="text-xs text-onSurface/50 mb-2 truncate" title={currentFileName}>
-              {currentFileName}
-            </p>
-          )}
-
-          <div className="w-full h-2 bg-primaryContainer/40 rounded-full overflow-hidden">
-            {stage === 'bundling' ? (
-              <div className="h-full w-full bg-primary/60 animate-pulse" />
-            ) : (
-              <div
-                className="h-full bg-primary transition-all duration-300"
-                style={{
-                  width:
-                    stageTotal > 0
-                      ? `${Math.min(100, Math.round((stageCurrent / stageTotal) * 100))}%`
-                      : '0%',
-                }}
-              />
-            )}
-          </div>
-
-          <p className="text-sm text-onSurface/60 mt-3 text-center font-medium">
+          <p className="text-sm text-onSurface/60">
             {slideStatus === 'uploading'
               ? ''
-              : displayEta !== null
-                ? formatEta(displayEta)
-                : '남은 시간 계산 중...'}
+              : etaReachedZero || displayEta === null
+                ? '잠시만 기다려주세요'
+                : formatEta(displayEta)}
           </p>
-
           <button
             type="button"
             onClick={handleCancel}
-            className="mt-4 w-full py-2 text-sm text-error border border-error/30 rounded-lg hover:bg-error/10 transition-colors"
+            className="mt-2 w-full py-2 text-sm text-error border border-error/30 rounded-lg hover:bg-error/10 transition-colors"
           >
             업로드 중단
           </button>
