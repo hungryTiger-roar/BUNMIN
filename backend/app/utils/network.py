@@ -4,7 +4,7 @@
 import socket
 
 
-SERVER_PORT = 8000
+SERVER_PORT = 48000  # 표준 8000 은 Django/Flask/python http.server 충돌 가능 → 48000 으로 회피.
 
 
 def get_lan_ip() -> str:

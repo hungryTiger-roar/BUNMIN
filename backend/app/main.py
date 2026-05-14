@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import contextlib
 import json
+import mimetypes
 import os
 import sys
 import threading
@@ -11,6 +12,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+
+# ES 모듈 (.mjs) 과 WASM 확장자를 mimetypes 에 등록.
+# Python 기본 mimetypes 는 .mjs 를 모르므로 FileResponse 가 text/plain 으로 응답 →
+# 브라우저 strict MIME check 가 module script 거부 → ort-wasm-simd-threaded.mjs
+# 로드 실패 → VAD/마이크 시작 실패. (운영판에서 FastAPI 가 정적 파일 서빙할 때만 발생,
+# Vite dev 는 자체 미들웨어로 처리해서 영향 없음.)
+mimetypes.add_type('application/javascript', '.mjs')
+mimetypes.add_type('application/wasm', '.wasm')
 
 from app.config import ModelConfig, PROJECT_ROOT, resolve_model_dir
 from app.routers import ws, slides, transcripts, network, mode, install, settings

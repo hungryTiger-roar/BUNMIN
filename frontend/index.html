@@ -13,10 +13,6 @@
       href="https://fonts.googleapis.com/css2?family=Special+Gothic+Expanded+One&display=swap"
     />
     
-    <script src="/ort.all.min.js"></script>
-    <script>window.ort.env.wasm.numThreads = 1;</script>
-    <script src="/vad-bundle.min.js"></script>
-
     <style>
       #initial-loader {
         position: fixed;
@@ -89,5 +85,13 @@
       </div>
     </div>
     <script type="module" src="/src/main.tsx"></script>
+    <!-- ORT/VAD(@ricky0123/vad-web) 전역 번들 — 강의자 마이크 캡처(/lecturer)에서만 쓰임.
+         <head> 의 blocking 스크립트였던 걸 body 끝 + defer 로 바꿔 초기 렌더(#initial-loader)와
+         React mount 를 막지 않게 함. defer/module 은 문서 순서대로 실행되므로 main.tsx 뒤에 둬서
+         React 마운트가 이 800KB 가량 번들 다운로드를 기다리지 않게 함. (window.vad / numThreads 는
+         마이크 시작 클릭 시점에 쓰이므로 그 전까지 로드되면 충분 — defer 라 백그라운드 병렬 다운로드.) -->
+    <script defer src="/ort.all.min.js"></script>
+    <script defer src="/ort-thread-config.js"></script>
+    <script defer src="/vad-bundle.min.js"></script>
   </body>
 </html>

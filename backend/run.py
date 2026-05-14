@@ -147,7 +147,10 @@ try:
     write_log("[INFO] 임포트 성공, uvicorn 기동 중...")
 
     if __name__ == '__main__':
-        uvicorn.run(app, host='0.0.0.0', port=8000)
+        # 포트 48000: 표준 8000 은 Django/Flask 등과 충돌 가능 → 안전한 임의 포트로 변경.
+        # 변경 시 backend/app/utils/network.py 의 SERVER_PORT 와 frontend (main.cjs, api.ts) 도 동기화.
+        from app.utils.network import SERVER_PORT
+        uvicorn.run(app, host='0.0.0.0', port=SERVER_PORT)
 
 except Exception as e:
     tb_str = traceback.format_exc()

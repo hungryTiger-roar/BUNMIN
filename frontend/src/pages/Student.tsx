@@ -16,6 +16,7 @@ import MaterialViewToggle from '@/components/common/MaterialViewToggle'
 import { StudentCursorOverlay, useCursorOverlay } from '@/components/student/StudentCursorOverlay'
 import { DrawingCanvas, type DrawingCanvasHandle } from '@/components/common/DrawingCanvas'
 import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
+import { getLanIp } from '@/lib/network'
 
 const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
   { value: 'off', label: 'Off' },
@@ -263,8 +264,17 @@ function Student() {
       peerConnectionRef.current = null
     }
     pendingIceCandidatesRef.current = []
+    // TURN 서버 호스트 — backend /network/info 의 LAN IP 사용 (lib/network.ts).
+    // 강사 노트북이 곧 TURN host. fetch 실패 시 window.location.hostname 폴백.
+    const turnHost = await getLanIp()
+    const TURN_AUTH = { username: 'aunion', credential: 'aunion-secret' }
     const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        // 로컬 TURN — 강사 노트북의 node-turn. UDP·TCP 양쪽 등록 (UDP 차단 시 TCP fallback).
+        { urls: `turn:${turnHost}:47878`, ...TURN_AUTH },
+        { urls: `turn:${turnHost}:47878?transport=tcp`, ...TURN_AUTH },
+      ],
     })
     peerConnectionRef.current = pc
     // WebRTC 연결 진단 — LAN 환경에서 P2P 실패(클라이언트 격리/방화벽) 추적용.
