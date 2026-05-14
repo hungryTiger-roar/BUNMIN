@@ -5,6 +5,7 @@ PDF 업로드 및 전처리 (OCR + VLM 번역)
 import asyncio
 import hashlib
 import json
+import os
 import shutil
 import sys
 import time
@@ -153,37 +154,108 @@ class SlideStatus(BaseModel):
 
 
 _BASELINE_SECONDS_PER_PAGE = {
-    "ocr": 15.0,       # Surya OCR 한 장 처리 추정치 (초) — 실측보다 약간 여유롭게
-    "translate":50.0,  # Qwen2.5-VL 한 장 번역 추정치 (4bit GPU) — 실측보다 여유롭게 잡아 "잠시만" 시간 단축
+    "ocr": 15.0,       # Surya OCR 한 장 처리 추정치 (초) — 첫 실행 시 fallback
+    "translate":50.0,  # Qwen2.5-VL 한 장 번역 추정치 (4bit GPU) — 첫 실행 시 fallback
 }
 _BUNDLING_BASELINE = 3.0  # PDF 묶기 짧은 고정값
+
+# ─── 학습 baseline 영속화 ─────────────────────────────────────────
+# 이전 세션의 페이지 평균을 디스크에 저장 → 다음 세션 첫 페이지 추정 정확도 ↑
+# dev:  backend/cache/eta_learned.json
+# 운영: %LOCALAPPDATA%\Aunion AI\cache\eta_learned.json (Programs 폴더는 쓰기 불가)
+# sys.frozen 는 PyInstaller 번들에서만 True → 운영 .exe 판별의 신뢰 가능한 신호.
+# 운영판은 resources/backend/cache/ 가 Program Files 안이라 쓰기 불가 → %LOCALAPPDATA%\Aunion AI\ 로.
+# dev 는 프로젝트 안 backend/cache/ 사용.
+_LOCALAPPDATA = os.environ.get("LOCALAPPDATA")
+if getattr(sys, "frozen", False):
+    # 운영 (Electron 패키지된 PyInstaller 백엔드)
+    _base = _LOCALAPPDATA or str(Path.home())
+    _ETA_CACHE_PATH = Path(_base) / "Aunion AI" / "cache" / "eta_learned.json"
+else:
+    # dev
+    _ETA_CACHE_PATH = Path(__file__).resolve().parent.parent.parent / "cache" / "eta_learned.json"
+
+# 합리적 범위 — 이상치(GPU 일시 stuck, 첫 모델 로드 후 페이지 등) 저장 차단
+_SANITY_RANGE = {
+    "ocr":       (2.0, 60.0),
+    "translate": (5.0, 300.0),
+}
+
+
+def _load_learned_baselines() -> dict:
+    """이전 세션 평균 로드. 첫 실행 / 오염 시 빈 dict."""
+    try:
+        if _ETA_CACHE_PATH.exists():
+            with open(_ETA_CACHE_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            result = {}
+            for stage, value in data.items():
+                lo, hi = _SANITY_RANGE.get(stage, (0.0, 600.0))
+                if isinstance(value, (int, float)) and lo <= value <= hi:
+                    result[stage] = float(value)
+            return result
+    except Exception as e:
+        print(f"[ETA] learned cache 로드 실패: {e}")
+    return {}
+
+
+_LEARNED_BASELINES = _load_learned_baselines()
+if _LEARNED_BASELINES:
+    print(f"[ETA] 이전 세션 학습 baseline 로드: {_LEARNED_BASELINES}")
+
+
+def _baseline_for(stage: str) -> float:
+    """학습된 값 우선, 없으면 하드코딩 baseline 폴백."""
+    if stage in _LEARNED_BASELINES:
+        return _LEARNED_BASELINES[stage]
+    return _BASELINE_SECONDS_PER_PAGE.get(stage, 30.0)
+
+
+def _save_learned_baseline(stage: str, avg: float) -> None:
+    """페이지 완료 시 호출. 합리적 범위만 저장 (이상치 필터)."""
+    if avg <= 0:
+        return
+    lo, hi = _SANITY_RANGE.get(stage, (0.0, 600.0))
+    if not (lo <= avg <= hi):
+        return  # 이상치 — 저장 안 함
+    _LEARNED_BASELINES[stage] = avg
+    try:
+        _ETA_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_ETA_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(_LEARNED_BASELINES, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[ETA] learned cache 저장 실패: {e}")
 
 
 def _unified_remaining(stage: str, total: int, current: int, avg: float, elapsed_on_current: float) -> Optional[float]:
     """현재 단계 + 후속 단계의 남은 작업 시간을 합산.
-    진행 중 페이지가 baseline을 초과하면 ETA가 자연스럽게 0까지 떨어진다 (overrun floor 없음).
-    번역 마지막 페이지 overrun 시점에는 bundling baseline도 빼서 ETA=0 → '잠시만 기다려주세요'가 안정적으로 유지되도록."""
+
+    현재 페이지의 elapsed 를 음수까지 허용해 wall-clock 흐름이 ETA 에 그대로 반영되게 함.
+    → 매초 ETA 가 약 1초씩 감소 (시간 흐름이 카운트다운으로 시각화됨).
+    → 페이지가 baseline 을 초과해도 ETA 가 계속 줄어 0 까지 수렴 (stuck 인지 UX 로 감지 가능).
+    → max(0, ...) 로 음수 출력 방지."""
     pages_remaining = max(0, total - current)
 
-    def _in_progress(per_page: float) -> float:
-        return max(0.0, per_page - elapsed_on_current)
+    def _in_progress_overrun(per_page: float) -> float:
+        """현재 페이지 남은 시간 — overrun 허용 (음수 가능). 새 페이지 시작 시 reset."""
+        return per_page - elapsed_on_current
 
     if stage == "ocr":
-        per_page = avg if avg > 0 else _BASELINE_SECONDS_PER_PAGE["ocr"]
-        ocr_remaining = (_in_progress(per_page) + per_page * (pages_remaining - 1)) if pages_remaining > 0 else 0.0
-        translate_remaining = _BASELINE_SECONDS_PER_PAGE["translate"] * total  # 아직 시작 안 한 단계
-        return ocr_remaining + translate_remaining + _BUNDLING_BASELINE
+        per_page = avg if avg > 0 else _baseline_for("ocr")
+        ocr_remaining = (_in_progress_overrun(per_page) + per_page * (pages_remaining - 1)) if pages_remaining > 0 else 0.0
+        translate_remaining = _baseline_for("translate") * total  # 아직 시작 안 한 단계
+        return max(0.0, ocr_remaining + translate_remaining + _BUNDLING_BASELINE)
 
     if stage == "translate":
-        per_page = avg if avg > 0 else _BASELINE_SECONDS_PER_PAGE["translate"]
+        per_page = avg if avg > 0 else _baseline_for("translate")
         if pages_remaining > 0:
-            ip = _in_progress(per_page)
+            ip = _in_progress_overrun(per_page)
             translate_remaining = ip + per_page * (pages_remaining - 1)
         else:
             translate_remaining = 0.0
         # bundling baseline은 더하지 않음 — 더하면 카운트다운이 3초에서 잠시만으로 점프(거의 다 됨/2초/1초 스킵)
         # bundling은 어차피 짧고(~3초) bundling 단계로 전환되면 그 안에서 따로 카운트다운됨
-        return translate_remaining
+        return max(0.0, translate_remaining)
 
     if stage == "bundling":
         return max(0.0, _BUNDLING_BASELINE - elapsed_on_current)
@@ -240,12 +312,17 @@ def _page_completed(slide_id: str, current: int) -> None:
     stage = s.get("stage", "")
     prev = s.get("avg_page_duration", 0.0)
     if prev == 0.0:
-        # 첫 페이지: baseline과 실측치를 절반씩 블렌딩 (실측이 baseline과 크게 어긋나도 점프 절반으로 줄임)
-        baseline = _BASELINE_SECONDS_PER_PAGE.get(stage, duration)
+        # 첫 페이지: 학습된 baseline(이전 세션) 또는 하드코딩 baseline 과 실측치 5:5 블렌딩.
+        # 학습값이 있으면 baseline 이 머신 실측 기반이라 점프 폭 ↓
+        baseline = _baseline_for(stage) if stage in ("ocr", "translate") else duration
         s["avg_page_duration"] = 0.5 * baseline + 0.5 * duration
     else:
         # 두 번째부터는 느린 EMA — 페이지간 편차에 덜 휘둘림
         s["avg_page_duration"] = 0.75 * prev + 0.25 * duration
+
+    # 페이지 완료 시점에 학습 평균을 디스크에 저장 → 다음 세션 첫 페이지 추정 정확도 ↑.
+    # 합리적 범위 (sanity range) 만 저장하므로 이상치는 자동 필터링.
+    _save_learned_baseline(stage, s["avg_page_duration"])
 
 
 class OverlayItem(BaseModel):

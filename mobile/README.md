@@ -347,7 +347,7 @@ app/build/outputs/apk/debug/app-debug.apk
 - 프로토콜이 없는 URL 입력 시 자동으로 프로토콜을 추가합니다
 - **내부망 IP** (192.168.x.x, 10.x.x.x, 172.16-31.x.x, localhost): `http://` 추가
 - **외부 URL**: `https://` 추가 (보안 강화)
-- 예: `192.168.0.10:5173` → `http://192.168.0.10:5173`
+- 예: `192.168.0.10:43000` → `http://192.168.0.10:43000`
 - 예: `example.com` → `https://example.com`
 
 ---

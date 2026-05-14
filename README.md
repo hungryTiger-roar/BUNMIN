@@ -67,7 +67,7 @@ OCR_DEVICE=cpu
 npm run dev
 ```
 
-브라우저에서 `http://localhost:3000` 접속
+브라우저에서 `http://localhost:43000` 접속 (백엔드는 48000)
 
 ### Electron 개발
 

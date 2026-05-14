@@ -85,6 +85,15 @@ export default function Start() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Student 페이지는 무거운 청크(piper-tts-web / onnxruntime-web)라 lazy 로 분리돼 있다.
+  // 이름 입력 화면에 머무는 동안 idle 시점에 미리 받아두면 '강의 참여' 클릭 시 체감 지연 0.
+  useEffect(() => {
+    const prefetch = () => { void import('./Student') }
+    const ric = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback
+    if (ric) ric(prefetch)
+    else { const id = window.setTimeout(prefetch, 1500); return () => window.clearTimeout(id) }
+  }, [])
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     const trimmed = name.trim()

@@ -19,6 +19,7 @@ import DrawingToolbar from '@/components/lecturer/DrawingToolbar'
 import { DrawingCanvas, type DrawingTool, type DrawingCanvasHandle } from '@/components/common/DrawingCanvas'
 import ScreenPickerModal from '@/components/lecturer/ScreenPickerModal'
 import { WS_PIPELINE_URL, API_BASE, getSlideLibrary } from '@/lib/api'
+import { getLanIp } from '@/lib/network'
 import SlideLibrarySearchModal from '@/components/lecturer/SlideLibrarySearchModal'
 import type { SlideLibraryItem } from '@/types/slide'
 
@@ -292,8 +293,19 @@ function Lecturer() {
       peerTransceiversRef.current.delete(studentId)
     }
     pendingIceByStudentRef.current.set(studentId, [])  // 새 PC — 옛 큐 비움
+    // TURN 서버 호스트 — backend /network/info 의 LAN IP 사용.
+    // Electron 운영판에서 강사가 127.0.0.1 로 로드돼도 학생이 다른 머신에서 도달 가능한
+    // LAN IP 가 보장됨. fetch 실패 시 window.location.hostname 으로 폴백 (lib/network.ts).
+    const turnHost = await getLanIp()
+    const TURN_AUTH = { username: 'aunion', credential: 'aunion-secret' }
     const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        // 로컬 TURN — 같은 LAN 의 강사 노트북 위 node-turn (turn-server/index.js).
+        // P2P 차단 환경에서 client → server relay 로 우회. UDP·TCP 둘 다 등록 (UDP 차단 시 TCP fallback).
+        { urls: `turn:${turnHost}:47878`, ...TURN_AUTH },
+        { urls: `turn:${turnHost}:47878?transport=tcp`, ...TURN_AUTH },
+      ],
     })
     peerConnectionsRef.current.set(studentId, pc)
     pc.onicecandidate = (e) => {
@@ -333,6 +345,13 @@ function Lecturer() {
 
     try {
       const offer = await pc.createOffer()
+      // Opus DTX 비활성화 — 묵음 구간에도 packet 송출 유지 → 발화 재개 시 지지직(packet stream
+      // 끊김 후 jitter buffer underrun) 방지. trade-off: 대역폭 +5kbps/stream (무시 가능).
+      // SDP 의 audio m-line fmtp 에서 usedtx=1 제거 (있을 때만). 모든 fmtp 라인 대상이 아니라
+      // usedtx 키만 정확히 매칭 → 다른 codec 파라미터 안 건드림.
+      if (offer.sdp) {
+        offer.sdp = offer.sdp.replace(/;?\s*usedtx=1\b/g, '')
+      }
       await pc.setLocalDescription(offer)
       send({ type: 'webrtc_offer', target: studentId, sdp: pc.localDescription })
       console.log('[Lecturer] WebRTC offer 송신', {
@@ -426,8 +445,9 @@ function Lecturer() {
       .then((res) => res.json())
       .then((data) => {
         const port = window.location.port || data.port
-        // 수강자는 BrowserRouter 사용 — # 없는 깨끗한 URL 로 공유.
-        setShareUrl(`http://${data.lan_ip}:${port}/student/start`)
+        // 수강자는 BrowserRouter 사용 — # 없는 깨끗한 base URL 로 공유.
+        // base `/` 가 Start (이름 입력) → 버튼 → /student 흐름.
+        setShareUrl(`http://${data.lan_ip}:${port}/`)
       })
       .catch(() => {})
   }, [])

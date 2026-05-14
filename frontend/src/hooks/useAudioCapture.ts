@@ -7,6 +7,17 @@ declare global {
   }
 }
 
+/** 전역(window.vad 등)이 준비될 때까지 짧게 폴링. timeout(ms) 초과 시 undefined 반환. */
+async function waitForGlobal<T>(get: () => T | undefined, timeoutMs: number): Promise<T | undefined> {
+  const deadline = Date.now() + timeoutMs
+  let v = get()
+  while (!v && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50))
+    v = get()
+  }
+  return v || undefined
+}
+
 interface UseAudioCaptureOptions {
   onAudioData: (audioBlob: Blob) => void
 }
@@ -107,7 +118,15 @@ export function useAudioCapture({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
       })
 
-      const { MicVAD } = window.vad
+      // vad-bundle.min.js 는 index.html 에서 defer 로 로드되므로 (초기 렌더 차단 방지)
+      // 마이크 시작이 아주 빠르면 아직 window.vad 가 없을 수 있다 — 짧게 폴링 대기.
+      const vadGlobal = await waitForGlobal(() => window.vad, 5000)
+      if (!vadGlobal) {
+        setError('음성 인식 모듈 로드에 실패했습니다. 페이지를 새로고침해 주세요.')
+        stream.getTracks().forEach((t) => t.stop())
+        return false
+      }
+      const { MicVAD } = vadGlobal
       // 한 발화의 최대 지속 시간 — 이를 넘으면 강제 분할 (chunk 송출).
       // 강사가 호흡 없이 길게 말해도 worklet 누적 프레임을 직접 chunk 로 송출
       // (VAD 는 그대로 둠 → pause/start 사이 음성 손실 차단).
