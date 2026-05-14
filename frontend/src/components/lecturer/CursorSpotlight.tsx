@@ -59,7 +59,7 @@ function CursorSpotlight({
 
   return (
     <div
-      className="pointer-events-none z-[9999]"
+      className="pointer-events-none z-20"
       style={{
         ...positionStyle,
         width: size,

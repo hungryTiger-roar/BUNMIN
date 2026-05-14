@@ -1,4 +1,4 @@
-import { useEffect, lazy, Suspense } from 'react'
+import { useEffect, lazy, Suspense, useState } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import Start from './pages/Start'
 import Install from './pages/Install'
@@ -16,9 +16,24 @@ const Lecturer = lazy(() => import('./pages/Lecturer'))
 const Student = lazy(() => import('./pages/Student'))
 
 function RouteFallback() {
+  // 페이지가 로드되는 동안 잠시 표시될 로딩 애니메이션입니다.
+  // Suspense의 fallback으로 사용되며, 로딩이 끝나면 실제 페이지 컴포넌트로 교체됩니다.
+  const [videoSrc] = useState(() => (Math.random() > 0.5 ? '/animation_white.webm' : '/animation_black.webm'))
   return (
     <div className="min-h-screen flex items-center justify-center bg-home-gradient [background-size:800%_800%] animate-gradient-shift">
-      <div className="h-10 w-10 rounded-full border-4 border-onPrimary/30 border-t-onPrimary animate-spin" />
+      <div className="flex flex-col items-center">
+        <video src={videoSrc} autoPlay loop muted playsInline style={{ width: '200px', height: 'auto' }} />
+        <div className="loader --4"></div>
+      </div>
+    </div>
+  )
+}
+
+function LecturerFallback() {
+  // Lecturer.tsx는 캐릭터 애니메이션 없이 기본 로딩바만 표시합니다.
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="h-10 w-10 rounded-full border-4 border-primaryContainer/30 border-t-primary animate-spin" />
     </div>
   )
 }
@@ -58,9 +73,10 @@ function App() {
           <Routes>
             <Route path="/install" element={<Install />} />
             <Route path="/" element={<Start />} />
-            <Route path="/lecturer" element={<Lecturer />} />
-            <Route path="/lecturer/home" element={<LecturerHome />} />
-            <Route path="/lecturer/settings" element={<LecturerSettings />} />
+            <Route path="/student/start" element={<Start />} />
+            <Route path="/lecturer" element={<Suspense fallback={<LecturerFallback />}><Lecturer /></Suspense>} />
+            <Route path="/lecturer/home" element={<LecturerHome />} /> {/* LecturerHome은 lazy가 아니므로 Suspense 불필요 */}
+            <Route path="/lecturer/settings" element={<LecturerSettings />} /> {/* 이것도 eager */}
             <Route path="/home" element={<Home />} />
             <Route path="/student" element={<Student />} />
           </Routes>
