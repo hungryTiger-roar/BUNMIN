@@ -113,7 +113,7 @@ fun UrlInputScreen(
                 isError = false
             },
             label = { Text("강의 URL 입력") },
-            placeholder = { Text("http://192.168.0.1:3000/#/student/start") },
+            placeholder = { Text("http://192.168.0.1:43000/") },
             singleLine = true,
             isError = isError,
             supportingText = {

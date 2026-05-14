@@ -1,30 +1,20 @@
 /**
- * useDelayBufferPlayer — Wall-clock delay buffer.
+ * useDelayBufferPlayer — 적응형 wall-clock delay buffer.
  *
- * 모델 — 모든 events 를 강사 시계 + DELAY 에 그대로 재현.
+ * 고정 lag 대신 "지금 필요한 만큼만" 지연 — 처리시간(ASR+NMT+네트워크+TTS합성)을
+ * 추적해 currentDelay 를 동적으로 조정. silence 구간에서 큐가 비면 자연히 최소값에 수렴.
  *
- *   강사가 wall=T 에 한 행동을 학생 wall=T+offset+DELAY 에 같은 속도로 재현.
- *   visual stretch / audio compress 없음 — 강사 박자 그대로.
+ *   - currentDelay = recentP90(필요딜레이) + max(300ms, stddev × 1.5)
+ *       · 늘릴 땐 즉시 (desync 방지 우선), 줄일 땐 천천히 EWMA (원본 음성 jump 완화)
+ *       · 클램프 [2s, 20s]
+ *   - 모든 event (시각/음성/자막/lifecycle) 가 같은 currentDelay 사용 → 상호 동기 유지
+ *   - monotonic — 직전 event 보다 늦게 스케줄 (순서 보장, currentDelay 줄면 압축 재생)
+ *   - 원본 음성 DelayNode 는 Student.tsx 가 getCurrentDelay() 폴링해 동적 조정
  *
- *   비유: "유튜브 라이브" — 모든 콘텐츠 (영상+음성) 가 N초 lag 으로 동시 송출.
+ *   late event: target_wall < now 면 setTimeout(0) 즉시 (사라지지 않음)
+ *   STALE drop: currentDelay + 10s 초과 시만 (pause 후 옛 frame 같은 진짜 stale 만 — 정상 발화는 절대 안 버려짐)
  *
- *   동작:
- *     - 시각 (그림/커서/페이지): setTimeout(apply, lec_ts + offset + DELAY - now)
- *     - 음성 (sentence audio): setTimeout(playSentence, speechStartAt + offset + DELAY - now)
- *     - 생명주기 (pause/resume/end): setTimeout(apply, sentAt 추정 + offset + DELAY - now)
- *
- *   강사↔학생 시계 offset:
- *     - 매 incoming event 의 lecturerTimestamp 와 도착시각 차로 추정.
- *     - EWMA 스무딩 (jitter 흡수).
- *     - 네트워크 latency 가 작아 (~50ms) offset 정확도 충분.
- *
- *   audio 서열화:
- *     - 영어 TTS 가 한국어 발화보다 길어 schedule 시각이 겹칠 수 있음.
- *     - 직전 audio 의 ended Promise 가 끝나야 다음 audio 시작 — sequential queue.
- *     - audio 가 visual 보다 뒤로 drift 할 수 있으나 visual 자체는 강사 박자 보존.
- *
- *   late event:
- *     - target_wall < now 면 setTimeout(0) 으로 즉시 apply (사라지지 않음).
+ * 비유: "적응형 유튜브 라이브" — lag 이 네트워크/처리 상황 따라 출렁이되 모든 트랙이 함께 출렁임.
  */
 import { useCallback, useEffect, useRef } from 'react'
 import type { TranslationLang } from '@/stores/preferencesStore'
@@ -33,8 +23,7 @@ import type { TranslationLang } from '@/stores/preferencesStore'
 export interface UnitPlayer {
   /** visual event (그림/커서/페이지) 등록. */
   enqueueVisual: (ts: number, apply: () => void, kind?: string) => void
-  /** transcription 도착 시 호출 — sentence audio + commitSubtitle 예약.
-   *  commitSubtitle 은 audio 시작 시점에 호출돼 자막↔TTS 동기화. */
+  /** transcription 도착 시 호출 — sentence audio + commitSubtitle 예약. */
   enqueueSentence: (params: {
     text: string
     commitSubtitle: (ttsMs?: number) => void
@@ -47,8 +36,10 @@ export interface UnitPlayer {
   reset: () => void
   /** 진단용 — 현재 audio 큐 길이. */
   getQueueLength: () => number
-  /** 진단용 — pending visual 수. */
+  /** 진단용 — pending visual 수 (setTimeout 기반이라 항상 0). */
   getPendingVisualCount: () => number
+  /** 현재 적용 중인 적응형 딜레이 (ms) — Student.tsx 가 원본 음성 DelayNode 조정에 사용. */
+  getCurrentDelay: () => number
 }
 
 interface Options {
@@ -58,43 +49,77 @@ interface Options {
   ) => Promise<{ audioStartedAt: number; durationMs: number; ended: Promise<void>; ttsMs: number }>
   isAudioUnlocked: () => boolean
   getAudioLang: () => TranslationLang
-  /** 학생 wall - 강사 wall offset (ms). 미설정 시 0 으로 가정 (네트워크 latency 무시).
-   *  자동 추정도 내부에서 함 — 외부 주입은 옵션. */
+  /** 초기 / 기준 lag (ms). 미설정 시 10000. 실제 currentDelay 는 처리시간 따라 가변. */
   delayMs?: number
 }
 
+// ── 적응형 딜레이 파라미터 ──────────────────────────────────────────────────────
+const PROC_WINDOW_MAX       = 20    // 필요딜레이 슬라이딩 윈도우 크기
+const MIN_MARGIN_MS         = 300   // 최소 안전 마진
+const MARGIN_STDDEV_MULT    = 1.5   // 마진 = max(MIN_MARGIN, stddev × 이 값) — jitter 크면 자동 ↑
+const TTS_SYNTH_INITIAL_MS  = 1800  // 첫 발화 전 보수적 추정 — 이후 실측 ttsMs EWMA 로 수렴 (lag 타이트하게)
+const TTS_EWMA_ALPHA        = 0.2   // ttsMs EWMA 갱신 계수
+const DELAY_MIN_MS          = 2000  // currentDelay 하한
+const DELAY_MAX_MS          = 20000 // currentDelay 상한
+const DELAY_DECREASE_EWMA   = 0.25  // 줄일 때 수렴 계수 — silence 구간에서 lag 빨리 회수. 빨리감기는 주로 무음 구간이라 무감
+const STALE_EXTRA_MS        = 10000 // STALE 임계 = currentDelay + 이 값 (정상 발화는 절대 drop 안 됨)
+const VISUAL_CATCHUP_GAP_MS = 1000  // 시각 event 간격이 이보다 짧으면 같은 stroke 로 보고 강사 간격 보존, 길면 catch-up 허용
+
 export function useDelayBufferPlayer(options: Options): UnitPlayer {
-  // 강사 wall → 학생 wall offset 추정 (EWMA). null 이면 첫 event 가 들어오기 전.
+  // 강사 wall → 학생 wall offset 추정 (EWMA). null 이면 첫 event 전.
   const clockOffsetRef = useRef<number | null>(null)
-  // delay budget — env 로 주입 가능, 없으면 15초.
-  const delayMs = options.delayMs ?? 15000
+  const baseDelayMs = options.delayMs ?? 10000
 
   const optionsRef = useRef(options)
   useEffect(() => { optionsRef.current = options }, [options])
 
+  // 적응형 딜레이 상태
+  const currentDelayRef = useRef(baseDelayMs)
+  const procWindowRef = useRef<number[]>([])      // 최근 발화들의 "필요딜레이" (ms)
+  const ttsLatencyEwmaRef = useRef(TTS_SYNTH_INITIAL_MS)  // 실측 TTS 합성 시간 EWMA — 필요딜레이 산정에 사용
+  // monotonic 보장 — 직전 스케줄 시각 (시각 event 와 sentence 는 각자 순서만 유지)
+  const lastSentenceWallRef = useRef(0)
+  const lastVisualWallRef = useRef(0)
+  const lastVisualTsRef = useRef(0)               // 직전 시각 event 의 강사 wall ts — stroke 내부 간격 보존용
+
   // Audio 직렬 큐 — 영어 TTS 가 한국어보다 길어 schedule 겹치는 케이스 대응.
-  // 이전 audio 의 ended 가 끝나야 다음 audio 시작.
   const audioQueueRef = useRef<Array<() => Promise<void>>>([])
   const audioPlayingRef = useRef(false)
 
   const updateClockOffset = useCallback((lecTs: number) => {
     if (typeof lecTs !== 'number' || !isFinite(lecTs)) return
     const observed = Date.now() - lecTs
-    // OUTLIER 차단 — 네트워크 spike / 서버 backlog 등으로 정상 범위 (수십~수백ms) 벗어난
-    //   관측은 무시. 5초 이상 차이는 시계 동기화 문제거나 stale event 로 간주.
-    if (Math.abs(observed) > 5000) return
+    if (Math.abs(observed) > 5000) return  // OUTLIER 차단 (네트워크 spike / stale)
     if (clockOffsetRef.current === null) {
       clockOffsetRef.current = observed
     } else {
-      // EWMA: alpha=0.1 — jitter 흡수 + 시계 drift 따라감.
-      clockOffsetRef.current = clockOffsetRef.current * 0.9 + observed * 0.1
+      clockOffsetRef.current = clockOffsetRef.current * 0.9 + observed * 0.1  // EWMA alpha=0.1
     }
   }, [])
 
-  const studentWallFor = useCallback((lecTs: number): number => {
-    const offset = clockOffsetRef.current ?? 0
-    return lecTs + offset + delayMs
-  }, [delayMs])
+  /** currentDelay 재계산 — procWindow 기반. recentP90 + jitter 마진.
+   *  NaN/Infinity 가드 — 비정상 입력(타임스탬프 오염 등)이 들어와도 currentDelay 가
+   *  망가져 DelayNode delayTime 이 NaN → 원본 음성 무음 되는 것 차단. */
+  const recomputeDelay = useCallback(() => {
+    const w = procWindowRef.current.filter((x) => Number.isFinite(x))
+    if (w.length < 3) return  // 데이터 부족 — 초기값 유지
+    const sorted = [...w].sort((a, b) => a - b)
+    const p90 = sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * 0.9))]
+    const mean = w.reduce((a, b) => a + b, 0) / w.length
+    const variance = w.reduce((a, b) => a + (b - mean) ** 2, 0) / w.length
+    const stddev = Math.sqrt(variance)
+    const margin = Math.max(MIN_MARGIN_MS, stddev * MARGIN_STDDEV_MULT)
+    let target = p90 + margin
+    if (!Number.isFinite(target)) return  // 비정상 — currentDelay 그대로 유지
+    target = Math.max(DELAY_MIN_MS, Math.min(DELAY_MAX_MS, target))
+    const cur = currentDelayRef.current
+    const next = (target >= cur)
+      ? target                                       // 늘릴 땐 즉시 (desync 방지)
+      : cur + (target - cur) * DELAY_DECREASE_EWMA   // 줄일 땐 천천히
+    currentDelayRef.current = Number.isFinite(next)
+      ? Math.max(DELAY_MIN_MS, Math.min(DELAY_MAX_MS, next))
+      : baseDelayMs                                  // 안전망 — 어떤 이유로든 NaN 이면 기준값
+  }, [baseDelayMs])
 
   const scheduleAt = useCallback((targetWall: number, fn: () => void) => {
     const delay = Math.max(0, targetWall - Date.now())
@@ -122,18 +147,24 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
 
   const enqueueVisual = useCallback((ts: number, apply: () => void, kind?: string) => {
     updateClockOffset(ts)
-    const targetWall = studentWallFor(ts)
+    const offset = clockOffsetRef.current ?? 0
+    // 같은 stroke 내부(직전 event 와 간격 짧음)면 "강사가 그린 간격" 만큼만 벌려서 재생 —
+    //   currentDelay 가 출렁여도 stroke 내부 속도/모양은 강사 그대로 (동그라미가 들쭉날쭉해지는
+    //   회귀 방지: 줄어들 때 점 몰림 ✕, 늘어날 때 점프 ✕).
+    //   stroke 사이 긴 gap(VISUAL_CATCHUP_GAP_MS 초과) / 첫 event 에서만 currentDelay 반영 + monotonic.
+    const lastTs = lastVisualTsRef.current
+    const gap = lastTs > 0 ? Math.max(0, ts - lastTs) : 0
+    const targetWall = (gap > 0 && gap < VISUAL_CATCHUP_GAP_MS)
+      ? lastVisualWallRef.current + gap                                              // 같은 stroke — 강사 간격 그대로
+      : Math.max(ts + offset + currentDelayRef.current, lastVisualWallRef.current)   // 다른 stroke / 첫 event — currentDelay 반영
+    lastVisualWallRef.current = targetWall
+    lastVisualTsRef.current = ts
     scheduleAt(targetWall, apply)
     if (kind && kind !== 'cursor' && kind !== 'draw_point') {
       const ahead = targetWall - Date.now()
-      console.log(`[DelayBuf] visual ${kind} ts=${ts} → +${Math.round(ahead)}ms`)
+      console.log(`[DelayBuf] visual ${kind} ts=${ts} → +${Math.round(ahead)}ms (delay=${Math.round(currentDelayRef.current)}ms)`)
     }
-  }, [updateClockOffset, studentWallFor, scheduleAt])
-
-  /** transcript 가 schedule 보다 이만큼 (ms) 늦으면 stale 로 판단해 drop.
-   *  pause 후 ASR pipeline 이 옛 audio frame 을 뒤늦게 transcribe 하는 케이스 catch.
-   *  10초 = 정상 ASR 변동폭 (~5초) 의 2배 — 정상 발화는 안 잡고 stale 만 잡는 임계. */
-  const STALE_THRESHOLD_MS = 10000
+  }, [updateClockOffset, scheduleAt])
 
   const enqueueSentence = useCallback((params: {
     text: string
@@ -141,58 +172,61 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
     speechStartAt: number
     sentAt: number
   }) => {
-    // 주의: clockOffset 은 sentence timestamp 로 갱신하지 않음.
-    //   sentAt / speechStartAt 은 lecturer wall time of the speech (인식 결과 도착 시점 X).
-    //   pause 후 ASR pipeline 에 누적된 옛 audio frame 이 60초 후 transcribe 되면
-    //   sentAt 이 60초 전 시각이라 (now - sentAt) 가 +60000ms 로 보임 → offset 오염.
-    //   visual events 만 갱신에 사용 (lecturerTimestamp 가 broadcast 시점이라 fresh).
+    // 주의: clockOffset 은 sentence timestamp 로 갱신하지 않음 — speechStartAt 은 lecturer wall
+    //   of the speech (broadcast 시점 X). pause 후 옛 audio frame 의 transcribe 가 늦게 오면
+    //   offset 오염. visual event (lecturerTimestamp = broadcast 시점) 만 갱신에 사용.
+    const offset = clockOffsetRef.current ?? 0
+    const speechWall = params.speechStartAt + offset
+    const now = Date.now()
 
-    const targetWall = studentWallFor(params.speechStartAt)
-    const ahead = targetWall - Date.now()
+    // 필요딜레이 측정 — "강사 발화 시작 후 학생측 TTS 재생 준비될 때까지" 추정.
+    //   (지금 도착 시각 = ASR + NMT + 네트워크 완료) - 발화시작wall + 실측 TTS 합성 EWMA.
+    //   finite 한 값만 윈도우에 넣음 (타임스탬프 오염 방어).
+    const neededDelay = (now - speechWall) + ttsLatencyEwmaRef.current
+    if (Number.isFinite(neededDelay)) {
+      procWindowRef.current.push(Math.max(0, neededDelay))
+      if (procWindowRef.current.length > PROC_WINDOW_MAX) procWindowRef.current.shift()
+      recomputeDelay()
+    }
 
-    // STALE drop — 너무 늦은 transcript (pause 직후 옛 audio frame 의 transcribe 결과).
-    //   재생해도 visual 은 이미 다 흘러간 후라 sync 깨진 채 들림 → drop 이 더 나음.
-    if (ahead < -STALE_THRESHOLD_MS) {
-      console.warn(
-        `[DelayBuf] STALE drop (${Math.round(-ahead)}ms late): "${params.text.slice(0, 40)}..."`,
-      )
+    const targetWall = Math.max(speechWall + currentDelayRef.current, lastSentenceWallRef.current)
+    const ahead = targetWall - now
+
+    // STALE drop — currentDelay + STALE_EXTRA 보다 늦으면 진짜 stale (pause 후 옛 frame).
+    //   정상 발화 (force-split 8s + ASR/NMT 처리 ~5s) 는 이 임계 한참 안쪽이라 절대 안 버려짐.
+    const staleThreshold = currentDelayRef.current + STALE_EXTRA_MS
+    if (ahead < -staleThreshold) {
+      console.warn(`[DelayBuf] STALE drop (${Math.round(-ahead)}ms late): "${params.text.slice(0, 40)}..."`)
       return
     }
+    lastSentenceWallRef.current = targetWall
 
     console.log(
       `[DelayBuf] sentence "${params.text.slice(0, 30)}..." ` +
-      `lecSpan=${params.sentAt - params.speechStartAt}ms scheduled=+${Math.round(ahead)}ms`,
+      `delay=${Math.round(currentDelayRef.current)}ms scheduled=+${Math.round(ahead)}ms`,
     )
 
-    // 정책 (옵션 1): TTS 영어 엔진 항시 합성. audioLang 에 따라 TTS GainNode 가 mute/unmute.
-    //   - 사용자가 'en' ↔ 'original' 토글 시 instant 전환 가능 (silence gap 없음).
-    //   - 'original' 모드에서도 TTS 는 합성됨 → muted 출력 (CPU ~3% 추가, Zoom 보다 가벼움).
-    //
-    // 자막 commit 타이밍 — 모드별로 다름:
-    //   - 'en': TTS audioStartedAt 시점에 commit (자막↔TTS 동기)
-    //   - 그 외 ('original'/'off'/'de'/'es'/'ru'): schedule 시점 즉시 commit
-    //     ('original' 은 wall-clock 기준 원본 음성과 ~50ms 차이로 자연스럽게 매칭)
+    // 자막 commit 타이밍 — 'en' 모드는 TTS audioStartedAt 시점, 그 외는 schedule 시점 즉시.
     scheduleAt(targetWall, () => {
       const opts = optionsRef.current
       if (!opts.isAudioUnlocked()) {
         try { params.commitSubtitle() } catch (err) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', err) }
         return
       }
-      // schedule 시점 lang 으로 자막 anchor 결정 (실행 시점에 토글돼도 일관 유지).
       const langAtSchedule = opts.getAudioLang()
       const useTtsAnchor = (langAtSchedule === 'en')
-
       if (!useTtsAnchor) {
-        // 'en' 외 모드 — 자막 즉시 commit (wall-clock anchor).
         try { params.commitSubtitle() } catch (err) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', err) }
       }
-
       audioQueueRef.current.push(async () => {
         try {
           // TTS 합성은 항상 진행 — mute 여부는 TTS GainNode 가 audioLang 에 따라 처리.
           const result = await opts.playSentence(params.text, 'en')
+          // 실측 TTS 합성 시간으로 EWMA 갱신 — 다음 발화들의 필요딜레이 추정이 더 타이트해짐.
+          if (Number.isFinite(result.ttsMs) && result.ttsMs >= 0) {
+            ttsLatencyEwmaRef.current = ttsLatencyEwmaRef.current * (1 - TTS_EWMA_ALPHA) + result.ttsMs * TTS_EWMA_ALPHA
+          }
           if (useTtsAnchor) {
-            // 'en' 모드 sentence — audio 시작 시점에 자막 표시 (자막↔TTS 동기).
             const subtitleDelay = Math.max(0, result.audioStartedAt - Date.now())
             setTimeout(() => {
               try { params.commitSubtitle(result.ttsMs) } catch (err) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', err) }
@@ -201,7 +235,6 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
           await result.ended
         } catch (err) {
           console.error('[DelayBufferPlayer] playSentence 실패:', err)
-          // 합성 실패 — 'en' anchor 였으면 자막 미표시 상태이므로 fallback commit.
           if (useTtsAnchor) {
             try { params.commitSubtitle() } catch (e) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', e) }
           }
@@ -209,27 +242,38 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
       })
       processAudioQueue()
     })
-  }, [studentWallFor, scheduleAt, processAudioQueue])
+  }, [scheduleAt, processAudioQueue, recomputeDelay])
 
   const enqueueLifecycle = useCallback((apply: () => void | Promise<void>, label: string) => {
-    // lifecycle 은 wall-clock timestamp 가 명시적으로 안 오는 경우가 있음 (sentAt 없음).
-    // → 도착 시점 기준 +delayMs 로 적용. 강사가 lecture_pause 누른 시점은 학생측에선
-    //   delayMs 후에 일시정지되는 게 맞음.
-    const targetWall = Date.now() + delayMs
-    console.log(`[DelayBuf] lifecycle ${label} → +${delayMs}ms`)
+    // lifecycle 은 wall ts 가 명시되지 않는 경우가 있음 → 도착 시점 + currentDelay.
+    // monotonic 은 시각 event 기준 (pause/resume/end 가 그림·페이지와 같은 시간선에 적용돼야 함).
+    const targetWall = Math.max(Date.now() + currentDelayRef.current, lastVisualWallRef.current)
+    lastVisualWallRef.current = targetWall
+    console.log(`[DelayBuf] lifecycle ${label} → +${Math.round(targetWall - Date.now())}ms (delay=${Math.round(currentDelayRef.current)}ms)`)
     scheduleAt(targetWall, apply)
-  }, [delayMs, scheduleAt])
+  }, [scheduleAt])
 
   const reset = useCallback(() => {
     audioQueueRef.current = []
-    // setTimeout 들은 cancel 하지 않음 — 이미 등록된 visual/audio 는 자기 시간에 fire.
-    // 강의 boundary 에서 frontend store 가 isLectureStarted 가드로 무시할 것.
-    // (option-f reset 도 setTimeout 은 안 건드림 — 동일 정책)
-    console.log('[DelayBufferPlayer] reset')
-  }, [])
+    currentDelayRef.current = baseDelayMs
+    procWindowRef.current = []
+    ttsLatencyEwmaRef.current = TTS_SYNTH_INITIAL_MS
+    lastSentenceWallRef.current = 0
+    lastVisualWallRef.current = 0
+    lastVisualTsRef.current = 0
+    clockOffsetRef.current = null
+    // setTimeout 들은 cancel 하지 않음 — 이미 등록된 visual/audio 는 자기 시간에 fire,
+    // 강의 boundary 에서 frontend store 가 isLectureStarted 가드로 무시.
+    console.log(`[DelayBufferPlayer] reset (delay → ${baseDelayMs}ms)`)
+  }, [baseDelayMs])
 
   const getQueueLength = useCallback(() => audioQueueRef.current.length, [])
-  const getPendingVisualCount = useCallback(() => 0, []) // setTimeout 기반이라 pending 개념 없음
+  const getPendingVisualCount = useCallback(() => 0, [])
+  // finite 보장 — 어떤 이유로든 currentDelay 가 NaN 이어도 기준값 반환 (DelayNode 무음 방지).
+  const getCurrentDelay = useCallback(
+    () => (Number.isFinite(currentDelayRef.current) ? currentDelayRef.current : baseDelayMs),
+    [baseDelayMs],
+  )
 
   return {
     enqueueVisual,
@@ -238,5 +282,6 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
     reset,
     getQueueLength,
     getPendingVisualCount,
+    getCurrentDelay,
   }
 }

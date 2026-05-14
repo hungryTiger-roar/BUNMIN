@@ -5,6 +5,7 @@ PDF 업로드 및 전처리 (OCR + VLM 번역)
 import asyncio
 import hashlib
 import json
+import os
 import shutil
 import sys
 import time
@@ -153,37 +154,108 @@ class SlideStatus(BaseModel):
 
 
 _BASELINE_SECONDS_PER_PAGE = {
-    "ocr": 15.0,       # Surya OCR 한 장 처리 추정치 (초) — 실측보다 약간 여유롭게
-    "translate":50.0,  # Qwen2.5-VL 한 장 번역 추정치 (4bit GPU) — 실측보다 여유롭게 잡아 "잠시만" 시간 단축
+    "ocr": 15.0,       # Surya OCR 한 장 처리 추정치 (초) — 첫 실행 시 fallback
+    "translate":50.0,  # Qwen2.5-VL 한 장 번역 추정치 (4bit GPU) — 첫 실행 시 fallback
 }
 _BUNDLING_BASELINE = 3.0  # PDF 묶기 짧은 고정값
+
+# ─── 학습 baseline 영속화 ─────────────────────────────────────────
+# 이전 세션의 페이지 평균을 디스크에 저장 → 다음 세션 첫 페이지 추정 정확도 ↑
+# dev:  backend/cache/eta_learned.json
+# 운영: %LOCALAPPDATA%\Aunion AI\cache\eta_learned.json (Programs 폴더는 쓰기 불가)
+# sys.frozen 는 PyInstaller 번들에서만 True → 운영 .exe 판별의 신뢰 가능한 신호.
+# 운영판은 resources/backend/cache/ 가 Program Files 안이라 쓰기 불가 → %LOCALAPPDATA%\Aunion AI\ 로.
+# dev 는 프로젝트 안 backend/cache/ 사용.
+_LOCALAPPDATA = os.environ.get("LOCALAPPDATA")
+if getattr(sys, "frozen", False):
+    # 운영 (Electron 패키지된 PyInstaller 백엔드)
+    _base = _LOCALAPPDATA or str(Path.home())
+    _ETA_CACHE_PATH = Path(_base) / "Aunion AI" / "cache" / "eta_learned.json"
+else:
+    # dev
+    _ETA_CACHE_PATH = Path(__file__).resolve().parent.parent.parent / "cache" / "eta_learned.json"
+
+# 합리적 범위 — 이상치(GPU 일시 stuck, 첫 모델 로드 후 페이지 등) 저장 차단
+_SANITY_RANGE = {
+    "ocr":       (2.0, 60.0),
+    "translate": (5.0, 300.0),
+}
+
+
+def _load_learned_baselines() -> dict:
+    """이전 세션 평균 로드. 첫 실행 / 오염 시 빈 dict."""
+    try:
+        if _ETA_CACHE_PATH.exists():
+            with open(_ETA_CACHE_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            result = {}
+            for stage, value in data.items():
+                lo, hi = _SANITY_RANGE.get(stage, (0.0, 600.0))
+                if isinstance(value, (int, float)) and lo <= value <= hi:
+                    result[stage] = float(value)
+            return result
+    except Exception as e:
+        print(f"[ETA] learned cache 로드 실패: {e}")
+    return {}
+
+
+_LEARNED_BASELINES = _load_learned_baselines()
+if _LEARNED_BASELINES:
+    print(f"[ETA] 이전 세션 학습 baseline 로드: {_LEARNED_BASELINES}")
+
+
+def _baseline_for(stage: str) -> float:
+    """학습된 값 우선, 없으면 하드코딩 baseline 폴백."""
+    if stage in _LEARNED_BASELINES:
+        return _LEARNED_BASELINES[stage]
+    return _BASELINE_SECONDS_PER_PAGE.get(stage, 30.0)
+
+
+def _save_learned_baseline(stage: str, avg: float) -> None:
+    """페이지 완료 시 호출. 합리적 범위만 저장 (이상치 필터)."""
+    if avg <= 0:
+        return
+    lo, hi = _SANITY_RANGE.get(stage, (0.0, 600.0))
+    if not (lo <= avg <= hi):
+        return  # 이상치 — 저장 안 함
+    _LEARNED_BASELINES[stage] = avg
+    try:
+        _ETA_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_ETA_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(_LEARNED_BASELINES, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[ETA] learned cache 저장 실패: {e}")
 
 
 def _unified_remaining(stage: str, total: int, current: int, avg: float, elapsed_on_current: float) -> Optional[float]:
     """현재 단계 + 후속 단계의 남은 작업 시간을 합산.
-    진행 중 페이지가 baseline을 초과하면 ETA가 자연스럽게 0까지 떨어진다 (overrun floor 없음).
-    번역 마지막 페이지 overrun 시점에는 bundling baseline도 빼서 ETA=0 → '잠시만 기다려주세요'가 안정적으로 유지되도록."""
+
+    현재 페이지의 elapsed 를 음수까지 허용해 wall-clock 흐름이 ETA 에 그대로 반영되게 함.
+    → 매초 ETA 가 약 1초씩 감소 (시간 흐름이 카운트다운으로 시각화됨).
+    → 페이지가 baseline 을 초과해도 ETA 가 계속 줄어 0 까지 수렴 (stuck 인지 UX 로 감지 가능).
+    → max(0, ...) 로 음수 출력 방지."""
     pages_remaining = max(0, total - current)
 
-    def _in_progress(per_page: float) -> float:
-        return max(0.0, per_page - elapsed_on_current)
+    def _in_progress_overrun(per_page: float) -> float:
+        """현재 페이지 남은 시간 — overrun 허용 (음수 가능). 새 페이지 시작 시 reset."""
+        return per_page - elapsed_on_current
 
     if stage == "ocr":
-        per_page = avg if avg > 0 else _BASELINE_SECONDS_PER_PAGE["ocr"]
-        ocr_remaining = (_in_progress(per_page) + per_page * (pages_remaining - 1)) if pages_remaining > 0 else 0.0
-        translate_remaining = _BASELINE_SECONDS_PER_PAGE["translate"] * total  # 아직 시작 안 한 단계
-        return ocr_remaining + translate_remaining + _BUNDLING_BASELINE
+        per_page = avg if avg > 0 else _baseline_for("ocr")
+        ocr_remaining = (_in_progress_overrun(per_page) + per_page * (pages_remaining - 1)) if pages_remaining > 0 else 0.0
+        translate_remaining = _baseline_for("translate") * total  # 아직 시작 안 한 단계
+        return max(0.0, ocr_remaining + translate_remaining + _BUNDLING_BASELINE)
 
     if stage == "translate":
-        per_page = avg if avg > 0 else _BASELINE_SECONDS_PER_PAGE["translate"]
+        per_page = avg if avg > 0 else _baseline_for("translate")
         if pages_remaining > 0:
-            ip = _in_progress(per_page)
+            ip = _in_progress_overrun(per_page)
             translate_remaining = ip + per_page * (pages_remaining - 1)
         else:
             translate_remaining = 0.0
         # bundling baseline은 더하지 않음 — 더하면 카운트다운이 3초에서 잠시만으로 점프(거의 다 됨/2초/1초 스킵)
         # bundling은 어차피 짧고(~3초) bundling 단계로 전환되면 그 안에서 따로 카운트다운됨
-        return translate_remaining
+        return max(0.0, translate_remaining)
 
     if stage == "bundling":
         return max(0.0, _BUNDLING_BASELINE - elapsed_on_current)
@@ -240,12 +312,17 @@ def _page_completed(slide_id: str, current: int) -> None:
     stage = s.get("stage", "")
     prev = s.get("avg_page_duration", 0.0)
     if prev == 0.0:
-        # 첫 페이지: baseline과 실측치를 절반씩 블렌딩 (실측이 baseline과 크게 어긋나도 점프 절반으로 줄임)
-        baseline = _BASELINE_SECONDS_PER_PAGE.get(stage, duration)
+        # 첫 페이지: 학습된 baseline(이전 세션) 또는 하드코딩 baseline 과 실측치 5:5 블렌딩.
+        # 학습값이 있으면 baseline 이 머신 실측 기반이라 점프 폭 ↓
+        baseline = _baseline_for(stage) if stage in ("ocr", "translate") else duration
         s["avg_page_duration"] = 0.5 * baseline + 0.5 * duration
     else:
         # 두 번째부터는 느린 EMA — 페이지간 편차에 덜 휘둘림
         s["avg_page_duration"] = 0.75 * prev + 0.25 * duration
+
+    # 페이지 완료 시점에 학습 평균을 디스크에 저장 → 다음 세션 첫 페이지 추정 정확도 ↑.
+    # 합리적 범위 (sanity range) 만 저장하므로 이상치는 자동 필터링.
+    _save_learned_baseline(stage, s["avg_page_duration"])
 
 
 class OverlayItem(BaseModel):
@@ -537,6 +614,80 @@ async def upload_slide(
     background_tasks.add_task(process_slide, slide_id, save_path)
 
     return {"slide_id": slide_id, "message": "업로드 완료, 처리 시작", "reused": False, "cancelled": False}
+
+
+@router.post("/upload-batch")
+async def upload_slide_batch(
+    background_tasks: BackgroundTasks,
+    files: list[UploadFile] = File(...),
+    client_token: Optional[str] = Form(None),
+):
+    """
+    PDF 슬라이드 다중 업로드 — VLM을 전체 배치에서 한 번만 로드해 처리 시간을 단축.
+    각 파일은 독립적인 slide_id 를 가지며 기존 /slides/status/{id} 로 폴링 가능.
+    client_token: 응답 전 abort 케이스에서 배치 전체를 취소하는 보류 토큰.
+    """
+    if not files:
+        raise HTTPException(400, "파일이 없습니다")
+
+    results = []
+    batch_items: list[tuple[str, Path]] = []  # 실제 처리할 (slide_id, path) 목록
+
+    for file in files:
+        if not file.filename.lower().endswith(".pdf"):
+            results.append({"filename": file.filename, "error": "PDF 파일만 업로드 가능합니다", "skipped": True})
+            continue
+
+        content = await file.read()
+        content_hash = hashlib.sha256(content).hexdigest()
+
+        # 동일 파일 dedup
+        existing_id = _hash_to_slide_id.get(content_hash)
+        if existing_id and (UPLOAD_DIR / f"{existing_id}.pdf").exists():
+            print(f"[Slides] 배치 중 동일 파일 감지 → 재사용: {existing_id} ({file.filename})")
+            results.append({"slide_id": existing_id, "filename": file.filename, "reused": True, "cancelled": False})
+            continue
+
+        slide_id = str(uuid.uuid4())[:8]
+        save_path = UPLOAD_DIR / f"{slide_id}.pdf"
+        with open(save_path, "wb") as f:
+            f.write(content)
+
+        now = time.time()
+        slide_status[slide_id] = {
+            "status": "pending",
+            "total_pages": 0,
+            "processed_pages": 0,
+            "stage": "pending",
+            "stage_current": 0,
+            "stage_total": 0,
+            "stage_started_at": now,
+            "last_page_at": now,
+            "avg_page_duration": 0.0,
+            "error": None,
+            "filename": file.filename or f"{slide_id}.pdf",
+            "uploaded_at": datetime.now().isoformat(timespec="seconds"),
+            "content_hash": content_hash,
+            "cancelled": False,
+            "client_token": client_token,
+        }
+
+        results.append({"slide_id": slide_id, "filename": file.filename, "reused": False, "cancelled": False})
+        batch_items.append((slide_id, save_path))
+
+    # 응답 전 취소 토큰 처리 — 배치 전체 취소
+    if _consume_pending_cancel_token(client_token) or not batch_items:
+        if batch_items:
+            print(f"[Slides] 배치 업로드 응답 전 취소 → {len(batch_items)}개 처리 스킵")
+            for slide_id, _ in batch_items:
+                _delete_slide_files(slide_id)
+                for r in results:
+                    if r.get("slide_id") == slide_id:
+                        r["cancelled"] = True
+        return {"results": results}
+
+    background_tasks.add_task(process_slide_batch, batch_items)
+    return {"results": results}
 
 
 @router.get("/list")
@@ -1004,11 +1155,12 @@ async def delete_slides_batch(payload: BatchDeleteRequest):
     return BatchDeleteResponse(deleted=deleted, failed=failed)
 
 
-async def process_slide(slide_id: str, pdf_path: Path):
+async def process_slide(slide_id: str, pdf_path: Path, _skip_vlm_unload: bool = False):
     """
     슬라이드 전처리 (백그라운드)
     PDF 텍스트 레이어가 있으면 → PDF 레이어 방식 (고품질)
     없으면 → 기존 OCR/VLM 방식
+    _skip_vlm_unload: 배치 처리 시 마지막 파일이 아니면 True — VLM을 언로드하지 않고 다음 파일에서 재사용
     """
     try:
         slide_status[slide_id]["status"] = "processing"
@@ -1033,7 +1185,7 @@ async def process_slide(slide_id: str, pdf_path: Path):
         # 텍스트 레이어가 충분하면 PDF 레이어 방식 사용
         if has_text_layer and text_coverage >= 0.8:
             print(f"[Slides] PDF 레이어 방식으로 처리 시작...")
-            await process_slide_pdf_layer(slide_id, pdf_path)
+            await process_slide_pdf_layer(slide_id, pdf_path, _skip_vlm_unload=_skip_vlm_unload)
             return
 
         print(f"[Slides] 기존 OCR/VLM 방식으로 처리...")
@@ -1096,8 +1248,11 @@ async def process_slide(slide_id: str, pdf_path: Path):
             return
 
         # ========== 용어집 빌드 (전체 슬라이드 1회) ==========
-        glossary = {}
-        if vlm_available:
+        # 기존 용어집 확인 (PDF Layer에서 이미 빌드했을 수 있음)
+        glossary = slide_glossary.get(slide_id, {})
+        if glossary:
+            print(f"[Slides] {slide_id} 기존 용어집 재사용: {len(glossary)}개")
+        elif vlm_available:
             try:
                 # 강의 제목: 첫 페이지 첫 번째 텍스트 또는 기본값
                 lecture_title = "Lecture"
@@ -1169,7 +1324,8 @@ async def process_slide(slide_id: str, pdf_path: Path):
             return
 
         # VLM 모델 언로드 (GPU 메모리 해제 — ASR과 VRAM 경합 방지)
-        if vlm_available:
+        # 배치 처리 중이면 다음 파일이 VLM을 재사용하므로 마지막 파일까지 언로드 보류
+        if vlm_available and not _skip_vlm_unload:
             print(f"[Slides] VLM 번역 완료, 모델 언로드...")
             await asyncio.to_thread(unload_vlm_model)
 
@@ -1219,12 +1375,13 @@ async def process_slide(slide_id: str, pdf_path: Path):
         slide_status[slide_id]["stage"] = "failed"
         slide_status[slide_id]["error"] = str(e)
         print(f"[Slides] {slide_id} 처리 실패: {e}")
-        # 예외 발생 시에도 VLM 언로드 보장
-        try:
-            from app.services.slide_translation.image_pipeline import unload_vlm_model
-            await asyncio.to_thread(unload_vlm_model)
-        except Exception:
-            pass
+        # 예외 발생 시 VLM 언로드 — 배치 중이면 process_slide_batch finally 에서 처리하므로 여기선 스킵
+        if not _skip_vlm_unload:
+            try:
+                from app.services.slide_translation.image_pipeline import unload_vlm_model
+                await asyncio.to_thread(unload_vlm_model)
+            except Exception:
+                pass
 
 
 def pdf_to_images(pdf_path: Path) -> list[bytes]:
@@ -1247,7 +1404,7 @@ def pdf_to_images(pdf_path: Path) -> list[bytes]:
     return images
 
 
-async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
+async def process_slide_pdf_layer(slide_id: str, pdf_path: Path, _skip_vlm_unload: bool = False):
     """
     PDF 레이어 방식 슬라이드 처리 (Stage 기반 배치 구조)
 
@@ -1257,6 +1414,7 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
     Stage 4: VLM 번역 배치 (VLM 한 번 로드)
     Stage 5: Overlay/rendering (CPU)
     Stage 6: PDF 합성
+    _skip_vlm_unload: 배치 처리 시 True — VLM을 언로드하지 않고 다음 파일에서 재사용
     """
     import fitz
     import re
@@ -1315,6 +1473,39 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
         # 출력 경로
         translated_pdf_path = TRANSLATED_DIR / f"{slide_id}_translated.pdf"
 
+        # ========== 용어집 빌드 (PDF Layer용) ==========
+        glossary = slide_glossary.get(slide_id, {})
+        if not glossary and pdf_layer_pages:
+            try:
+                from app.services.slide_translation.pdf_text_extractor import extract_korean_texts_for_translation
+                from app.services.glossary_builder import GlossaryBuilder
+
+                # PDF에서 한글 텍스트 추출
+                korean_texts_data = extract_korean_texts_for_translation(str(pdf_path))
+
+                if korean_texts_data:
+                    # 텍스트 목록 추출
+                    all_texts = [item.get("text", "") for item in korean_texts_data if item.get("text")]
+
+                    # 강의 제목: 첫 페이지 첫 텍스트
+                    lecture_title = all_texts[0][:50] if all_texts else "Lecture"
+
+                    # Glossary 빌드
+                    print(f"\n[Glossary] PDF Layer 용어집 빌드 시작...")
+                    builder = GlossaryBuilder()
+                    glossary = await asyncio.to_thread(
+                        builder.build_glossary, all_texts, lecture_title
+                    )
+
+                    if glossary:
+                        slide_glossary[slide_id] = glossary
+                        print(f"[Slides] {slide_id} PDF Layer 용어집 생성: {len(glossary)}개 (실시간 NMT 활용)")
+
+            except Exception as e:
+                print(f"[Slides] PDF Layer 용어집 빌드 실패 (무시): {e}")
+                import traceback
+                traceback.print_exc()
+
         # ========== Stage 2: PDF Layer 처리 ==========
         _set_stage(slide_id, "translate", total_pages)
 
@@ -1327,7 +1518,6 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
                 _page_completed(slide_id, current_page)
                 slide_status[slide_id]["processed_pages"] = current_page
 
-            glossary = slide_glossary.get(slide_id, {})
             if glossary:
                 print(f"  용어집 {len(glossary)}개 용어 적용")
 
@@ -1474,8 +1664,9 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
 
                     print(f"  번역 완료: {len(translate_results)}개 페이지")
 
-                    # VLM 언로드
-                    await asyncio.to_thread(unload_vlm_model)
+                    # 배치 처리 중이면 다음 파일이 VLM을 재사용하므로 마지막 파일까지 언로드 보류
+                    if not _skip_vlm_unload:
+                        await asyncio.to_thread(unload_vlm_model)
 
                 except Exception as e:
                     print(f"  VLM 번역 배치 실패: {e}")
@@ -1549,24 +1740,24 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
         print("=" * 60)
         _set_stage(slide_id, "bundling", total_pages)
 
-        # PDF 레이어 페이지 이미지 추출
+        # PDF 레이어 페이지 이미지 추출 (번역된 PDF에서 항상 새로 추출)
         if translated_pdf_path.exists():
             trans_doc = fitz.open(str(translated_pdf_path))
             for i, page in enumerate(trans_doc):
                 if i in pdf_layer_pages:
                     img_path = TRANSLATED_DIR / f"{slide_id}_{i}.png"
-                    if not img_path.exists():
-                        mat = fitz.Matrix(2, 2)
-                        pix = page.get_pixmap(matrix=mat)
-                        pix.save(str(img_path))
+                    # 항상 새로 추출 (기존 PNG가 번역 전 이미지일 수 있음)
+                    mat = fitz.Matrix(2, 2)
+                    pix = page.get_pixmap(matrix=mat)
+                    pix.save(str(img_path))
 
-                        slide_data[slide_id][i] = {
-                            "page_number": i,
-                            "ocr_text": None,
-                            "overlay_items": [],
-                            "has_translation": True,
-                            "method": "pdf_layer",
-                        }
+                    slide_data[slide_id][i] = {
+                        "page_number": i,
+                        "ocr_text": None,
+                        "overlay_items": [],
+                        "has_translation": True,
+                        "method": "pdf_layer",
+                    }
             trans_doc.close()
 
         # 원본 이미지 추출
@@ -1640,6 +1831,26 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path):
         slide_status[slide_id]["status"] = "failed"
         slide_status[slide_id]["stage"] = "failed"
         slide_status[slide_id]["error"] = str(e)
+        # 배치 중이면 process_slide_batch finally 에서 언로드 처리
+        if not _skip_vlm_unload:
+            try:
+                from app.services.slide_translation.image_pipeline import unload_vlm_model
+                await asyncio.to_thread(unload_vlm_model)
+            except Exception:
+                pass
+
+
+async def process_slide_batch(items: list[tuple[str, Path]]):
+    """
+    배치 슬라이드 처리 — 파일들을 순차 처리하되 VLM은 전체 배치에서 한 번만 로드/언로드.
+    items: [(slide_id, pdf_path), ...]
+    """
+    try:
+        for i, (slide_id, pdf_path) in enumerate(items):
+            is_last = (i == len(items) - 1)
+            await process_slide(slide_id, pdf_path, _skip_vlm_unload=not is_last)
+    finally:
+        # 중간 예외/전체 취소 시에도 VLM 언로드 보장 (이미 언로드됐으면 no-op)
         try:
             from app.services.slide_translation.image_pipeline import unload_vlm_model
             await asyncio.to_thread(unload_vlm_model)

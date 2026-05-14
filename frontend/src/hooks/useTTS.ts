@@ -93,6 +93,11 @@ async function prefetchVoice(voice: string): Promise<void> {
 export type TTSMode   = 'piper' | null
 export type TTSStatus = 'idle' | 'loading' | 'ready' | 'error'
 
+// TTS 재생 배속 — 1.2x. wall-clock delay 단축 목적으로 영어 TTS 음성을 약간 빠르게 재생.
+// 1.2배는 청취 부담 없는 상한 (그 이상은 비영어권 학습자에게 부담). pitch 가 1.2배 살짝
+// 올라가지만 거의 인지 안 됨. AudioBufferSourceNode 는 preservesPitch 미지원이라 감수.
+const TTS_PLAYBACK_RATE = 1.2
+
 // TranslationLang → Piper voice ID (https://huggingface.co/rhasspy/piper-voices)
 // ko, both 등 미지원 언어는 영어로 fallback. off만 명시적 끄기.
 const VOICE_MAP: Partial<Record<TranslationLang, string>> = {
@@ -370,6 +375,21 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
     }
   }, [enabled])
 
+  // Mid-play suspend watchdog — visibility/focus 이벤트만으로는 못 잡는
+  // "탭 활성 상태 + GainNode 가 long-mute (audioLang='original') → Chrome 이
+  // silent ctx 를 자동 suspend" 패턴 대응. 2초 주기, ctx.suspended 면 resume.
+  // (TTS audio 는 ctx.currentTime 기반 source.start(t) 라 ctx 가 suspend 된
+  //  상태로 다음 sentence schedule 되면 resume 까지 모두 대기 → desync.)
+  useEffect(() => {
+    if (!enabled) return
+    const id = window.setInterval(() => {
+      const ctx = audioCtxRef.current
+      if (!ctx || ctx.state !== 'suspended') return
+      ctx.resume().catch(() => { /* 다음 tick 재시도 */ })
+    }, 2000)
+    return () => window.clearInterval(id)
+  }, [enabled])
+
   // 컴포넌트 언마운트 시 AudioContext 완전 정리 — 페이지 재진입 시 누수 방지
   useEffect(() => {
     return () => {
@@ -422,8 +442,13 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
     const gain = gainRef.current
     const ctx = audioCtxRef.current
     if (gain && ctx) {
+      // ctx 가 suspended 상태에서 unmute 하면 ramp 값이 스케줄만 되고 실제 출력 안 됨.
+      //   → '원본' 모드로 오래 머무는 동안 ctx 가 자동 suspend 됐을 가능성 (탭 백그라운드 등).
+      //   → '영어' 토글 시 즉시 resume — playSentence 의 resume check 만 의지하지 않음.
+      if (ctx.state === 'suspended' && !muted) {
+        ctx.resume().catch((err) => console.warn('[TTS] setVolume resume 실패:', err))
+      }
       // 10ms 선형 ramp — 'en' ↔ 'original' 토글 시 sample boundary 클릭 방지 + 즉시 느낌.
-      // 이전엔 .gain.value = v 로 instant 였으나 mid-sentence 토글 시 짧은 click 발생 위험.
       const now = ctx.currentTime
       gain.gain.cancelScheduledValues(now)
       gain.gain.setValueAtTime(gain.gain.value, now)
@@ -476,13 +501,16 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
     const sourceGain = ctx.createGain()
     sourceGain.gain.value = 1
     source.buffer = audioBuffer
+    // 1.2배속 재생 — 실제 재생 시간 = buffer.duration / 1.2. endTime / durationMs 도 동일 반영.
+    source.playbackRate.value = TTS_PLAYBACK_RATE
     source.connect(sourceGain)
     sourceGain.connect(gainRef.current ?? ctx.destination)
     source.start(startCtxTime)
 
     const ttsMs = Math.max(0, Math.round(performance.now() - requestedAt))
 
-    const newTask: CurrentTask = { source, gain: sourceGain, endTime: startCtxTime + audioBuffer.duration }
+    const playbackDurationSec = audioBuffer.duration / TTS_PLAYBACK_RATE
+    const newTask: CurrentTask = { source, gain: sourceGain, endTime: startCtxTime + playbackDurationSec }
     currentTaskRef.current = newTask
 
     const ended = new Promise<void>((resolve) => {
@@ -502,7 +530,7 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
       }
     })
 
-    return { audioStartedAt, durationMs: audioBuffer.duration * 1000, ended, ttsMs }
+    return { audioStartedAt, durationMs: playbackDurationSec * 1000, ended, ttsMs }
   }, [])
 
   return { status, loadingProgress, error, mode, playSentence, unlockAudio, setVolume }

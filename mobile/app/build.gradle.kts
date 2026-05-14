@@ -19,8 +19,12 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // WebView URL 설정
-        buildConfigField("String", "BASE_URL", "\"http://192.168.100.99:3000\"")
+        // WebView 가 붙을 강사 PC 주소. gradle.properties (또는 ~/.gradle/gradle.properties,
+        // -PappBaseHost=... -PappBasePort=... CLI) 로 오버라이드. 개인 IP 를 build.gradle 에
+        // 박지 말 것 — 팀원마다 LAN IP 다르고 강의실마다 또 다름.
+        val appBaseHost = (project.findProperty("appBaseHost") as String?) ?: "10.0.2.2"
+        val appBasePort = (project.findProperty("appBasePort") as String?) ?: "43000"
+        buildConfigField("String", "BASE_URL", "\"http://$appBaseHost:$appBasePort\"")
     }
 
     buildTypes {

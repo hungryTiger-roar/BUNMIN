@@ -85,37 +85,45 @@ SlideUpload                           process_slide() 백그라운드 태스크
 
 ### 3.2 통합 잔여 시간 계산 — `_unified_remaining()`
 
-핵심 아이디어: **현재 단계만 보지 말고 후속 단계까지 합산해서 ETA 한 줄로 통합**.
+핵심 아이디어 2가지:
+1. **현재 단계만 보지 말고 후속 단계까지 합산해서 ETA 한 줄로 통합**
+2. **현재 페이지 elapsed 가 baseline 을 초과해도 (overrun) ETA 가 음수로 진입해 wall-clock 흐름이 그대로 반영됨** → 매초 1초씩 자연 감소, 페이지 완료 시 다음 페이지로 자연 이어짐
 
 ```python
 _BASELINE_SECONDS_PER_PAGE = {
-    "ocr": 15.0,       # Surya OCR 한 장 처리 추정치 — 실측보다 약간 여유롭게
-    "translate": 50.0, # Qwen2.5-VL 4bit GPU 한 장 번역 추정치 — 실측보다 여유롭게 잡아 ETA 조기 0 방지
+    "ocr": 15.0,       # Surya OCR 한 장 처리 추정치 — 첫 실행 시 fallback
+    "translate": 50.0, # Qwen2.5-VL 4bit GPU 한 장 번역 추정치 — 첫 실행 시 fallback
 }
 _BUNDLING_BASELINE = 3.0  # PDF 묶기 짧은 고정값
 
+
 def _unified_remaining(stage: str, total: int, current: int, avg: float, elapsed_on_current: float) -> Optional[float]:
     """현재 단계 + 후속 단계의 남은 작업 시간 합산.
-    elapsed_on_current: 현재 처리 중인 페이지에서 이미 흐른 시간 — 남은 시간에서 차감해 매 폴링마다 자연스럽게 줄어듦."""
+
+    현재 페이지의 elapsed 를 음수까지 허용해 wall-clock 흐름이 ETA 에 그대로 반영되게 함.
+    → 매초 ETA 가 약 1초씩 감소 (시간 흐름이 카운트다운으로 시각화됨).
+    → 페이지가 baseline 을 초과해도 ETA 가 계속 줄어 0 까지 수렴 (stuck 인지 UX 로 감지 가능).
+    → max(0, ...) 로 음수 출력 방지."""
     pages_remaining = max(0, total - current)
 
-    def _in_progress(per_page: float) -> float:
-        return max(0.0, per_page - elapsed_on_current)
+    def _in_progress_overrun(per_page: float) -> float:
+        """현재 페이지 남은 시간 — overrun 허용 (음수 가능). 새 페이지 시작 시 reset."""
+        return per_page - elapsed_on_current
 
     if stage == "ocr":
-        per_page = avg if avg > 0 else _BASELINE_SECONDS_PER_PAGE["ocr"]
-        ocr_remaining = (_in_progress(per_page) + per_page * (pages_remaining - 1)) if pages_remaining > 0 else 0.0
-        translate_remaining = _BASELINE_SECONDS_PER_PAGE["translate"] * total  # 아직 시작 안 한 단계
-        return ocr_remaining + translate_remaining + _BUNDLING_BASELINE
+        per_page = avg if avg > 0 else _baseline_for("ocr")
+        ocr_remaining = (_in_progress_overrun(per_page) + per_page * (pages_remaining - 1)) if pages_remaining > 0 else 0.0
+        translate_remaining = _baseline_for("translate") * total  # 아직 시작 안 한 단계
+        return max(0.0, ocr_remaining + translate_remaining + _BUNDLING_BASELINE)
 
     if stage == "translate":
-        per_page = avg if avg > 0 else _BASELINE_SECONDS_PER_PAGE["translate"]
+        per_page = avg if avg > 0 else _baseline_for("translate")
         if pages_remaining > 0:
-            translate_remaining = _in_progress(per_page) + per_page * (pages_remaining - 1)
+            translate_remaining = _in_progress_overrun(per_page) + per_page * (pages_remaining - 1)
         else:
             translate_remaining = 0.0
         # bundling baseline은 더하지 않음 — 번역 완료 직전 ETA가 3초로 점프하는 혼란 방지
-        return translate_remaining
+        return max(0.0, translate_remaining)
 
     if stage == "bundling":
         return max(0.0, _BUNDLING_BASELINE - elapsed_on_current)
@@ -126,7 +134,53 @@ def _unified_remaining(stage: str, total: int, current: int, avg: float, elapsed
 OCR 단계에서는 OCR 잔여 + 번역 전체 baseline 모두 포함하므로,
 **OCR이 끝나도 ETA가 0으로 떨어지지 않고 매끄럽게 번역 단계로 이어집니다.**
 
-`elapsed_on_current` 덕분에 anchor 캐싱 없이도 매 폴링 응답 시점에 즉시 계산하면서 부드럽게 감소합니다.
+페이지가 baseline 50초인데 실측 200초가 되면 `_in_progress_overrun` 이 `-150` 을 반환 → 남은 페이지들 baseline 합과 더해져서 전체 ETA 가 자연스럽게 줄어들고 0 으로 수렴. 페이지가 실제 끝나면 stage_current 가 +1 되어 ETA 재계산 (다음 페이지 기준).
+
+### 3.2.1 학습 baseline 영속화 — `_baseline_for()` / `_save_learned_baseline()`
+
+이전 강의 세션의 페이지 평균을 디스크에 저장 → 다음 세션 첫 페이지 추정에 활용.
+
+```python
+# 캐시 파일 경로 (운영 vs dev 자동 분기)
+if getattr(sys, "frozen", False):
+    # 운영 (Electron 패키지된 PyInstaller 백엔드)
+    _ETA_CACHE_PATH = Path(_LOCALAPPDATA or str(Path.home())) / "Aunion AI" / "cache" / "eta_learned.json"
+else:
+    # dev
+    _ETA_CACHE_PATH = Path(__file__).resolve().parent.parent.parent / "cache" / "eta_learned.json"
+
+# 합리적 범위 — 이상치 (GPU 일시 stuck 등) 저장 차단
+_SANITY_RANGE = {"ocr": (2.0, 60.0), "translate": (5.0, 300.0)}
+
+_LEARNED_BASELINES = _load_learned_baselines()  # 모듈 import 시점 1회 로드
+
+
+def _baseline_for(stage: str) -> float:
+    """학습된 값 우선, 없으면 하드코딩 baseline 폴백."""
+    if stage in _LEARNED_BASELINES:
+        return _LEARNED_BASELINES[stage]
+    return _BASELINE_SECONDS_PER_PAGE.get(stage, 30.0)
+
+
+def _save_learned_baseline(stage: str, avg: float) -> None:
+    """페이지 완료 시 호출. 합리적 범위만 저장 (이상치 필터)."""
+    if avg <= 0:
+        return
+    lo, hi = _SANITY_RANGE.get(stage, (0.0, 600.0))
+    if not (lo <= avg <= hi):
+        return  # 이상치 — 저장 안 함
+    _LEARNED_BASELINES[stage] = avg
+    _ETA_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(_ETA_CACHE_PATH, "w", encoding="utf-8") as f:
+        json.dump(_LEARNED_BASELINES, f, indent=2)
+```
+
+| 시나리오 | 동작 |
+|---------|------|
+| 첫 강의 (캐시 파일 없음) | 하드코딩 baseline 50초 사용 |
+| 첫 강의 끝 | 실측 평균 (예: 35초) 가 `eta_learned.json` 에 저장 |
+| 두 번째 강의 첫 페이지 | 35초 추정 (실측 기반, 첫 페이지부터 정확) |
+| GPU 일시 stuck 등 이상치 (>300초) | 저장 안 함 → 이전 정상값 유지 |
 
 ### 3.3 단계 전환 — `_set_stage()`
 
@@ -154,18 +208,22 @@ def _page_completed(slide_id, current):
 
     prev = s["avg_page_duration"]
     if prev == 0.0:
-        # 첫 페이지: baseline과 실측치를 5:5 블렌딩
-        baseline = _BASELINE_SECONDS_PER_PAGE.get(stage, duration)
+        # 첫 페이지: 학습된 baseline (이전 세션) 또는 하드코딩 baseline 과 실측치 5:5 블렌딩
+        baseline = _baseline_for(stage) if stage in ("ocr", "translate") else duration
         s["avg_page_duration"] = 0.5 * baseline + 0.5 * duration
     else:
         # 두 번째부터: 느린 EMA (alpha=0.25)
         s["avg_page_duration"] = 0.75 * prev + 0.25 * duration
+
+    # 페이지 완료 시점에 학습 평균을 디스크에 저장 → 다음 세션 첫 페이지 추정 정확도 ↑.
+    _save_learned_baseline(stage, s["avg_page_duration"])
 ```
 
-두 가지 점프 완화 장치:
+세 가지 점프 완화 장치:
 
 1. **첫 페이지 블렌딩**: baseline이 50초인데 실측이 100초여도 평균은 75초로 시작 → 후속 추정 점프 절반
 2. **느린 EMA(α=0.25)**: 페이지마다 변동이 커도 평균은 천천히 따라감 → 페이지 간 점프 작음
+3. **학습 baseline 영속화**: 이전 세션 평균이 baseline 으로 들어와 다음 세션 첫 페이지부터 더 정확
 
 ### 3.5 `/slides/status` 응답에서 ETA 계산 — `_compute_eta_seconds()`
 
@@ -196,7 +254,7 @@ async def get_status(slide_id):
     return SlideStatus(..., eta_seconds=eta_seconds)
 ```
 
-anchor를 캐싱하지 않으므로 **현재 페이지가 baseline을 초과해도 ETA가 자연스럽게 0까지 내려갑니다.**
+anchor를 캐싱하지 않고 `_in_progress_overrun` 이 음수까지 허용하므로 **현재 페이지가 baseline을 초과해도 ETA가 매초 자연스럽게 1초씩 감소하다가 0까지 수렴합니다.** stuck 상태에서도 사용자가 "곧 끝남" 메시지를 보고 비정상 인지 가능.
 
 ---
 
@@ -286,17 +344,19 @@ baseline 기준값과 실측치 차이가 클 때를 가정:
 
 ## 6. 알려진 한계
 
-1. **첫 페이지에서 한 번 큰 점프 불가피**
+1. **첫 페이지에서 한 번 점프 가능 (완화됨)**
    - 정의상 첫 페이지가 끝나기 전엔 실측치가 없음
-   - baseline 5:5 블렌딩으로 점프 크기를 절반으로 줄였지만 0은 아님
+   - baseline 5:5 블렌딩 + 학습 baseline 영속화 (`eta_learned.json`) 로 완화
+   - 첫 강의 시에만 점프 발생, 두 번째 강의부턴 머신 실측 기반 → 점프 거의 없음
 2. **페이지간 편차가 매우 크면 점프 잦음**
    - 어떤 슬라이드는 텍스트가 거의 없고 어떤 슬라이드는 빽빽한 경우
    - EMA가 천천히 따라가지만 매번 새 측정치가 변동을 만듦
 3. **PDF 묶기 단계는 추정 안 함**
    - `_BUNDLING_BASELINE = 3.0` 으로 짧게 고정
    - 페이지 수가 많거나 이미지가 큰 PDF는 실제로 더 걸릴 수 있음
-4. **Baseline은 하드웨어 / 모델에 따라 다름**
-   - 4bit GPU 환경 기준이라 다른 환경(8bit, CPU)에선 부정확
+4. ~~Baseline은 하드웨어 / 모델에 따라 다름~~ → **해결됨**
+   - 학습 baseline 영속화로 머신마다 자체 학습 → 4bit/8bit/CPU 환경 무관하게 적응
+   - 단 첫 세션은 하드코딩 baseline (50/15) 사용
 
 ---
 

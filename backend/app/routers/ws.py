@@ -1010,6 +1010,19 @@ async def process_audio(message: dict):
         speech_start_slide_id = manager.current_slide_id
         speech_start_page = manager.current_page
 
+        # ASR 어휘 힌트 — 현재 슬라이드 용어집의 한국어 키 + 강의 제목을 Whisper hotwords 로
+        # 넘겨 도메인 단어를 더 정확히 받아쓰게 함. 용어집 없으면 빈 리스트 → 기존 동작과 동일.
+        # (asr_service 가 길이/개수 상한으로 다시 정제 — 여기선 모아서 넘기기만.)
+        asr_hint_terms: list = []
+        try:
+            if manager.lecture_title:
+                asr_hint_terms.append(manager.lecture_title)
+            if speech_start_slide_id:
+                from app.routers.slides import get_slide_glossary
+                asr_hint_terms.extend(get_slide_glossary(speech_start_slide_id).keys())
+        except Exception:
+            asr_hint_terms = []
+
         # ASR 큐 포화 방지: 이미 충분한 발화가 대기 중이면 신규 발화 스킵.
         # 동시에 강사에게 알림 — 발화가 시스템에 도달 못 했음을 알려 다시 말할 기회.
         if _queued_audio_count >= _MAX_QUEUED_AUDIO:
@@ -1040,7 +1053,7 @@ async def process_audio(message: dict):
 
             t_asr = time.perf_counter()
             korean_text, asr_words = await asyncio.to_thread(
-                _asr_service.transcribe_with_words, audio_bytes
+                _asr_service.transcribe_with_words, audio_bytes, "ko", asr_hint_terms
             )
             t_asr_done = time.perf_counter()
 
@@ -1084,6 +1097,9 @@ async def process_audio(message: dict):
                 boundary = "paused" if manager.is_paused else "not started"
                 print(f"[SKIP/BOUNDARY seq={seq}.{sub_seq}] {boundary} — 한: {sentence!r}", flush=True)
                 return
+            # sub-sentence 별 정확한 시간 — 단어별 timestamp 매핑 결과. 매핑 실패
+            # (whisper word 누락 / chunk_speech_start_wall null) 시 chunk 전체 시간으로 fallback.
+            sub_speech_start_wall, sub_sent_at = sub_timings[sub_seq] if sub_seq < len(sub_timings) else (speech_start_wall, sent_at)
             t_nmt_call = time.perf_counter()
             async with _nmt_semaphore:
                 english = await asyncio.to_thread(
@@ -1114,10 +1130,7 @@ async def process_audio(message: dict):
             # TTS는 수강자 브라우저(WASM)에서 처리 — audio 필드 없이 텍스트만 전송
             # asrMs / nmtMs: 서버 단일 시계로 측정한 처리 시간 (시계 동기화 무관).
             # frontend 가 ttsMs / 전체 latency 와 합쳐 단계별 표시.
-            # sub-sentence 별 정확한 시간 — 단어별 timestamp 매핑 결과. 매핑 실패
-            # (whisper word 누락 / chunk_speech_start_wall null) 시 chunk 전체 시간으로
-            # fallback 되어 기존 동작과 동일.
-            sub_speech_start_wall, sub_sent_at = sub_timings[sub_seq] if sub_seq < len(sub_timings) else (speech_start_wall, sent_at)
+            # (sub_speech_start_wall / sub_sent_at 은 위에서 sub_timings 로 이미 추출.)
             payload = {
                 "type": "transcription",
                 "seq": seq,

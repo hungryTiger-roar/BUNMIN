@@ -46,8 +46,12 @@ const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
   { value: 'ru', label: '러시아어 (Русский)' },
 ]
 
-// 음성 옵션 — 강의실에서 한국어는 직접 들리므로 제외
-const AUDIO_LANG_OPTIONS = LANG_OPTIONS.filter((o) => o.value !== 'ko')
+// 음성 옵션 — 강의실에서 한국어는 직접 들리므로 제외.
+// 'original' 은 강의자 원본 목소리 (WebRTC), 그 외는 TTS 음성.
+const AUDIO_LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
+  { value: 'original', label: '원본 (Original)' },
+  ...LANG_OPTIONS.filter((o) => o.value !== 'ko'),
+]
 
 export default function Start() {
   const navigate = useNavigate()
@@ -66,7 +70,8 @@ export default function Start() {
   const [error, setError] = useState('')
 
   const t = TEXT[lang]
-  const audioNeedsFallback = !TTS_SUPPORTED.includes(audioLang)
+  // 'original' 은 강의자 원본 음성을 직접 재생 (TTS 미사용) → 폴백 안내 대상 아님.
+  const audioNeedsFallback = audioLang !== 'original' && !TTS_SUPPORTED.includes(audioLang)
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY)
@@ -78,6 +83,15 @@ export default function Start() {
     if (!AUDIO_LANG_OPTIONS.some((o) => o.value === audioLang)) setAudioLang('en')
     if (!LANG_OPTIONS.some((o) => o.value === subtitleLang)) setSubtitleLang('en')
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Student 페이지는 무거운 청크(piper-tts-web / onnxruntime-web)라 lazy 로 분리돼 있다.
+  // 이름 입력 화면에 머무는 동안 idle 시점에 미리 받아두면 '강의 참여' 클릭 시 체감 지연 0.
+  useEffect(() => {
+    const prefetch = () => { void import('./Student') }
+    const ric = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback
+    if (ric) ric(prefetch)
+    else { const id = window.setTimeout(prefetch, 1500); return () => window.clearTimeout(id) }
   }, [])
 
   const handleSubmit = (e: React.FormEvent) => {

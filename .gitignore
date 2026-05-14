@@ -98,3 +98,13 @@ backend/app/services/models/
 # 로컬 데이터셋
 datasets/
 backend/app/services/slide_translation/glossaries/*.json
+
+# 임시 파일 (커밋 메시지 작성용 등)
+*.tmp
+
+# 로컬 설명용 HTML 문서 — 저장소에 안 올림 (프로젝트 문서는 docs/*.md)
+docs/*.html
+
+# onnxruntime-web 런타임 WASM — npm run setup 이 node_modules 에서 복사 (산출물, ~40MB)
+frontend/public/ort-wasm-simd-threaded.jsep.*
+frontend/public/ort-wasm-simd-threaded.jspi.*
