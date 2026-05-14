@@ -65,6 +65,8 @@ import yaml
 from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 
+from .term_corrections import get_terms_in_text
+
 import sys as _sys_init
 _BASE_DIR = Path(_sys_init.executable).parent if getattr(_sys_init, 'frozen', False) else Path(__file__).parent.parent.parent.parent.parent
 
@@ -226,8 +228,9 @@ def select_glossary_items(
     VLM 프롬프트에 포함할 용어집 항목 선택
 
     선택 전략 (우선순위):
-    1. 현재 페이지 텍스트에 실제로 등장하는 용어 (context_texts 제공 시)
-    2. 나머지는 원래 순서대로 (빌드 시 빈도/중요도 순 정렬됨)
+    1. CSV 용어집에서 현재 페이지에 등장하는 용어 (최우선)
+    2. 입력 glossary에서 현재 페이지에 등장하는 용어
+    3. 나머지는 원래 순서대로 (빌드 시 빈도/중요도 순 정렬됨)
 
     Args:
         glossary: {한글: 영어} 용어집
@@ -237,11 +240,22 @@ def select_glossary_items(
     Returns:
         [(한글, 영어), ...] 선택된 항목 리스트
     """
-    if not glossary:
+    max_items = max_items or MAX_GLOSSARY_ITEMS
+
+    # CSV 용어집에서 현재 페이지에 등장하는 용어 추출
+    csv_terms = {}
+    if context_texts:
+        all_text = " ".join(context_texts)
+        csv_terms = get_terms_in_text(all_text)
+
+    # 입력 glossary와 CSV 용어 병합 (CSV가 우선)
+    merged = dict(glossary) if glossary else {}
+    merged.update(csv_terms)  # CSV 용어가 덮어씀
+
+    if not merged:
         return []
 
-    max_items = max_items or MAX_GLOSSARY_ITEMS
-    items = list(glossary.items())
+    items = list(merged.items())
 
     if len(items) <= max_items:
         return items

@@ -121,14 +121,6 @@ from .noise_classification import (
     get_classification_stats,
 )
 from .candidate_extraction import extract_document_candidates, save_candidates
-from .glossary_classification import (
-    classify_candidates_with_gpt,
-    build_glossary_from_gpt_results,
-    merge_with_existing_glossary,
-    extract_review_items,
-    save_glossary,
-    save_review_csv,
-)
 from .region_classification import classify_all_regions, save_classified_regions, classify_page_type
 from .reading_order import sort_regions_reading_order, estimate_page_layout, save_sorted_regions
 from .block_building import build_translation_blocks, save_blocks

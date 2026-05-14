@@ -1,0 +1,73 @@
+korean,english
+# ===== 경제학 용어 =====
+희소성,Scarcity
+기회비용,Opportunity cost
+한계비용,Marginal cost
+한계효용,Marginal utility
+한계이익,Marginal benefit
+한계가치,Marginal value
+한계율,Marginal rate
+수요,Demand
+공급,Supply
+균형가격,Equilibrium price
+균형수량,Equilibrium quantity
+균형,Equilibrium
+탄력성,Elasticity
+외부효과,Externality
+공공재,Public goods
+시장 실패,Market failure
+독점,Monopoly
+과점,Oligopoly
+완전 경쟁,Perfect competition
+거시경제,Macroeconomics
+미시경제,Microeconomics
+통화 정책,Monetary policy
+재정 정책,Fiscal policy
+형평성,Equity
+합리적인,Rational
+합리적,Rational
+경제적 유인,Economic incentives
+유인 구조,Incentive structure
+유인 체계,Incentive system
+유인,Incentive
+# ===== 자연어처리/AI 용어 =====
+자연어처리,Natural Language Processing
+기계번역,Machine Translation
+형태소 분석,Morphological Analysis
+구문 분석,Syntactic Analysis
+의미 분석,Semantic Analysis
+담화 분석,Discourse Analysis
+개체명 인식,Named Entity Recognition
+감성 분석,Sentiment Analysis
+텍스트 마이닝,Text Mining
+임베딩,Embedding
+어텐션,Attention
+트랜스포머,Transformer
+# ===== 운영체제 용어 =====
+프로세스,Process
+스레드,Thread
+교착상태,Deadlock
+동기화,Synchronization
+가상메모리,Virtual Memory
+페이지 교체,Page Replacement
+문맥 교환,Context Switch
+스케줄링,Scheduling
+세마포어,Semaphore
+뮤텍스,Mutex
+# ===== 프로그래밍 용어 =====
+재귀,Recursion
+자료구조,Data Structure
+알고리즘,Algorithm
+객체지향,Object-Oriented
+상속,Inheritance
+다형성,Polymorphism
+캡슐화,Encapsulation
+추상화,Abstraction
+인터페이스,Interface
+# ===== 일반 학술 용어 =====
+가설,Hypothesis
+변수,Variable
+상관관계,Correlation
+인과관계,Causation
+표본,Sample
+모집단,Population

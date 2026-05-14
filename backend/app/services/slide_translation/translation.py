@@ -18,6 +18,8 @@ Block Translation
 import re
 from typing import Optional
 
+from .term_corrections import get_terms_in_text
+
 
 def build_translation_prompt(
     blocks: list[dict],
@@ -91,8 +93,21 @@ def build_translation_prompt(
 
     prompt_parts.append("")
 
-    # Glossary 섹션
+    # Glossary 섹션: JSON glossary + CSV term corrections
     mandatory_glossary = _extract_mandatory_glossary(glossary)
+
+    # CSV 용어집에서 블록 텍스트에 등장하는 용어 추출
+    all_source_text = " ".join(
+        block.get("source_text", "") for block in blocks
+    )
+    csv_terms = get_terms_in_text(all_source_text)
+
+    # CSV 용어를 mandatory glossary에 병합 (CSV가 우선)
+    if csv_terms:
+        if "terms" not in mandatory_glossary:
+            mandatory_glossary["terms"] = {}
+        mandatory_glossary["terms"].update(csv_terms)
+
     if mandatory_glossary:
         prompt_parts.append("## MANDATORY Glossary (must use these translations):")
         for section, items in mandatory_glossary.items():

@@ -36,6 +36,7 @@ from .pdf_text_extractor import (
 from .pdf_text_replacer import replace_texts_in_pdf
 from .llm_client import get_default_llm_client, BaseLLMClient
 from .bbox_analyzer import analyze_page_layout
+from .term_corrections import get_terms_in_text
 
 logger = logging.getLogger(__name__)
 
@@ -454,18 +455,25 @@ class PDFLayerPipeline:
             "This is for slide/PDF layout replacement, so translations must be concise and fit the original text boxes.",
         ]
 
-        if self.glossary:
+        # CSV 용어집에서 현재 텍스트에 등장하는 용어 추출
+        all_text = " ".join(item.get("text_for_translation", item["text"]) for item in items)
+        csv_terms = get_terms_in_text(all_text)
+
+        # 입력 glossary와 CSV 용어 병합 (CSV가 우선)
+        merged_glossary = dict(self.glossary) if self.glossary else {}
+        merged_glossary.update(csv_terms)
+
+        if merged_glossary:
             prompt_parts.append("")
             prompt_parts.append("=== MANDATORY TERMINOLOGY ===")
             prompt_parts.append("Use these exact terms when the Korean source term appears with the same meaning.")
-            for ko, en in self.glossary.items():
+            for ko, en in merged_glossary.items():
                 prompt_parts.append(f"  {ko} = {en}")
             prompt_parts.append("=== END TERMINOLOGY ===")
 
         from collections import Counter
         import re
 
-        all_text = " ".join(item.get("text_for_translation", item["text"]) for item in items)
         korean_words = re.findall(r'[가-힣]{2,}', all_text)
         word_counts = Counter(korean_words)
         repeated_words = [word for word, count in word_counts.items() if count >= 2]
