@@ -64,9 +64,9 @@ let tray = null
 let isQuitting = false
 
 const isDev = process.env.NODE_ENV === 'development'
-const BACKEND_PORT = 8000
-const HEALTH_PORT = 18765   // GIL 독립 전용 health 서버 포트
-const FRONTEND_PORT = 3000
+const BACKEND_PORT = 48000   // 표준 8000 충돌 회피 (Django/Flask/python http.server)
+const HEALTH_PORT = 18765    // GIL 독립 전용 health 서버 포트 (희귀 포트로 안전)
+const FRONTEND_PORT = 43000  // Vite dev 포트 — 표준 3000 충돌 회피 (React/Node 흔한 포트)
 
 // dev 모드에서 concurrently 터미널에 라이프사이클 추적 로그 출력
 function devLog(msg) {
@@ -219,6 +219,41 @@ function startBackend() {
   })
 }
 
+// ─── 로컬 TURN 서버 (운영 모드 전용) ───────────────────────────────
+// dev 모드는 `npm run dev` 의 concurrently 가 `node turn-server/index.js` 로 별도 실행.
+// 운영 .exe 에선 concurrently 가 없으므로 main 프로세스 안에서 직접 띄움.
+// SSAFY 같은 P2P 차단 환경에서 WebRTC 원본 음성을 relay 로 우회.
+function startTurnServer() {
+  if (isDev) {
+    devLog('TURN: dev 모드 — concurrently 가 별도 실행, main 에선 스킵')
+    return
+  }
+  try {
+    const Turn = require('node-turn')
+    const lanIp = getLanIp()  // 위에서 정의된 LAN IP 자동 탐색
+    // externalIps: TURN 이 advertise 할 relay 주소. 클라이언트가 127.0.0.1 로 붙어도
+    // 다른 머신에서 도달 가능한 LAN IP 로 candidate 가 생성되도록.
+    // 포트 47878: TURN 표준 3478 은 Teams/Zoom 등이 자주 점유 → 충돌 회피용 임의 포트.
+    // 49152 미만 영역이지만 IANA 등록 서비스 없음. 프론트(Lecturer/Student iceServers)도 동일 변경 필수.
+    const turnServer = new Turn({
+      listeningPort: 47878,
+      listeningIps: ['0.0.0.0'],
+      externalIps: lanIp,
+      authMech: 'long-term',
+      credentials: { aunion: 'aunion-secret' },
+      realm: 'aunion.local',
+      debugLevel: 'INFO',
+    })
+    turnServer.start()
+    appendLog(`[TURN] 0.0.0.0:47878 listening, externalIps=${lanIp}`)
+    devLog(`TURN 서버 시작: 0.0.0.0:47878 (externalIps=${lanIp})`)
+  } catch (err) {
+    appendLog(`[TURN] 시작 실패: ${err && err.message ? err.message : err}`)
+    console.error('[TURN] 시작 실패:', err)
+    // TURN 실패해도 앱은 계속 — P2P 가능 환경에선 동작 가능, 아니면 ICE failed 로그
+  }
+}
+
 // ─── 백엔드 준비 대기 ────────────────────────────────────────────
 // stdout의 __AUNION_STATUS__ status:"ok" 가 PRIMARY 신호.
 // health 폴링은 BACKUP — GIL로 막힐 수 있지만 혹시 응답하면 활용.
@@ -303,7 +338,7 @@ function waitForBackend(callback, maxAttempts = 1800) {
 
 // ─── 백엔드 HTTP 서버 빠른 헬스 체크 ─────────────────────────────────
 // waitForBackend는 모델 로딩 완료까지 기다리지만, 이 함수는 HTTP 서버 응답만 확인.
-// 프로덕션 모드에서 frontend를 file:// 대신 http://127.0.0.1:8000으로 로드하기 위함.
+// 프로덕션 모드에서 frontend를 file:// 대신 http://127.0.0.1:48000 으로 로드하기 위함.
 // (Chromium은 file://을 secure context로 안 봐서 getUserMedia 차단됨 — http://localhost는 통과.)
 function waitForHealth(callback, maxAttempts = 60) {
   let attempts = 0
@@ -498,6 +533,26 @@ function createWindow() {
     }
   })
 
+  // window.open(url, '_blank') 처리 — 프론트의 슬라이드 다운로드 등이 이걸 부름.
+  // 기본 동작은 새 BrowserWindow 생성 (흰 창) → 메인 창 가리고 입력 차단됨.
+  // 다운로드 URL: webContents.downloadURL 로 Chrome 다운로드 매니저 식 처리.
+  // 그 외 외부 URL: shell.openExternal 로 시스템 기본 브라우저로 위임.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      if (url.includes('/slides/download/') || url.includes('/transcripts/')) {
+        // 우리 백엔드의 파일 다운로드 — Electron 의 다운로드 매니저로 처리
+        mainWindow.webContents.downloadURL(url)
+      } else if (url.startsWith('http://') || url.startsWith('https://')) {
+        // 외부 링크 — 기본 브라우저로 열어줌
+        const { shell } = require('electron')
+        shell.openExternal(url)
+      }
+    } catch (err) {
+      console.error('[main] setWindowOpenHandler 처리 실패:', err)
+    }
+    return { action: 'deny' }  // 새 BrowserWindow 생성 차단 (흰 창 방지)
+  })
+
   mainWindow.webContents.on('did-finish-load', () => {
     devLog('renderer did-finish-load')
   })
@@ -506,6 +561,19 @@ function createWindow() {
   })
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
     devLog(`renderer crashed: ${JSON.stringify(details)}`)
+  })
+
+  // DevTools 단축키 — Ctrl+Shift+I, F12. 운영판에서도 마이크/WS 에러 추적 가능하게.
+  // 메뉴바는 setApplicationMenu(null) 로 숨긴 상태 유지.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown') return
+    const isDevToolsCombo =
+      (input.control && input.shift && input.key.toLowerCase() === 'i') ||
+      input.key === 'F12'
+    if (isDevToolsCombo) {
+      mainWindow.webContents.toggleDevTools()
+      event.preventDefault()
+    }
   })
 
   mainWindow.once('ready-to-show', () => {
@@ -579,13 +647,13 @@ app.on('second-instance', (_event, commandLine) => {
 })
 
 app.whenReady().then(() => {
-  devLog('app.whenReady → createWindow + createTray + startBackend')
+  devLog('app.whenReady → createWindow + createTray + startBackend + startTurnServer')
   // 기본 Electron 메뉴바 제거 (File/Edit/View/Window/Help). 모든 BrowserWindow 에 적용.
-  // dev devtools 는 createWindow 에서 openDevTools 로 직접 열고 있어 단축키 없어도 무방.
   Menu.setApplicationMenu(null)
   createWindow()
   createTray()
   startBackend()
+  startTurnServer()  // 운영 모드에서만 실제 시작 (dev 는 concurrently 가 별도 실행)
 
   ipcMain.handle('get-lan-ip', () => getLanIp())
   ipcMain.handle('get-backend-state', () => {

@@ -5,7 +5,8 @@ import topLevelAwait from 'vite-plugin-top-level-await'
 import path from 'path'
 import fs from 'fs'
 
-const backendUrl = process.env.BACKEND_URL || 'http://localhost:8000'
+// Vite proxy target 은 Node.js 가 fetch — Node 17+ 가 'localhost' 를 IPv6 우선 해석해 uvicorn(IPv4)에 ECONNREFUSED.
+const backendUrl = process.env.BACKEND_URL || 'http://127.0.0.1:48000'
 const backendWsUrl = backendUrl.replace(/^http/, 'ws')
 
 export default defineConfig({
@@ -51,7 +52,7 @@ export default defineConfig({
     exclude: ['@ricky0123/vad-web', 'onnxruntime-web', 'piper-tts-web'],
   },
   server: {
-    port: 3000,
+    port: 43000,
     host: '0.0.0.0',
     headers: {
       // SharedArrayBuffer 활성화 — threaded onnxruntime-web 동작 필수.

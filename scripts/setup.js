@@ -174,6 +174,13 @@ const TOTAL = 7
 // 1. 루트 npm 패키지
 step(1, TOTAL, '루트 npm 패키지 설치...')
 run('npm install')
+
+// 1-a. turn-server 의존성 (node-turn) — npm run dev 가 자동 실행하므로 미리 설치 필요.
+// 로컬 TURN 서버는 SSAFY 같은 P2P 차단 환경에서 WebRTC 원본 음성 relay 용도.
+if (fs.existsSync(path.join(ROOT, 'turn-server', 'package.json'))) {
+  console.log('  turn-server 의존성 설치 중...')
+  run('npm install --prefix turn-server')
+}
 console.log(`  ${C.green}완료${C.reset}`)
 
 // 2. 프론트엔드 npm 패키지
