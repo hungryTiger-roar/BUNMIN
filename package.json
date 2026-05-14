@@ -1,0 +1,29 @@
+{
+  "name": "aunion-ai",
+  "private": true,
+  "version": "0.1.0",
+  "main": "frontend/electron/main.cjs",
+  "description": "Aunion AI - Korean Lecture Real-time Translation",
+  "author": "Aunion Team",
+  "scripts": {
+    "setup": "node scripts/setup.js",
+    "ensure-env": "node scripts/ensure-env.js",
+    "predev": "npm run ensure-env",
+    "preelectron:dev": "npm run ensure-env",
+    "dev": "concurrently --kill-others-on-fail -n backend,frontend,turn -c blue,green,yellow \"conda run --no-capture-output -n aunion python backend/run.py\" \"wait-on http://127.0.0.1:48000/health && npm run dev --prefix frontend\" \"node turn-server/index.js\"",
+    "electron:dev": "concurrently --kill-others-on-fail -n backend,frontend,turn,electron -c blue,green,yellow,magenta \"conda run --no-capture-output -n aunion python backend/run.py\" \"wait-on http://127.0.0.1:48000/health && npm run dev --prefix frontend\" \"node turn-server/index.js\" \"wait-on http://127.0.0.1:43000 && cross-env NODE_ENV=development electron .\"",
+    "electron:build": "npm run build --prefix frontend && electron-builder --config electron-builder.json",
+    "build:backend": "conda run --no-capture-output -n aunion pyinstaller backend/aunion.spec -y --distpath backend/dist --workpath backend/build",
+    "build:installer": "npm run build --prefix frontend && npm run build:backend && npm run electron:build && node scripts/run-iscc.js installer.iss"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "electron": "^41.0.0",
+    "electron-builder": "^26.0.0",
+    "wait-on": "^7.2.0"
+  },
+  "dependencies": {
+    "node-turn": "^0.0.6"
+  }
+}
