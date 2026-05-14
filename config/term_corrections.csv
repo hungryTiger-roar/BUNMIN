@@ -1,73 +1,543 @@
 korean,english
-# ===== 경제학 용어 =====
-희소성,Scarcity
-기회비용,Opportunity cost
+# ===== 기존 사전 (경제/자동차/고유명사) =====
+한계,Marginal
 한계비용,Marginal cost
 한계효용,Marginal utility
 한계이익,Marginal benefit
 한계가치,Marginal value
 한계율,Marginal rate
+형평성,Equity
+합리적인,Rational
+합리적,Rational
+기회비용,Opportunity cost
+희소성,Scarcity
 수요,Demand
 공급,Supply
 균형가격,Equilibrium price
 균형수량,Equilibrium quantity
 균형,Equilibrium
-탄력성,Elasticity
-외부효과,Externality
+변속기,Transmission
+중고차,Used car
+동수,Dong-su
+# ===== 도메인에 따라 영어가 갈리는 다의어 (복합어로 고정) =====
+분산 시스템,Distributed system
+분산 처리,Distributed processing
+분산 데이터베이스,Distributed database
+표본 분산,Sample variance
+분산 분석,Analysis of variance
+모분산,Population variance
+지도 학습,Supervised learning
+비지도 학습,Unsupervised learning
+반지도 학습,Semi-supervised learning
+강화 학습,Reinforcement learning
+전이 학습,Transfer learning
+암 전이,Cancer metastasis
+상태 전이,State transition
+해시 충돌,Hash collision
+충돌 감지,Collision detection
+병합 충돌,Merge conflict
+데이터 압축,Data compression
+메모리 압축,Memory compaction
+데이터베이스 정규화,Database normalization
+배치 정규화,Batch normalization
+가중치 정규화,Weight regularization
+정규 표현식,Regular expression
+위상 정렬,Topological sort
+위상 공간,Topological space
+위상 차이,Phase difference
+산화-환원 반응,Oxidation-reduction reaction
+의미 환원,Semantic reduction
+의사 코드,Pseudocode
+의사 결정 트리,Decision tree
+의사 난수,Pseudorandom number
+사전 학습,Pre-training
+사전 조건,Precondition
+사후 조건,Postcondition
+무한 급수,Infinite series
+멱급수,Power series
+테일러 급수,Taylor series
+순환 신경망,Recurrent neural network
+순환 대기,Circular wait
+순환 참조,Circular reference
+# ===== 컴퓨터공학 - 운영체제/시스템 (번역기 오역 빈발) =====
+선점,Preemption
+선점형 스케줄링,Preemptive scheduling
+비선점형 스케줄링,Non-preemptive scheduling
+문맥 교환,Context switch
+경쟁 상태,Race condition
+교착 상태,Deadlock
+기아 상태,Starvation
+호위 효과,Convoy effect
+바쁜 대기,Busy waiting
+임계 구역,Critical section
+상호 배제,Mutual exclusion
+교착 상태 회피,Deadlock avoidance
+교착 상태 예방,Deadlock prevention
+교착 상태 탐지,Deadlock detection
+은행원 알고리즘,Banker's algorithm
+순환 대기 조건,Circular wait condition
+점유와 대기,Hold and wait
+생산자-소비자 문제,Producer-consumer problem
+식사하는 철학자 문제,Dining philosophers problem
+독자-저자 문제,Readers-writers problem
+유한 버퍼,Bounded buffer
+지역성,Locality
+시간 지역성,Temporal locality
+공간 지역성,Spatial locality
+요구 페이징,Demand paging
+페이지 부재,Page fault
+페이지 교체,Page replacement
+스래싱,Thrashing
+작업 집합,Working set
+단편화,Fragmentation
+내부 단편화,Internal fragmentation
+외부 단편화,External fragmentation
+벨레이디의 모순,Belady's anomaly
+쓰기 시 복사,Copy-on-write
+커널 모드,Kernel mode
+사용자 모드,User mode
+이중 모드,Dual mode
+시분할 시스템,Time-sharing system
+일괄 처리 시스템,Batch processing system
+멀티프로그래밍,Multiprogramming
+문맥,Context
+디스패처,Dispatcher
+선입선출 스케줄링,First-come first-served scheduling
+최단 작업 우선,Shortest job first
+반환 시간,Turnaround time
+응답 시간,Response time
+처리율,Throughput
+# ===== 컴퓨터공학 - 자료구조/알고리즘 (번역기 오역 빈발) =====
+신장 트리,Spanning tree
+최소 신장 트리,Minimum spanning tree
+간선,Edge
+정점,Vertex
+진입 차수,In-degree
+진출 차수,Out-degree
+인접 행렬,Adjacency matrix
+인접 리스트,Adjacency list
+순회,Traversal
+전위 순회,Preorder traversal
+중위 순회,Inorder traversal
+후위 순회,Postorder traversal
+완전 이진 트리,Complete binary tree
+포화 이진 트리,Full binary tree
+편향 트리,Skewed tree
+균형 트리,Balanced tree
+분할 정복,Divide and conquer
+동적 계획법,Dynamic programming
+탐욕 알고리즘,Greedy algorithm
+완전 탐색,Brute-force search
+분기 한정법,Branch and bound
+백트래킹,Backtracking
+점근 표기법,Asymptotic notation
+시간 복잡도,Time complexity
+공간 복잡도,Space complexity
+재귀,Recursion
+재귀 호출,Recursive call
+점화식,Recurrence relation
+불변식,Invariant
+최단 경로,Shortest path
+최대 유량,Maximum flow
+이분 매칭,Bipartite matching
+최소 절단,Minimum cut
+계수 정렬,Counting sort
+기수 정렬,Radix sort
+병합 정렬,Merge sort
+삽입 정렬,Insertion sort
+선택 정렬,Selection sort
+힙 정렬,Heap sort
+안정 정렬,Stable sort
+제자리 정렬,In-place sort
+이진 탐색,Binary search
+깊이 우선 탐색,Depth-first search
+너비 우선 탐색,Breadth-first search
+우선순위 큐,Priority queue
+분리 집합,Disjoint set
+경로 압축,Path compression
+최소 공통 조상,Lowest common ancestor
+강한 연결 요소,Strongly connected component
+# ===== 컴퓨터공학 - 언어/구조/네트워크/SW공학 (번역기 오역 빈발) =====
+캡슐화,Encapsulation
+정보 은닉,Information hiding
+다형성,Polymorphism
+오버로딩,Overloading
+오버라이딩,Overriding
+추상 클래스,Abstract class
+추상 메서드,Abstract method
+생성자,Constructor
+소멸자,Destructor
+접근 제어자,Access modifier
+값에 의한 호출,Call by value
+참조에 의한 호출,Call by reference
+얕은 복사,Shallow copy
+깊은 복사,Deep copy
+불변 객체,Immutable object
+가변 객체,Mutable object
+형 변환,Type conversion
+형 추론,Type inference
+정적 타이핑,Static typing
+동적 타이핑,Dynamic typing
+어휘 분석,Lexical analysis
+구문 분석,Syntax analysis
+의미 분석,Semantic analysis
+추상 구문 트리,Abstract syntax tree
+중간 표현,Intermediate representation
+심볼 테이블,Symbol table
+가비지 컬렉션,Garbage collection
+메모리 누수,Memory leak
+역참조,Dereference
+널 포인터,Null pointer
+동적 할당,Dynamic allocation
+정적 할당,Static allocation
+파이프라인 해저드,Pipeline hazard
+데이터 해저드,Data hazard
+제어 해저드,Control hazard
+구조적 해저드,Structural hazard
+분기 예측,Branch prediction
+명령어 수준 병렬성,Instruction-level parallelism
+캐시 적중,Cache hit
+캐시 실패,Cache miss
+적중률,Hit ratio
+캐시 일관성,Cache coherence
+직접 사상 캐시,Direct-mapped cache
+집합 연관 캐시,Set-associative cache
+완전 연관 캐시,Fully associative cache
+즉시 쓰기,Write-through
+나중 쓰기,Write-back
+메모리 계층 구조,Memory hierarchy
+2의 보수,Two's complement
+명령어 인출,Instruction fetch
+누산기,Accumulator
+흐름 제어,Flow control
+혼잡 제어,Congestion control
+오류 제어,Error control
+오류 검출,Error detection
+순환 중복 검사,Cyclic redundancy check
+회선 교환,Circuit switching
+패킷 교환,Packet switching
+거리 벡터 라우팅,Distance vector routing
+링크 상태 라우팅,Link state routing
+연결 지향,Connection-oriented
+비연결형,Connectionless
+신뢰성 있는 전송,Reliable transmission
+다중화,Multiplexing
+생존 시간,Time to live
+최대 전송 단위,Maximum transmission unit
+3-방향 핸드셰이크,Three-way handshake
+부하 분산,Load balancing
+역캡슐화,Decapsulation
+직렬화,Serialization
+역직렬화,Deserialization
+의존성 주입,Dependency injection
+결합도,Coupling
+응집도,Cohesion
+기술 부채,Technical debt
+회귀 테스트,Regression test
+코드 커버리지,Code coverage
+지속적 통합,Continuous integration
+지속적 배포,Continuous deployment
+형상 관리,Configuration management
+기능 요구사항,Functional requirement
+비기능 요구사항,Non-functional requirement
+폭포수 모델,Waterfall model
+나선형 모델,Spiral model
+영지식 증명,Zero-knowledge proof
+작업 증명,Proof of work
+지분 증명,Proof of stake
+머클 트리,Merkle tree
+합의 알고리즘,Consensus algorithm
+결과적 일관성,Eventual consistency
+유한 오토마타,Finite automaton
+문맥 자유 문법,Context-free grammar
+정지 문제,Halting problem
+계산 가능성,Computability
+역색인,Inverted index
+협업 필터링,Collaborative filtering
+경로 탐색,Pathfinding
+# ===== 컴퓨터공학 - DB / 트랜잭션 (번역기 오역 빈발) =====
+원자성,Atomicity
+일관성,Consistency
+고립성,Isolation
+지속성,Durability
+무결성,Integrity
+가용성,Availability
+참조 무결성,Referential integrity
+개체 무결성,Entity integrity
+무결성 제약 조건,Integrity constraint
+함수 종속,Functional dependency
+이행 함수 종속,Transitive functional dependency
+부분 함수 종속,Partial functional dependency
+삽입 이상,Insertion anomaly
+삭제 이상,Deletion anomaly
+갱신 이상,Update anomaly
+후보 키,Candidate key
+대체 키,Alternate key
+슈퍼 키,Super key
+관계 대수,Relational algebra
+질의 최적화,Query optimization
+동시성 제어,Concurrency control
+2단계 잠금,Two-phase locking
+격리 수준,Isolation level
+팬텀 읽기,Phantom read
+# ===== 컴퓨터공학 - AI / 머신러닝 (번역기 오역 빈발) =====
+경사 하강법,Gradient descent
+확률적 경사 하강법,Stochastic gradient descent
+역전파,Backpropagation
+순전파,Forward propagation
+활성화 함수,Activation function
+손실 함수,Loss function
+비용 함수,Cost function
+목적 함수,Objective function
+과적합,Overfitting
+과소적합,Underfitting
+은닉층,Hidden layer
+가중치,Weight
+편향,Bias
+초매개변수,Hyperparameter
+미세 조정,Fine-tuning
+합성곱 신경망,Convolutional neural network
+장단기 메모리,Long short-term memory
+자기 어텐션,Self-attention
+멀티 헤드 어텐션,Multi-head attention
+임베딩,Embedding
+토큰화,Tokenization
+차원 축소,Dimensionality reduction
+특징 추출,Feature extraction
+특징 공학,Feature engineering
+군집화,Clustering
+혼동 행렬,Confusion matrix
+재현율,Recall
+정밀도,Precision
+정확도,Accuracy
+적합도,Goodness of fit
+기울기 소실,Vanishing gradient
+기울기 폭발,Exploding gradient
+생성 모델,Generative model
+판별 모델,Discriminative model
+앙상블 학습,Ensemble learning
+주성분 분석,Principal component analysis
+선형 회귀,Linear regression
+로지스틱 회귀,Logistic regression
+조기 종료,Early stopping
+교차 검증,Cross-validation
+데이터 증강,Data augmentation
+빔 서치,Beam search
+나이브 베이즈,Naive Bayes
+서포트 벡터 머신,Support vector machine
+# ===== 수학 (번역기 오역 빈발) =====
+귀류법,Proof by contradiction
+수학적 귀납법,Mathematical induction
+대우,Contrapositive
+따름정리,Corollary
+보조정리,Lemma
+공리,Axiom
+멱집합,Power set
+계승,Factorial
+순열,Permutation
+조합,Combination
+이항 정리,Binomial theorem
+합동,Congruence
+정의역,Domain
+공역,Codomain
+치역,Range
+단사 함수,Injective function
+전사 함수,Surjective function
+전단사 함수,Bijective function
+합성 함수,Composite function
+역함수,Inverse function
+항등 함수,Identity function
+도함수,Derivative
+편미분,Partial derivative
+극한,Limit
+수렴,Convergence
+발산,Divergence
+행렬식,Determinant
+고유값,Eigenvalue
+고유 벡터,Eigenvector
+기저,Basis
+선형 독립,Linear independence
+선형 결합,Linear combination
+선형 변환,Linear transformation
+역행렬,Inverse matrix
+전치 행렬,Transpose matrix
+단위 행렬,Identity matrix
+사상,Mapping
+접선,Tangent line
+법선,Normal line
+변곡점,Inflection point
+극댓값,Local maximum
+극솟값,Local minimum
+최소 제곱법,Least squares method
+동치 관계,Equivalence relation
+부분 순서,Partial order
+모듈러 연산,Modular arithmetic
+# ===== 통계 (번역기 오역 빈발) =====
+모집단,Population
+모수,Parameter
+표본,Sample
+표집,Sampling
+표준편차,Standard deviation
+중앙값,Median
+최빈값,Mode
+사분위수,Quartile
+사분위 범위,Interquartile range
+왜도,Skewness
+첨도,Kurtosis
+확률 변수,Random variable
+확률 밀도 함수,Probability density function
+누적 분포 함수,Cumulative distribution function
+기댓값,Expected value
+조건부 확률,Conditional probability
+귀무 가설,Null hypothesis
+대립 가설,Alternative hypothesis
+유의 수준,Significance level
+유의 확률,P-value
+제1종 오류,Type I error
+제2종 오류,Type II error
+검정력,Statistical power
+신뢰 구간,Confidence interval
+표준 오차,Standard error
+가설 검정,Hypothesis testing
+결정 계수,Coefficient of determination
+잔차,Residual
+상관 계수,Correlation coefficient
+중심 극한 정리,Central limit theorem
+큰 수의 법칙,Law of large numbers
+이상치,Outlier
+결측값,Missing value
+# ===== 과학·공학 (번역기 오역 빈발) =====
+관성,Inertia
+운동량,Momentum
+충격량,Impulse
+구심력,Centripetal force
+원심력,Centrifugal force
+일률,Power
+엔트로피,Entropy
+비열,Specific heat
+열용량,Heat capacity
+전자기 유도,Electromagnetic induction
+파동-입자 이중성,Wave-particle duality
+불확정성 원리,Uncertainty principle
+핵분열,Nuclear fission
+핵융합,Nuclear fusion
+중화 반응,Neutralization reaction
+화학량론,Stoichiometry
+몰 질량,Molar mass
+아보가드로 수,Avogadro's number
+활성화 에너지,Activation energy
+발열 반응,Exothermic reaction
+흡열 반응,Endothermic reaction
+르샤틀리에 원리,Le Chatelier's principle
+전기 음성도,Electronegativity
+이온화 에너지,Ionization energy
+감수분열,Meiosis
+체세포분열,Mitosis
+세포 호흡,Cellular respiration
+광합성,Photosynthesis
+삼투,Osmosis
+능동 수송,Active transport
+수동 수송,Passive transport
+대립유전자,Allele
+유전자형,Genotype
+표현형,Phenotype
+돌연변이,Mutation
+자연 선택,Natural selection
+항상성,Homeostasis
+먹이 그물,Food web
+영양 단계,Trophic level
+응력,Stress
+변형률,Strain
+항복 강도,Yield strength
+인장 강도,Tensile strength
+좌굴,Buckling
+관성 모멘트,Moment of inertia
+자유 물체도,Free body diagram
+층류,Laminar flow
+난류,Turbulent flow
+레이놀즈 수,Reynolds number
+베르누이 방정식,Bernoulli's equation
+양력,Lift
+항력,Drag
+임피던스,Impedance
+리액턴스,Reactance
+정류,Rectification
+전달 함수,Transfer function
+표본화,Sampling
+양자화,Quantization
+푸리에 변환,Fourier transform
+라플라스 변환,Laplace transform
+신호 대 잡음비,Signal-to-noise ratio
+# ===== 경제·경영·회계 (번역기 오역 빈발) =====
+10대 기본원리,10 Fundamental Principles
+10대 원리,10 Principles
+집안 살림하는 사람,household manager
+한계 효용,Marginal utility
+한계 비용,Marginal cost
+한계 수입,Marginal revenue
+규모의 경제,Economies of scale
+비교 우위,Comparative advantage
+절대 우위,Absolute advantage
+역선택,Adverse selection
+도덕적 해이,Moral hazard
+외부 효과,Externality
 공공재,Public goods
 시장 실패,Market failure
-독점,Monopoly
-과점,Oligopoly
-완전 경쟁,Perfect competition
-거시경제,Macroeconomics
-미시경제,Microeconomics
-통화 정책,Monetary policy
-재정 정책,Fiscal policy
-형평성,Equity
-합리적인,Rational
-합리적,Rational
-경제적 유인,Economic incentives
-유인 구조,Incentive structure
-유인 체계,Incentive system
-유인,Incentive
-# ===== 자연어처리/AI 용어 =====
-자연어처리,Natural Language Processing
-기계번역,Machine Translation
-형태소 분석,Morphological Analysis
-구문 분석,Syntactic Analysis
-의미 분석,Semantic Analysis
-담화 분석,Discourse Analysis
-개체명 인식,Named Entity Recognition
-감성 분석,Sentiment Analysis
-텍스트 마이닝,Text Mining
-임베딩,Embedding
-어텐션,Attention
-트랜스포머,Transformer
-# ===== 운영체제 용어 =====
-프로세스,Process
-스레드,Thread
-교착상태,Deadlock
-동기화,Synchronization
-가상메모리,Virtual Memory
-페이지 교체,Page Replacement
-문맥 교환,Context Switch
-스케줄링,Scheduling
-세마포어,Semaphore
-뮤텍스,Mutex
-# ===== 프로그래밍 용어 =====
-재귀,Recursion
-자료구조,Data Structure
-알고리즘,Algorithm
-객체지향,Object-Oriented
-상속,Inheritance
-다형성,Polymorphism
-캡슐화,Encapsulation
-추상화,Abstraction
-인터페이스,Interface
-# ===== 일반 학술 용어 =====
-가설,Hypothesis
-변수,Variable
-상관관계,Correlation
-인과관계,Causation
-표본,Sample
-모집단,Population
+소비자 잉여,Consumer surplus
+생산자 잉여,Producer surplus
+수요의 가격 탄력성,Price elasticity of demand
+내쉬 균형,Nash equilibrium
+죄수의 딜레마,Prisoner's dilemma
+매몰 비용,Sunk cost
+국내총생산,Gross domestic product
+가처분 소득,Disposable income
+재무상태표,Balance sheet
+손익계산서,Income statement
+현금흐름표,Cash flow statement
+매출 원가,Cost of goods sold
+매출 총이익,Gross profit
+영업 이익,Operating income
+감가상각,Depreciation
+복식 부기,Double-entry bookkeeping
+차변,Debit
+대변,Credit
+분개,Journal entry
+시산표,Trial balance
+발생주의,Accrual basis
+손익분기점,Break-even point
+순현재가치,Net present value
+내부 수익률,Internal rate of return
+# ===== 연구방법론 / 학술 일반 (번역기 오역·혼동 빈발) =====
+선행 연구,Prior research
+문헌 검토,Literature review
+조작적 정의,Operational definition
+독립 변수,Independent variable
+종속 변수,Dependent variable
+매개 변수,Mediating variable
+조절 변수,Moderating variable
+통제 집단,Control group
+실험 집단,Experimental group
+사전 검사,Pretest
+사후 검사,Posttest
+무작위 표집,Random sampling
+층화 표집,Stratified sampling
+신뢰도,Reliability
+타당도,Validity
+내적 타당도,Internal validity
+외적 타당도,External validity
+재현성,Reproducibility
+동료 심사,Peer review
+귀납적 추론,Inductive reasoning
+연역적 추론,Deductive reasoning
+효과 크기,Effect size
+표절,Plagiarism
+# ===== 주의: 단일어 동형이의어 (강의 분야에 맞지 않으면 해당 줄을 삭제할 것) =====
+체,Field
+환,Ring
+군,Group
+항,Term
+핵,Kernel
+모니터,Monitor
+# ===== 고유명사/도메인 표현 =====
+청주,Cheongju
+집안 살림하는 사람,one who manages the household

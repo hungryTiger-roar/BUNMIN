@@ -1,149 +1,82 @@
 """
 슬라이드 번역 파이프라인
 
-[파이프라인 순서]
-1. OCR (Surya) → 텍스트 영역 감지
-2. VLM (Qwen2.5-VL) → 번역
-3. Overlay → 이미지에 텍스트 렌더링
+[파이프라인 구조]
+1. PDF Layer 파이프라인: pdf_pipeline.py
+   - 텍스트 레이어가 있는 PDF 처리
+   - VLM 번역
+
+2. Image OCR 파이프라인: image_pipeline.py
+   - 텍스트 레이어가 없는 PDF/이미지 처리
+   - Surya OCR → VLM 번역 → Overlay
 
 [용어집]
 - config/term_corrections.csv에서 한국어-영어 용어 매핑 로드
-- 번역 프롬프트에 자동 포함
+- VLM 번역 프롬프트에 자동 포함
+
+[파일 구조 (10개)]
+- models.py: 공통 데이터 모델 (TextBlock, FontInfo)
+- translator.py: 공통 번역 함수 (translate_blocks)
+- pdf_pipeline.py: PDF Layer 파이프라인
+- image_pipeline.py: Image OCR 파이프라인 + VLM 모델 관리
+- pdf_text_extractor.py: PDF 텍스트 추출
+- pdf_text_replacer.py: PDF 텍스트 교체
+- pdf_font_handler.py: 폰트 매핑
+- bbox_analyzer.py: 레이아웃 분석
+- term_corrections.py: CSV 용어집
+- __init__.py: 모듈 export
 """
 
-from .config import PipelineConfig, get_config, set_config, cfg
+# Data Models
+from .models import TextBlock, FontInfo, TranslationResult
 
-# OCR Normalization
-from .ocr_normalization import (
-    normalize_ocr_regions,
-    normalize_text,
-    normalize_bbox,
+# Common Translator
+from .translator import translate_blocks
+
+# PDF Layer Pipeline
+from .pdf_pipeline import PDFLayerPipeline
+
+# Image Pipeline + VLM
+from .image_pipeline import (
+    get_vlm_model,
+    is_vlm_loaded,
+    unload_vlm_model,
+    translate_text_vlm,
+    stage_ocr_surya,
+    stage_translate,
+    stage_overlay,
+    batch_ocr_surya,
+    batch_translate_vlm,
+    batch_overlay,
+    clear_cache,
+    OCRPipeline,
 )
 
-# Image Text Extraction
-from .image_text_extraction import (
-    detect_image_regions,
-    extract_image_texts,
+# PDF Text Processing
+from .pdf_text_extractor import (
+    check_pdf_has_text_layer,
+    extract_korean_texts_for_translation,
+)
+from .pdf_text_replacer import replace_texts_in_pdf
+from .pdf_font_handler import (
+    map_korean_to_english_font,
+    int_color_to_rgb,
+    rgb_to_int_color,
+    estimate_text_width,
 )
 
-# Deduplication
-from .deduplication import (
-    deduplicate_ocr_and_image_texts,
-    calculate_text_similarity,
-    calculate_bbox_iou,
-    is_duplicate_region,
-)
-
-# Noise Classification
-from .noise_classification import (
-    classify_ocr_regions,
-    calculate_noise_score,
-    classify_region,
-    save_classified_regions_with_noise,
-    save_excluded_noise_regions,
-    get_classification_stats,
-    is_valid_english_word,
-    is_broken_or_garbled,
-    is_decorative_background,
-)
-
-# Candidate Extraction
-from .candidate_extraction import (
-    extract_document_candidates,
-)
-
-# Region Classification
-from .region_classification import (
-    classify_region_type_scored,
-    classify_all_regions,
-    REGION_TYPES,
-)
-
-# Reading Order
-from .reading_order import (
-    sort_regions_reading_order,
-    estimate_page_layout,
-)
-
-# Block Building
-from .block_building import (
-    build_translation_blocks,
-    MERGE_POLICY,
-)
-
-# Token Protection
-from .token_protection import (
-    select_glossary_for_block,
-    protect_glossary_tokens,
-    protect_blocks,
-    restore_tokens,
-    recover_broken_tokens,
-)
-
-# Translation
-from .translation import (
-    build_translation_prompt,
-    translate_blocks_batch,
-    retry_semantic_mismatch_blocks,
-    retry_residual_korean_blocks,
-    retry_token_error_blocks,
-)
+# Layout Analysis
+from .bbox_analyzer import analyze_page_layout
 
 # Term Corrections (CSV-based)
 from .term_corrections import (
     load_term_corrections,
     get_mandatory_terms,
     get_terms_in_text,
+    build_term_replacer,
+    replace_terms_in_text,
+    # OCR 보정
+    load_ocr_corrections,
+    correct_ocr_text,
+    build_ocr_corrector,
 )
-
-# Validation
-from .validation import (
-    validate_and_restore_single_block,
-    validate_batch_output,
-    generate_quality_report,
-    finalize_blocks,
-    extract_semantic_mismatch_blocks,
-    extract_residual_korean_blocks,
-    extract_token_error_blocks,
-    BLOCKING_ISSUES,
-)
-
-# Image Text Translation (Phase 2)
-from .image_text_translation import (
-    translate_image_texts,
-    validate_image_text_translation,
-    save_translated_image_texts,
-)
-
-# Image Rendering (Phase 2)
-from .image_rendering import (
-    process_image_texts_phase2,
-    render_english_text,
-    process_page_images,
-    is_solid_background,
-    save_processed_image,
-    save_processed_images,
-)
-
-# Residual Audit (Phase 3)
-from .residual_audit import (
-    run_residual_audit,
-    audit_blocks,
-    audit_image_texts,
-    save_audit_report,
-    save_review_log,
-    extract_failed_regions,
-    save_failed_regions,
-)
-
-# LLM Client
-from .llm_client import (
-    BaseLLMClient,
-    OpenAIClient,
-    AzureOpenAIClient,
-    LocalLLMClient,
-    MockLLMClient,
-    create_llm_client,
-    get_default_llm_client,
-)
-

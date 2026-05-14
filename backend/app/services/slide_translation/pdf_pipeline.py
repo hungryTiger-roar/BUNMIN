@@ -10,14 +10,18 @@ PDF 텍스트 레이어 기반 번역 파이프라인
 slides.py (router) → pdf_pipeline.py (이 파일)
   ├── pdf_text_extractor.py (텍스트 추출)
   ├── pdf_text_replacer.py (텍스트 교체)
-  ├── llm_client.py (LLM 호출)
-  └── bbox_analyzer.py (VLM 레이아웃 분석)
+  ├── image_pipeline.py (VLM 번역 - translate_text_vlm)
+  ├── bbox_analyzer.py (레이아웃 분석)
+  └── term_corrections.py (CSV 용어집)
+
+[번역 모델]
+Qwen2.5-VL-3B-Instruct (4bit 양자화)
 
 [주요 메서드]
 - run(): 전체 파이프라인 실행
-- _translate_batch(): LLM 배치 번역
+- _translate_batch(): VLM 배치 번역
 - _build_translation_prompt(): 번역 프롬프트 생성
-- _parse_translation_response(): LLM 응답 파싱
+- _parse_translation_response(): VLM 응답 파싱
 
 [주의]
 - multi-color 렌더링은 pdf_text_replacer.py에서 처리
@@ -34,9 +38,11 @@ from .pdf_text_extractor import (
     extract_korean_texts_for_translation,
 )
 from .pdf_text_replacer import replace_texts_in_pdf
-from .llm_client import get_default_llm_client, BaseLLMClient
+from .image_pipeline import translate_text_vlm
 from .bbox_analyzer import analyze_page_layout
 from .term_corrections import get_terms_in_text
+from .models import TextBlock, FontInfo
+from .translator import translate_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -87,16 +93,14 @@ class PDFLayerPipeline:
 
     def __init__(
         self,
-        llm_client: Optional[BaseLLMClient] = None,
         output_dir: Optional[str] = None,
         on_page_complete: Optional[callable] = None,
-        glossary: Optional[dict] = None,
+
         should_cancel: Optional[callable] = None,
     ):
-        self.llm_client = llm_client or get_default_llm_client()
         self.output_dir = output_dir
         self.on_page_complete = on_page_complete  # 페이지 완료 시 콜백 (page_num: int)
-        self.glossary = glossary or {}  # {한글: 영어} 용어집
+
         # 외부 취소 신호 폴링 콜백 — () -> bool. True 반환 시 파이프라인이 가능한 가장 빠른 경계에서 중단.
         # VLM 분석/번역의 각 페이지 시작 직전마다 호출됨.
         self.should_cancel = should_cancel
@@ -118,6 +122,211 @@ class PDFLayerPipeline:
         logger.info(message)
         print(log_line)
 
+    # =========================================================================
+    # extract() / apply() 분리 API
+    # =========================================================================
+
+    def extract(self, pdf_path: str) -> list[TextBlock]:
+        """
+        PDF에서 한글 텍스트 블록 추출 (번역 없이)
+
+        Args:
+            pdf_path: 원본 PDF 경로
+
+        Returns:
+            list[TextBlock]: 추출된 텍스트 블록 리스트
+        """
+        self._log("=" * 60)
+        self._log("PDF Layer Extract")
+        self._log(f"Input: {pdf_path}")
+        self._log("=" * 60)
+
+        blocks: list[TextBlock] = []
+
+        # Step 1: PDF 텍스트 레이어 확인
+        self._log("[Extract Step 1] Checking PDF text layer...")
+        layer_info = check_pdf_has_text_layer(pdf_path)
+        self._log(f"  - Total pages: {layer_info['total_pages']}")
+        self._log(f"  - Pages with text: {layer_info['pages_with_text']}")
+        self._log(f"  - Korean blocks: {layer_info['korean_blocks']}")
+
+        if not layer_info["has_text_layer"]:
+            self._log("  [WARN] No text layer found.")
+            return blocks
+
+        # Step 2: 한글 텍스트 추출
+        self._log("[Extract Step 2] Extracting Korean texts...")
+        korean_texts = extract_korean_texts_for_translation(pdf_path)
+        self._log(f"  - Found {len(korean_texts)} Korean text blocks")
+
+        if not korean_texts:
+            self._log("  [INFO] No Korean text found.")
+            return blocks
+
+        # 취소 체크
+        if self._check_cancelled():
+            self._log("[CANCEL] Extract cancelled before layout analysis")
+            return blocks
+
+        # Step 2.5: 레이아웃 분석
+        layout_analysis = None
+        try:
+            self._log("[Extract Step 2.5] Analyzing page layout...")
+            layout_analysis = self._analyze_layout_with_vlm(pdf_path, korean_texts)
+            if layout_analysis is None and self._check_cancelled():
+                self._log("[CANCEL] Extract cancelled during layout analysis")
+                return blocks
+            if layout_analysis:
+                on_image_count = sum(
+                    1 for b in layout_analysis.get("blocks", [])
+                    if b.get("on_image_background")
+                )
+                self._log(f"  - Analyzed {len(layout_analysis.get('blocks', []))} blocks")
+                self._log(f"  - On image background: {on_image_count}")
+        except Exception as e:
+            self._log(f"  - Layout analysis skipped: {e}")
+
+        # 레이아웃 분석 결과 적용
+        if layout_analysis:
+            korean_texts = self._apply_layout_to_texts(korean_texts, layout_analysis)
+
+        # 화살표 블록 제외 (번역 불필요, 원본 유지)
+        arrow_count = sum(1 for item in korean_texts if item.get("is_arrow", False))
+        if arrow_count > 0:
+            self._log(f"  - Arrow symbols (preserved): {arrow_count}")
+            korean_texts = [item for item in korean_texts if not item.get("is_arrow", False)]
+
+        # TextBlock으로 변환
+        for item in korean_texts:
+            # bbox 변환
+            bbox = item.get("bbox", (0, 0, 0, 0))
+            if isinstance(bbox, list):
+                bbox = tuple(bbox)
+
+            # FontInfo 생성
+            font = FontInfo(
+                name=item.get("font", ""),
+                size=item.get("size", 12.0),
+                color=item.get("color", 0),
+            )
+
+            # redaction_fill_color
+            redaction_fill = item.get("redaction_fill_color", (1, 1, 1))
+            if isinstance(redaction_fill, list):
+                redaction_fill = tuple(redaction_fill)
+
+            block = TextBlock(
+                block_id=f"pdf_{item.get('block_id', '')}",
+                source="pdf",
+                page=item.get("page_num", 0),
+                text=item.get("text", ""),
+                bbox=bbox,
+                role=item.get("role", "body"),
+                font=font,
+                line_colors=item.get("line_colors", []),
+                line_texts=item.get("line_texts", []),
+                prefix_width=item.get("prefix_width", 0.0),
+                has_multi_color=item.get("has_multi_color", False),
+                expand_allowed=item.get("expand_allowed", True),
+                keep_prefix=item.get("keep_prefix", False),
+                redaction_fill_color=redaction_fill,
+            )
+            blocks.append(block)
+
+        self._log(f"[Extract] Completed: {len(blocks)} blocks")
+        return blocks
+
+    def _apply_layout_to_texts(
+        self,
+        korean_texts: list[dict],
+        layout_analysis: dict
+    ) -> list[dict]:
+        """레이아웃 분석 결과를 텍스트에 적용"""
+        if not layout_analysis or "blocks" not in layout_analysis:
+            return korean_texts
+
+        # block_id → layout info 매핑
+        layout_map = {}
+        for b in layout_analysis.get("blocks", []):
+            block_id = b.get("block_id")
+            if block_id:
+                layout_map[block_id] = b
+
+        # 적용
+        for item in korean_texts:
+            block_id = item.get("block_id", "")
+            if block_id in layout_map:
+                layout_info = layout_map[block_id]
+                item["on_image_background"] = layout_info.get("on_image_background", False)
+                item["expand_allowed"] = layout_info.get("expand_allowed", True)
+
+        return korean_texts
+
+    def apply(
+        self,
+        pdf_path: str,
+        blocks: list[TextBlock],
+        translations: dict[str, str],
+        output_path: str,
+    ) -> dict:
+        """
+        번역 결과를 PDF에 적용
+
+        Args:
+            pdf_path: 원본 PDF 경로
+            blocks: extract()에서 반환된 TextBlock 리스트
+            translations: block_id → 번역문 매핑
+            output_path: 출력 PDF 경로
+
+        Returns:
+            결과 통계 dict
+        """
+        self._log("=" * 60)
+        self._log("PDF Layer Apply")
+        self._log(f"Input: {pdf_path}")
+        self._log(f"Output: {output_path}")
+        self._log("=" * 60)
+
+        # TextBlock + translation → 기존 translations 형식으로 변환
+        translation_dicts = []
+        for block in blocks:
+            block_id = block.block_id
+            translated = translations.get(block_id, "")
+
+            # 번역 없으면 원문 유지
+            if not translated:
+                translated = block.text
+
+            trans_dict = block.with_translation(translated)
+            # block_id에서 pdf_ prefix 제거 (기존 호환성)
+            if trans_dict["block_id"].startswith("pdf_"):
+                trans_dict["block_id"] = trans_dict["block_id"][4:]
+            translation_dicts.append(trans_dict)
+
+        self._log(f"[Apply] {len(translation_dicts)} blocks to replace")
+
+        # PDF 텍스트 교체
+        debug_path = None
+        if self.output_dir:
+            debug_path = str(Path(self.output_dir) / "replace_debug.json")
+
+        replace_result = replace_texts_in_pdf(
+            pdf_path,
+            translation_dicts,
+            output_path,
+            debug_path=debug_path,
+        )
+
+        self._log(f"  - Replaced: {replace_result.get('replaced', 0)}/{replace_result.get('total', 0)}")
+        if replace_result.get("failed", 0) > 0:
+            self._log(f"  - Failed: {replace_result.get('failed', 0)}")
+
+        return replace_result
+
+    # =========================================================================
+    # run() - extract → translate_blocks → apply wrapper
+    # =========================================================================
+
     def run(
         self,
         pdf_path: str,
@@ -125,7 +334,7 @@ class PDFLayerPipeline:
         target_lang: str = "en",
     ) -> dict:
         """
-        PDF 번역 실행
+        PDF 번역 실행 (extract → translate → apply)
 
         Args:
             pdf_path: 원본 PDF 경로
@@ -139,7 +348,6 @@ class PDFLayerPipeline:
                 "total_blocks": int,
                 "translated_blocks": int,
                 "failed_blocks": int,
-                "details": [...]
             }
         """
         self._log("=" * 60)
@@ -159,120 +367,69 @@ class PDFLayerPipeline:
             "total_blocks": 0,
             "translated_blocks": 0,
             "failed_blocks": 0,
-            "details": [],
             "cancelled": False,
         }
 
         try:
-            # 취소 체크 (Step 1 진입 전)
+            # ===== Step 1: Extract =====
             if self._check_cancelled():
-                self._log("[CANCEL] Pipeline cancelled before Step 1")
+                self._log("[CANCEL] Pipeline cancelled before extract")
                 result["cancelled"] = True
                 return result
 
-            # Step 1: PDF 텍스트 레이어 확인
-            self._log("[Step 1] Checking PDF text layer...")
-            layer_info = check_pdf_has_text_layer(pdf_path)
-            self._log(f"  - Total pages: {layer_info['total_pages']}")
-            self._log(f"  - Pages with text: {layer_info['pages_with_text']}")
-            self._log(f"  - Korean blocks: {layer_info['korean_blocks']}")
-            self._log(f"  - Recommendation: {layer_info['recommendation']}")
+            self._log("[Step 1] Extracting texts...")
+            blocks = self.extract(pdf_path)
+            result["total_blocks"] = len(blocks)
 
-            if not layer_info["has_text_layer"]:
-                self._log("  [WARN] No text layer found. OCR fallback needed.")
-                result["error"] = "No text layer in PDF"
-                return result
-
-            # Step 2: 한글 텍스트 추출
-            self._log("[Step 2] Extracting Korean texts...")
-            korean_texts = extract_korean_texts_for_translation(pdf_path)
-            result["total_blocks"] = len(korean_texts)
-            self._log(f"  - Found {len(korean_texts)} Korean text blocks")
-
-            if not korean_texts:
-                self._log("  [INFO] No Korean text found.")
+            if not blocks:
+                self._log("  [INFO] No blocks to translate.")
                 result["success"] = True
                 result["message"] = "No Korean text to translate"
                 return result
 
-            # 취소 체크 (Step 2.5 진입 전 — VLM 로드 직전)
+            self._log(f"  - Extracted {len(blocks)} blocks")
+
+            # ===== Step 2: Translate =====
             if self._check_cancelled():
-                self._log("[CANCEL] Pipeline cancelled before Step 2.5 (VLM)")
+                self._log("[CANCEL] Pipeline cancelled before translate")
                 result["cancelled"] = True
                 return result
 
-            # Step 2.5: VLM 레이아웃 분석 (선택적)
-            layout_analysis = None
-            try:
-                self._log("[Step 2.5] Analyzing page layout with VLM...")
-                layout_analysis = self._analyze_layout_with_vlm(pdf_path, korean_texts)
-                if layout_analysis is None and self._check_cancelled():
-                    # _analyze_layout_with_vlm 가 페이지간 체크에서 취소 감지하면 None 반환
-                    self._log("[CANCEL] Pipeline cancelled during Step 2.5")
-                    result["cancelled"] = True
-                    return result
-                if layout_analysis:
-                    on_image_count = sum(1 for b in layout_analysis.get("blocks", []) if b.get("on_image_background"))
-                    self._log(f"  - Analyzed {len(layout_analysis.get('blocks', []))} blocks")
-                    self._log(f"  - On image background: {on_image_count}")
-                else:
-                    self._log("  - VLM not available, using heuristics")
-            except Exception as e:
-                self._log(f"  - VLM analysis skipped: {e}")
+            self._log("[Step 2] Translating texts...")
+            translation_result = translate_blocks(blocks, target_lang=target_lang)
 
-            # 취소 체크 (Step 3 진입 전)
             if self._check_cancelled():
-                self._log("[CANCEL] Pipeline cancelled before Step 3 (translation)")
+                self._log("[CANCEL] Pipeline cancelled during translate")
                 result["cancelled"] = True
                 return result
 
-            # Step 3: 번역
-            self._log("[Step 3] Translating texts...")
-            translations = self._translate_texts(korean_texts, target_lang)
-            if self._check_cancelled():
-                self._log("[CANCEL] Pipeline cancelled during Step 3")
-                result["cancelled"] = True
-                return result
-            self._log(f"  - Translated {len(translations)} blocks")
+            self._log(f"  - Translated {len(translation_result)} blocks")
+            if translation_result.failed_ids:
+                self._log(f"  - Failed: {len(translation_result.failed_ids)}")
 
-            # 레이아웃 분석 결과를 translations에 반영
-            if layout_analysis:
-                translations = self._apply_layout_analysis(translations, layout_analysis)
-
-            # 취소 체크 (Step 4 진입 전 — 부분 산출물 PDF 만드는 거 차단)
+            # ===== Step 3: Apply =====
             if self._check_cancelled():
-                self._log("[CANCEL] Pipeline cancelled before Step 4 (replace)")
+                self._log("[CANCEL] Pipeline cancelled before apply")
                 result["cancelled"] = True
                 return result
 
-            # Step 4: PDF 텍스트 교체
-            self._log("[Step 4] Replacing texts in PDF...")
-            debug_path = None
-            if self.output_dir:
-                debug_path = str(Path(self.output_dir) / "replace_debug.json")
-
-            replace_result = replace_texts_in_pdf(
+            self._log("[Step 3] Applying translations...")
+            apply_result = self.apply(
                 pdf_path,
-                translations,
+                blocks,
+                translation_result.translations,
                 output_path,
-                debug_path=debug_path,
             )
 
-            result["translated_blocks"] = replace_result.get("replaced", 0)
-            result["failed_blocks"] = replace_result.get("failed", 0)
-            result["review_needed"] = replace_result.get("review_needed", 0)
-            result["success"] = replace_result.get("success", False)
+            result["translated_blocks"] = apply_result.get("replaced", 0)
+            result["failed_blocks"] = apply_result.get("failed", 0)
+            result["review_needed"] = apply_result.get("review_needed", 0)
+            result["success"] = apply_result.get("success", False)
 
-            self._log(f"  - Replaced: {replace_result.get('replaced', 0)}/{replace_result.get('total', 0)}")
-            if replace_result.get("failed", 0) > 0:
-                self._log(f"  - Failed: {replace_result.get('failed', 0)}")
-            if replace_result.get("review_needed", 0) > 0:
-                self._log(f"  - Review needed: {replace_result.get('review_needed', 0)}")
-
-            # Step 5: 로그 저장
+            # ===== Step 4: Save logs =====
             if self.output_dir:
                 self._save_log()
-                self._save_translation_data(korean_texts, translations)
+                self._save_blocks_data(blocks, translation_result.translations)
 
             self._log("=" * 60)
             self._log(f"Pipeline {'COMPLETED' if result['success'] else 'FAILED'}")
@@ -285,6 +442,29 @@ class PDFLayerPipeline:
             logger.exception("Pipeline error")
 
         return result
+
+    def _save_blocks_data(self, blocks: list[TextBlock], translations: dict[str, str]):
+        """블록 데이터 저장 (디버깅용)"""
+        if not self.output_dir:
+            return
+
+        output_dir = Path(self.output_dir)
+
+        # source_texts.json
+        source_data = [b.to_dict() for b in blocks]
+        source_path = output_dir / "source_texts.json"
+        with open(source_path, "w", encoding="utf-8") as f:
+            json.dump(source_data, f, ensure_ascii=False, indent=2)
+
+        # translations.json
+        trans_data = []
+        for block in blocks:
+            d = block.to_dict()
+            d["translated"] = translations.get(block.block_id, "")
+            trans_data.append(d)
+        trans_path = output_dir / "translations.json"
+        with open(trans_path, "w", encoding="utf-8") as f:
+            json.dump(trans_data, f, ensure_ascii=False, indent=2)
 
     def _translate_texts(
         self,
@@ -301,9 +481,6 @@ class PDFLayerPipeline:
         Returns:
             번역 데이터 리스트
         """
-        if not self.llm_client:
-            self._log("  [WARN] No LLM client. Using placeholder translations.")
-            return self._placeholder_translations(korean_texts)
 
         translations = []
 
@@ -383,8 +560,8 @@ class PDFLayerPipeline:
         # 프롬프트 생성
         prompt = self._build_translation_prompt(items, target_lang)
 
-        # LLM 호출
-        response = self.llm_client.complete(prompt)
+        # VLM 호출
+        response = translate_text_vlm(prompt)
 
         # 디버그: LLM 응답 로깅 (첫 500자)
         logger.debug(f"LLM response (first 500 chars): {response[:500] if response else 'EMPTY'}")
@@ -412,7 +589,7 @@ class PDFLayerPipeline:
 
             # 실패한 블록만 재번역
             retry_prompt = self._build_translation_prompt(failed_items, target_lang)
-            retry_response = self.llm_client.complete(retry_prompt)
+            retry_response = translate_text_vlm(retry_prompt)
 
             logger.debug(f"Retry {retry_count} response: {retry_response[:500] if retry_response else 'EMPTY'}")
 
@@ -459,15 +636,11 @@ class PDFLayerPipeline:
         all_text = " ".join(item.get("text_for_translation", item["text"]) for item in items)
         csv_terms = get_terms_in_text(all_text)
 
-        # 입력 glossary와 CSV 용어 병합 (CSV가 우선)
-        merged_glossary = dict(self.glossary) if self.glossary else {}
-        merged_glossary.update(csv_terms)
-
-        if merged_glossary:
+        if csv_terms:
             prompt_parts.append("")
             prompt_parts.append("=== MANDATORY TERMINOLOGY ===")
             prompt_parts.append("Use these exact terms when the Korean source term appears with the same meaning.")
-            for ko, en in merged_glossary.items():
+            for ko, en in csv_terms.items():
                 prompt_parts.append(f"  {ko} = {en}")
             prompt_parts.append("=== END TERMINOLOGY ===")
 
@@ -491,7 +664,7 @@ class PDFLayerPipeline:
             "",
             "Rules by text type:",
             "- TITLE: Use a concise slide title. Do not omit essential meaning.",
-            "- HEADING: Use a clear, compact section heading.",
+            "- HEADING: Use a clear, compact section heading. Preserve all numbers.",
             "- SECTION_HEADER: Use a short section label.",
             "- PRINCIPLE_TITLE: Preserve the principle/rule number and translate compactly.",
             "- TERM_DEFINITION: Preserve the 'Term: Definition' structure. Keep the term concise and the definition clear.",
@@ -506,13 +679,13 @@ class PDFLayerPipeline:
             "2. Keep the translation roughly similar in visual length to the Korean source.",
             "3. Prefer concise slide-style wording over long explanatory prose.",
             "4. Do not expand, explain, or add details beyond the source meaning.",
-            "5. If a literal translation is too long, use a shorter natural phrase that preserves the core meaning.",
+            "5. If a literal translation is too long, use a shorter phrase - but NEVER omit key information like numbers, names, or core concepts.",
             "6. Avoid unnecessarily long phrases such as 'the principle of how...' when a shorter phrase is natural.",
             "",
             "General rules:",
             "1. Translate according to the overall context and flow of the document.",
             "2. Keep proper nouns as-is if uncertain.",
-            "3. Keep numbers as digits (10 → 10, not Ten).",
+            "3. Keep numbers as digits. Do not omit numbers from translations.",
             "4. NEVER add bullet symbols (-, *, •, ■) because they are preserved from the original.",
             "5. Do NOT add extra punctuation or quotes.",
             "6. Keep symbols (⇒, →, ·) exactly in place.",

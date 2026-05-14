@@ -449,6 +449,10 @@ def replace_texts_in_pdf(
         overlay_data = []     # 이미지 위 텍스트 (redaction 없이 덮어쓰기)
 
         for trans in trans_list:
+            # 화살표 기호는 건너뛰기 (원본 유지)
+            if trans.get("is_arrow", False):
+                continue
+
             bbox = trans.get("bbox", (0, 0, 0, 0))
             prefix_width = trans.get("prefix_width", 0.0)
             on_image = trans.get("on_image_background", False)
