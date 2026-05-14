@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, session, Tray, Menu, nativeImage } = require('electron')
+const { app, BrowserWindow, ipcMain, desktopCapturer, session, Tray, Menu, nativeImage, screen } = require('electron')
 const { spawn } = require('child_process')
 const path = require('path')
 const http = require('http')
@@ -14,6 +14,7 @@ const _logDir = path.join(
 )
 try { fs.mkdirSync(_logDir, { recursive: true }) } catch {}
 const LOG_FILE = path.join(_logDir, 'error_log.txt')
+const WINDOW_STATE_FILE = path.join(_logDir, 'window-state.json')
 
 let _logInitialized = false
 
@@ -329,11 +330,78 @@ function waitForHealth(callback, maxAttempts = 60) {
 }
 
 
+// ─── 창 위치/크기 영속화 ────────────────────────────────────────────
+// 마지막 normal(=maximize 해제) bounds 추적. maximize 상태에서 저장 시 이 값을 기록해
+// 다음 실행 시 unmaximize 했을 때 자연 크기로 복원되도록.
+let _lastNormalBounds = null
+let _saveStateTimer = null
+
+function loadWindowState() {
+  try {
+    if (!fs.existsSync(WINDOW_STATE_FILE)) return null
+    return JSON.parse(fs.readFileSync(WINDOW_STATE_FILE, 'utf8'))
+  } catch (e) {
+    devLog(`window state load 실패 (디폴트 사용): ${e.message}`)
+    return null
+  }
+}
+
+function _positionInsideAnyDisplay(x, y) {
+  // 멀티모니터 검증 — 보조 모니터 분리/끄기 후 재실행 시 화면 밖으로 가지 않게.
+  try {
+    return screen.getAllDisplays().some((d) => {
+      const r = d.workArea
+      return x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
+    })
+  } catch {
+    return true
+  }
+}
+
+function _writeWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const isMax = mainWindow.isMaximized()
+  // maximize 상태에선 사용자가 X 누르기 직전의 normal bounds 를 저장.
+  const bounds = isMax && _lastNormalBounds ? _lastNormalBounds : mainWindow.getBounds()
+  try {
+    fs.writeFileSync(
+      WINDOW_STATE_FILE,
+      JSON.stringify({
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        isMaximized: isMax,
+      }),
+      'utf8',
+    )
+  } catch (e) {
+    devLog(`window state save 실패: ${e.message}`)
+  }
+}
+
+function saveWindowState() {
+  // resize/move 드래그 중엔 이벤트가 폭주하므로 debounce 로 디스크 thrash 회피.
+  if (_saveStateTimer) clearTimeout(_saveStateTimer)
+  _saveStateTimer = setTimeout(_writeWindowState, 500)
+}
+
+function _trackNormalBounds() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (!mainWindow.isMaximized()) {
+    _lastNormalBounds = mainWindow.getBounds()
+  }
+}
+
+
 function createWindow() {
   devLog('BrowserWindow 생성')
-  mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+
+  // 저장된 창 상태 로드 — 없으면 디폴트.
+  const saved = loadWindowState()
+  const winOpts = {
+    width: saved?.width ?? 1280,
+    height: saved?.height ?? 800,
     minWidth: 900,
     minHeight: 600,
     icon: path.join(__dirname, 'assets', 'icon.ico'),
@@ -341,6 +409,7 @@ function createWindow() {
     // Windows 에선 frame: false 라도 윈도우 가장자리 8px 리사이즈 영역은 그대로 유효.
     frame: false,
     backgroundColor: '#f5f5f4',  // 첫 페인트 전 흰 깜빡임 차단 (stone-100)
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
@@ -350,8 +419,29 @@ function createWindow() {
       // 이를 끄지 않으면 창 hide 후 진행 중인 fetch/setInterval 이 지연됨.
       backgroundThrottling: false,
     },
-    show: false,
-  })
+  }
+  // 저장된 좌표가 살아있는 디스플레이 안에 있을 때만 적용 — 보조 모니터 분리 후 재실행 시
+  // 창이 화면 밖으로 가는 것 방지 (Electron 이 자동으로 중앙 배치).
+  if (saved && saved.x != null && saved.y != null &&
+      _positionInsideAnyDisplay(saved.x, saved.y)) {
+    winOpts.x = saved.x
+    winOpts.y = saved.y
+  }
+  mainWindow = new BrowserWindow(winOpts)
+
+  // 초기 normal bounds 기록 — maximize() 호출 *전* 시점의 실제 적용된 bounds 사용.
+  // 멀티모니터 가드로 winOpts 의 x/y 가 빠진 경우 (보조 모니터 분리 후 재실행 등) Electron 이
+  // 중앙 배치한 실제 좌표를 반환하므로, saved 값을 직접 쓰는 것보다 안전 (화면 밖 좌표 회피).
+  _lastNormalBounds = mainWindow.getBounds()
+
+  // maximize 였으면 복원
+  if (saved?.isMaximized) mainWindow.maximize()
+
+  // 상태 변경 이벤트 → 저장 (debounced)
+  mainWindow.on('resize', () => { _trackNormalBounds(); saveWindowState() })
+  mainWindow.on('move', () => { _trackNormalBounds(); saveWindowState() })
+  mainWindow.on('maximize', saveWindowState)
+  mainWindow.on('unmaximize', saveWindowState)
 
   // 마이크/카메라/클립보드/전체화면 권한 자동 허가 (Electron 단독 앱 — 외부 사이트 아님).
   // fullscreen: 강의자 발표 모드 (Lecturer.tsx) 에서 requestFullscreen() 호출용. 없으면 deny.
@@ -430,7 +520,14 @@ function createWindow() {
       e.preventDefault()
       mainWindow.hide()
       devLog('창 닫기 가로채기 → 트레이로 hide')
+      return
     }
+    // 실제 종료 — pending debounce 가 디스크에 못 쓰고 destroy 될 가능성 차단
+    if (_saveStateTimer) {
+      clearTimeout(_saveStateTimer)
+      _saveStateTimer = null
+    }
+    _writeWindowState()
   })
 }
 

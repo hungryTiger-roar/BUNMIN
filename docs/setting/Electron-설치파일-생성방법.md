@@ -372,6 +372,54 @@ if sys.platform == "win32":
 
 ---
 
+## 창 위치/크기 영속화 ([frontend/electron/main.cjs](../../frontend/electron/main.cjs))
+
+매 실행 시 디폴트 1280x800 가운데에서 시작하지 않고, 사용자가 마지막에 둔 **위치 + 크기 + maximize 상태**를 복원. `electron-window-state` 같은 외부 의존성 없이 자체 구현.
+
+### 저장 위치
+
+```
+%LOCALAPPDATA%\Aunion AI\window-state.json
+```
+
+내용 예:
+```json
+{"x":120,"y":80,"width":1024,"height":720,"isMaximized":false}
+```
+
+### 동작 흐름
+
+| 시점 | 동작 |
+|---|---|
+| 앱 시작 (`createWindow`) | JSON 로드 → width/height 적용. x/y 가 살아있는 디스플레이 안이면 적용, 아니면 무시 (디폴트 중앙). `isMaximized: true` 였으면 `mainWindow.maximize()` |
+| `resize` / `move` | 500ms debounce 후 디스크 저장. 마지막 normal bounds 추적 |
+| `maximize` / `unmaximize` | 즉시 저장 (debounced) |
+| 창 X (트레이 hide) | 저장 X — bounds 변경 없음 |
+| 진짜 종료 (`isQuitting=true`) | pending debounce flush + 동기 저장 |
+
+### 핵심 안전장치
+
+- **멀티모니터 가드**: `screen.getAllDisplays()` 로 저장 좌표가 살아있는 디스플레이의 workArea 안인지 확인. 보조 모니터 분리/꺼짐 후 재실행 시 창이 화면 밖으로 가는 사고 방지.
+- **maximize-aware normal bounds**: `_lastNormalBounds` 변수가 직전 unmaximize 시점 bounds 추적. maximize 상태에서 종료해도 다음 unmaximize 시 자연 크기로 복원.
+- **JSON 파싱 실패**: try/catch 로 디폴트 사용 — 빈 파일 / 손상된 JSON 에도 fallback.
+- **debounce 500ms**: resize/move 드래그 중 폭주하는 이벤트로 인한 디스크 thrash 회피. close 시점 동기 flush 로 마지막 변경분 누락 차단.
+
+### 코드 위치
+
+- `loadWindowState()` / `_writeWindowState()` / `saveWindowState()` — `createWindow` 직전
+- `_positionInsideAnyDisplay(x, y)` — 멀티모니터 검증 helper
+- `_lastNormalBounds`, `_saveStateTimer` — 모듈 스코프 상태
+- `createWindow` 안: `loadWindowState` → BrowserWindow 생성자에 spread → resize/move/maximize/unmaximize 이벤트 리스너 등록
+
+### 검증
+
+1. 창 크기/위치 임의 변경 → 트레이 "종료" → 재실행 → **같은 크기/위치 복원** ✅
+2. Maximize → 종료 → 재실행 → **Maximize 로 시작** ✅
+3. Maximize → restore (작은 크기) → 종료 → 재실행 → 작은 크기 ✅
+4. 보조 모니터에 창 → 종료 → 모니터 분리 → 재실행 → **메인 모니터에 정상 표시** ✅
+
+---
+
 ## 기본 메뉴바 제거 + 자체 타이틀바 ([frontend/electron/main.cjs](../../frontend/electron/main.cjs), [TitleBar.tsx](../../frontend/src/components/common/TitleBar.tsx))
 
 기본 Electron chrome(File/Edit/View/Window/Help 메뉴 + OS 디폴트 흰색 타이틀바) 을 완전 제거하고 테마에 반응하는 자체 타이틀바를 그림. 데스크탑 앱 마감 완성도 ↑.
