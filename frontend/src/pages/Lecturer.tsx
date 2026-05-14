@@ -1,4 +1,4 @@
-﻿import { useEffect, useCallback, useState, useRef, type CSSProperties } from 'react'
+﻿﻿import { useEffect, useCallback, useState, useRef, type CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import {
@@ -19,7 +19,6 @@ import DrawingToolbar from '@/components/lecturer/DrawingToolbar'
 import { DrawingCanvas, type DrawingTool, type DrawingCanvasHandle } from '@/components/common/DrawingCanvas'
 import ScreenPickerModal from '@/components/lecturer/ScreenPickerModal'
 import { WS_PIPELINE_URL, API_BASE, getSlideLibrary } from '@/lib/api'
-import { getLanIp } from '@/lib/network'
 import SlideLibrarySearchModal from '@/components/lecturer/SlideLibrarySearchModal'
 import type { SlideLibraryItem } from '@/types/slide'
 
@@ -166,21 +165,12 @@ function Lecturer() {
 
   // WebRTC: 학생별 RTCPeerConnection 관리. participants로부터 학생 ID 추적.
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
-  // 학생별 — setRemoteDescription(answer) 전에 도착한 ICE candidate 버퍼 (표준 패턴).
-  //   (없으면 answer 처리 중 도착한 candidate 가 버려져 LAN 에서도 간헐적 연결 실패)
-  const pendingIceByStudentRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map())
 
   const handleWebRtcAnswer = useCallback(async (sender: string, sdp: RTCSessionDescriptionInit) => {
     const pc = peerConnectionsRef.current.get(sender)
     if (!pc) return
     try {
       await pc.setRemoteDescription(sdp)
-      // remoteDescription 세팅 완료 — 그 사이 큐에 모인 ICE candidate 일괄 추가.
-      const queued = pendingIceByStudentRef.current.get(sender) ?? []
-      pendingIceByStudentRef.current.set(sender, [])
-      for (const c of queued) {
-        try { await pc.addIceCandidate(c) } catch (e) { console.warn('[Lecturer] queued ICE 추가 실패:', e) }
-      }
     } catch (err) {
       console.error('[Lecturer] setRemoteDescription failed:', err)
     }
@@ -189,14 +179,8 @@ function Lecturer() {
   const handleWebRtcIce = useCallback((sender: string | null, candidate: RTCIceCandidateInit) => {
     if (!sender) return
     const pc = peerConnectionsRef.current.get(sender)
-    if (!pc || !pc.remoteDescription) {
-      // PC 없음 / setRemoteDescription 아직 안 끝남 — 큐에 보관, handleWebRtcAnswer 가 처리.
-      const q = pendingIceByStudentRef.current.get(sender) ?? []
-      q.push(candidate)
-      pendingIceByStudentRef.current.set(sender, q)
-      return
-    }
-    pc.addIceCandidate(candidate).catch((e) => console.warn('[Lecturer] ICE 추가 실패:', e))
+    if (!pc) return
+    pc.addIceCandidate(candidate).catch(() => { /* 핸드셰이크 도중 도착 가능 — 무시 */ })
   }, [])
 
   const { isConnected, connect, send, sendChat, sendLectureTitle, sendLecturerName } =
@@ -274,38 +258,20 @@ function Lecturer() {
     }
   }, [screenStream])
 
-  // 학생별 sendonly transceiver 보관 — mic/screen 토글 시 sender.replaceTrack 으로
-  // 재협상 없이 트랙 swap. 학생 측 ontrack 은 1회만 발화, DelayNode source 유지 →
-  // 토글 시 audio gap 없음, 15초 sync 그대로 보존.
-  const peerTransceiversRef = useRef<Map<string, {
-    audio: RTCRtpTransceiver
-    video: RTCRtpTransceiver
-  }>>(new Map())
-
-  // WebRTC: 학생당 1개 PC 생성 → audio/video sendonly transceiver 등록 → 트랙 attach → offer 송신.
-  //   - 스트림 유무와 무관하게 transceiver 는 항상 둘 — m-line 확보 → 이후 replaceTrack 만으로 동작.
-  //   - 화면공유 없이 마이크만으로도, 마이크 없이도 연결 가능 (원본 오디오 전용 모드).
+  // WebRTC: 학생당 1개 PC 생성 → 스크린/마이크 트랙 add → offer 송신
+  // 화면공유 없이도 마이크 트랙만으로 연결 가능 (원본 오디오 전용)
   const createOfferForStudent = useCallback(async (studentId: string) => {
+    const screenS = screenStreamRef.current
+    const micS = micStreamRef.current
+    if (!screenS && !micS) return
+
     const existing = peerConnectionsRef.current.get(studentId)
     if (existing) {
       existing.close()
       peerConnectionsRef.current.delete(studentId)
-      peerTransceiversRef.current.delete(studentId)
     }
-    pendingIceByStudentRef.current.set(studentId, [])  // 새 PC — 옛 큐 비움
-    // TURN 서버 호스트 — backend /network/info 의 LAN IP 사용.
-    // Electron 운영판에서 강사가 127.0.0.1 로 로드돼도 학생이 다른 머신에서 도달 가능한
-    // LAN IP 가 보장됨. fetch 실패 시 window.location.hostname 으로 폴백 (lib/network.ts).
-    const turnHost = await getLanIp()
-    const TURN_AUTH = { username: 'aunion', credential: 'aunion-secret' }
     const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        // 로컬 TURN — 같은 LAN 의 강사 노트북 위 node-turn (turn-server/index.js).
-        // P2P 차단 환경에서 client → server relay 로 우회. UDP·TCP 둘 다 등록 (UDP 차단 시 TCP fallback).
-        { urls: `turn:${turnHost}:47878`, ...TURN_AUTH },
-        { urls: `turn:${turnHost}:47878?transport=tcp`, ...TURN_AUTH },
-      ],
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     })
     peerConnectionsRef.current.set(studentId, pc)
     pc.onicecandidate = (e) => {
@@ -313,65 +279,29 @@ function Lecturer() {
         send({ type: 'webrtc_ice', target: studentId, candidate: e.candidate.toJSON() })
       }
     }
-    // WebRTC 연결 진단 — 'failed' / 계속 'checking' 이면 학생과 P2P 안 닿음 (클라이언트 격리/방화벽)
-    //   → 학생측 원본 음성 무음. host candidate(같은 LAN)로 연결돼야 정상.
-    pc.oniceconnectionstatechange = () => console.log(`[Lecturer] ICE state (${studentId.slice(0, 8)}): ${pc.iceConnectionState}`)
     pc.onconnectionstatechange = () => {
-      console.log(`[Lecturer] PC state (${studentId.slice(0, 8)}): ${pc.connectionState}`)
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         peerConnectionsRef.current.delete(studentId)
-        peerTransceiversRef.current.delete(studentId)
-        pendingIceByStudentRef.current.delete(studentId)
       }
-    }
-
-    // 동기적으로 transceiver 등록 — useEffect 가 즉시 replaceTrack 호출해도 안전.
-    const audio = pc.addTransceiver('audio', { direction: 'sendonly' })
-    const video = pc.addTransceiver('video', { direction: 'sendonly' })
-    peerTransceiversRef.current.set(studentId, { audio, video })
-
-    const screenS = screenStreamRef.current
-    const micS = micStreamRef.current
-    const replaces: Promise<void>[] = []
-    if (micS) {
-      const t = micS.getAudioTracks()[0]
-      if (t) replaces.push(audio.sender.replaceTrack(t))
     }
     if (screenS) {
-      const t = screenS.getVideoTracks()[0]
-      if (t) replaces.push(video.sender.replaceTrack(t))
+      screenS.getTracks().forEach((t) => pc.addTrack(t, screenS))
     }
-    await Promise.all(replaces)
-
+    if (micS) {
+      micS.getAudioTracks().forEach((t) => pc.addTrack(t, micS))
+    }
     try {
       const offer = await pc.createOffer()
-      // Opus DTX 비활성화 — 묵음 구간에도 packet 송출 유지 → 발화 재개 시 지지직(packet stream
-      // 끊김 후 jitter buffer underrun) 방지. trade-off: 대역폭 +5kbps/stream (무시 가능).
-      // SDP 의 audio m-line fmtp 에서 usedtx=1 제거 (있을 때만). 모든 fmtp 라인 대상이 아니라
-      // usedtx 키만 정확히 매칭 → 다른 codec 파라미터 안 건드림.
-      if (offer.sdp) {
-        offer.sdp = offer.sdp.replace(/;?\s*usedtx=1\b/g, '')
-      }
       await pc.setLocalDescription(offer)
       send({ type: 'webrtc_offer', target: studentId, sdp: pc.localDescription })
-      console.log('[Lecturer] WebRTC offer 송신', {
-        studentId,
-        audio: !!micS?.getAudioTracks()[0],
-        video: !!screenS?.getVideoTracks()[0],
-      })
     } catch (err) {
       console.error('[Lecturer] createOffer failed:', err)
       pc.close()
       peerConnectionsRef.current.delete(studentId)
-      peerTransceiversRef.current.delete(studentId)
-      pendingIceByStudentRef.current.delete(studentId)
     }
   }, [send])
 
-  // 화면 공유 시작/종료 + 학생 입출 + 마이크 스트림 변경에 따라 PC 동기화.
-  //   - 마이크/화면 토글 시 PC 닫지 않음. sender.replaceTrack 으로 트랙만 swap →
-  //     학생 측 ontrack 재발화 없음, DelayNode source 유지 → 토글 시 audio gap 없음.
-  //   - 모든 스트림 해제 (강의 종료/handleExit) 시점에만 PC 정리.
+  // 화면 공유 시작/종료 + 학생 입출 + 마이크 스트림 변경에 따라 PC 동기화
   const prevStreamRef = useRef<MediaStream | null>(null)
   const prevStudentIdsRef = useRef<Set<string>>(new Set())
   const prevMicStreamRef = useRef<MediaStream | null>(null)
@@ -381,46 +311,28 @@ function Lecturer() {
     const prevMicStream = prevMicStreamRef.current
     const currentIds = new Set(participants.students.map((s) => s.id))
 
-    const screenChanged = screenStream !== prevStream
-    const micChanged = micStream !== prevMicStream
     const hasAnyStream = !!screenStream || !!micStream
-
     if (!hasAnyStream) {
-      // 모든 스트림 해제 — 모든 PC 정리.
+      // 스트림 없음 → 모든 PC 닫기
       peerConnectionsRef.current.forEach((pc) => pc.close())
       peerConnectionsRef.current.clear()
-      peerTransceiversRef.current.clear()
-      pendingIceByStudentRef.current.clear()
+    } else if (screenStream !== prevStream || micStream !== prevMicStream) {
+      // 스트림 교체 또는 마이크 on/off → 모든 학생에게 새 PC + offer
+      peerConnectionsRef.current.forEach((pc) => pc.close())
+      peerConnectionsRef.current.clear()
+      currentIds.forEach((id) => createOfferForStudent(id))
     } else {
-      // 1) 기존 PC 트랙 교체 (재협상 X) — 학생 측 ontrack 재발화 없음.
-      if (micChanged || screenChanged) {
-        peerTransceiversRef.current.forEach(({ audio, video }) => {
-          if (micChanged) {
-            const t = micStream?.getAudioTracks()[0] ?? null
-            audio.sender.replaceTrack(t).catch((err) =>
-              console.error('[Lecturer] audio replaceTrack failed:', err))
-          }
-          if (screenChanged) {
-            const t = screenStream?.getVideoTracks()[0] ?? null
-            video.sender.replaceTrack(t).catch((err) =>
-              console.error('[Lecturer] video replaceTrack failed:', err))
-          }
-        })
-      }
-      // 2) 신규 학생 → 새 PC + offer.
+      // 같은 스트림에서 학생만 변경 → 신규에게만 offer, 떠난 학생 PC 닫기
       currentIds.forEach((id) => {
-        if (!peerConnectionsRef.current.has(id)) createOfferForStudent(id)
+        if (!prevIds.has(id)) createOfferForStudent(id)
       })
-      // 3) 떠난 학생 PC 정리.
       prevIds.forEach((id) => {
         if (!currentIds.has(id)) {
           const pc = peerConnectionsRef.current.get(id)
           if (pc) {
             pc.close()
             peerConnectionsRef.current.delete(id)
-            peerTransceiversRef.current.delete(id)
           }
-          pendingIceByStudentRef.current.delete(id)
         }
       })
     }
@@ -445,9 +357,8 @@ function Lecturer() {
       .then((res) => res.json())
       .then((data) => {
         const port = window.location.port || data.port
-        // 수강자는 BrowserRouter 사용 — # 없는 깨끗한 base URL 로 공유.
-        // base `/` 가 Start (이름 입력) → 버튼 → /student 흐름.
-        setShareUrl(`http://${data.lan_ip}:${port}/`)
+        // 수강자는 BrowserRouter 사용 — # 없는 깨끗한 URL 로 공유.
+        setShareUrl(`http://${data.lan_ip}:${port}/student/start`)
       })
       .catch(() => {})
   }, [])
@@ -1319,9 +1230,6 @@ function Lecturer() {
                     </>
                   ) : (
                     <div className="relative z-40 text-center text-white/70">
-                      <svg className="w-16 h-16 mx-auto mb-3 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                      </svg>
                       <p>화면을 공유하세요</p>
                       <div className="relative inline-flex flex-col items-center mt-4">
                         <button

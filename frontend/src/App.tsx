@@ -33,6 +33,21 @@ function App() {
     else if (theme === 'gradient') root.classList.add('theme-gradient')
   }, [theme])
 
+  // 초기 로딩 화면 제거
+  useEffect(() => {
+    const loader = document.getElementById('initial-loader')
+    if (loader) {
+      // 1. CSS 클래스를 추가해 투명해지는 애니메이션 시작
+      loader.classList.add('hidden')
+
+      // 2. 애니메이션 시간(0.5초) 후에 DOM에서 완전히 제거
+      const timer = setTimeout(() => {
+        loader.remove()
+      }, 500)
+      return () => clearTimeout(timer)
+    }
+  }, [])
+
   return (
     <>
       <TitleBar />

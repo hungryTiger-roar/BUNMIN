@@ -1,5 +1,4 @@
-﻿
-import { useEffect, useState, useRef, useCallback, type CSSProperties } from 'react'
+﻿﻿import { useEffect, useState, useRef, useCallback, type CSSProperties } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import {
@@ -16,7 +15,6 @@ import MaterialViewToggle from '@/components/common/MaterialViewToggle'
 import { StudentCursorOverlay, useCursorOverlay } from '@/components/student/StudentCursorOverlay'
 import { DrawingCanvas, type DrawingCanvasHandle } from '@/components/common/DrawingCanvas'
 import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
-import { getLanIp } from '@/lib/network'
 
 const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
   { value: 'off', label: 'Off' },
@@ -168,10 +166,8 @@ function Student() {
   const gainNodeRef = useRef<GainNode | null>(null)
   const pendingAudioStreamRef = useRef<MediaStream | null>(null)
 
-  // delayMs 는 useDelayBufferPlayer 의 초기/기준 lag — 실제 적용 lag 은 처리시간 따라 가변.
-  const delayMs = Number(import.meta.env.VITE_SYNC_DELAY_MS) || 10000
-  // 원본 음성 DelayNode 의 maxDelayTime — 적응형 currentDelay 상한(20s) + 여유.
-  const ADAPTIVE_MAX_DELAY_SEC = 22
+  // delayMs 는 useDelayBufferPlayer 와 동일한 값 사용 — 강사 박자 정합성.
+  const delayMs = Number(import.meta.env.VITE_SYNC_DELAY_MS) || 15000
 
   const unlockAudio = useCallback(async () => {
     const ok = await unlockTTS()
@@ -183,8 +179,8 @@ function Student() {
     if (!audioContextRef.current) {
       try {
         const ctx = new AudioContext()
-        // maxDelayTime 넉넉히 — 적응형 딜레이가 실행 중 늘어나도 커버. delayTime 초기값은 baseDelay.
-        const delayNode = ctx.createDelay(ADAPTIVE_MAX_DELAY_SEC)
+        // maxDelayTime 은 delayMs + 5s buffer (실행 중 동적 조정 여지).
+        const delayNode = ctx.createDelay((delayMs / 1000) + 5)
         delayNode.delayTime.value = delayMs / 1000
         const gainNode = ctx.createGain()
         gainNode.gain.value = 0  // 초기 0 — sync effect 가 즉시 올림
@@ -231,8 +227,6 @@ function Student() {
     getAudioLang: () => audioLangRef.current,
     delayMs,
   })
-  // 적응형 현재 lag 조회 (stable — useCallback([])). 원본 음성 DelayNode 동적 조정 / rebuild 에 사용.
-  const getCurrentDelay = unitPlayer.getCurrentDelay
 
   useEffect(() => {
     console.log(`[SyncMode] delay-buffer (delay=${delayMs}ms)`)
@@ -254,33 +248,16 @@ function Student() {
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null)
   const pendingStreamRef = useRef<MediaStream | null>(null)
   const sendRef = useRef<((data: object) => void) | null>(null)
-  // setRemoteDescription 완료 전에 도착한 ICE candidate 버퍼 — 표준 패턴. 완료 후 일괄 추가.
-  //   (없으면 offer 처리 중 도착한 candidate 가 InvalidStateError 로 버려져 LAN 에서도 간헐적 연결 실패)
-  const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([])
 
   const handleWebRtcOffer = useCallback(async (sdp: RTCSessionDescriptionInit) => {
     if (peerConnectionRef.current) {
       peerConnectionRef.current.close()
       peerConnectionRef.current = null
     }
-    pendingIceCandidatesRef.current = []
-    // TURN 서버 호스트 — backend /network/info 의 LAN IP 사용 (lib/network.ts).
-    // 강사 노트북이 곧 TURN host. fetch 실패 시 window.location.hostname 폴백.
-    const turnHost = await getLanIp()
-    const TURN_AUTH = { username: 'aunion', credential: 'aunion-secret' }
     const pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        // 로컬 TURN — 강사 노트북의 node-turn. UDP·TCP 양쪽 등록 (UDP 차단 시 TCP fallback).
-        { urls: `turn:${turnHost}:47878`, ...TURN_AUTH },
-        { urls: `turn:${turnHost}:47878?transport=tcp`, ...TURN_AUTH },
-      ],
+      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     })
     peerConnectionRef.current = pc
-    // WebRTC 연결 진단 — LAN 환경에서 P2P 실패(클라이언트 격리/방화벽) 추적용.
-    //   'failed' / 계속 'checking' → P2P 안 닿음 → 원본 음성 무음 (TTS 는 WebSocket 이라 별개).
-    pc.oniceconnectionstatechange = () => console.log(`[Student] ICE state: ${pc.iceConnectionState}`)
-    pc.onconnectionstatechange = () => console.log(`[Student] PC state: ${pc.connectionState}`)
     pc.ontrack = (e) => {
       if (e.track.kind === 'video') {
         const stream = e.streams[0]
@@ -290,11 +267,6 @@ function Student() {
         }
       } else if (e.track.kind === 'audio') {
         const audioStream = new MediaStream([e.track])
-        // 트랙 상태 진단 — '첫 마디 후 무음' 류 증상 디버깅용. mute/unmute 가
-        // 강사 발화 silence 구간마다 fire 됨 — 정상 동작이지만 너무 자주 끊기면 의심.
-        e.track.onmute = () => console.log(`[OriginalAudio] track mute (readyState=${e.track.readyState})`)
-        e.track.onunmute = () => console.log(`[OriginalAudio] track unmute (readyState=${e.track.readyState})`)
-        e.track.onended = () => console.warn(`[OriginalAudio] track ended — WebRTC 재협상 필요`)
         // <audio> 엘리먼트: 트랙 keepalive 용 srcObject 만 유지, 출력은 항상 muted.
         // 실제 재생은 Web Audio API (DelayNode → GainNode) 라인 — 자막/그림과 같은
         // 박자로 wall-clock + delayMs 후 출력.
@@ -333,12 +305,6 @@ function Student() {
     }
     try {
       await pc.setRemoteDescription(sdp)
-      // remoteDescription 세팅 완료 — 그 사이 큐에 모인 ICE candidate 일괄 추가.
-      const queued = pendingIceCandidatesRef.current
-      pendingIceCandidatesRef.current = []
-      for (const c of queued) {
-        try { await pc.addIceCandidate(c) } catch (e) { console.warn('[Student] queued ICE 추가 실패:', e) }
-      }
       const answer = await pc.createAnswer()
       await pc.setLocalDescription(answer)
       sendRef.current?.({ type: 'webrtc_answer', sdp: pc.localDescription })
@@ -351,17 +317,8 @@ function Student() {
 
   const handleWebRtcIce = useCallback((_sender: string | null, candidate: RTCIceCandidateInit) => {
     const pc = peerConnectionRef.current
-    if (!pc) {
-      // PC 가 아직 없음 (offer 보다 ICE 가 먼저 도착) — 큐에 보관, handleWebRtcOffer 가 처리.
-      pendingIceCandidatesRef.current.push(candidate)
-      return
-    }
-    if (!pc.remoteDescription) {
-      // PC 는 있지만 setRemoteDescription 아직 안 끝남 — 큐에 보관.
-      pendingIceCandidatesRef.current.push(candidate)
-      return
-    }
-    pc.addIceCandidate(candidate).catch((e) => console.warn('[Student] ICE 추가 실패:', e))
+    if (!pc) return
+    pc.addIceCandidate(candidate).catch(() => { /* 핸드셰이크 도중 도착 가능 — 무시 */ })
   }, [])
 
   // unit player 콜백 — useWebSocket 이 호출. transcription 은 sentence unit 으로,
@@ -406,6 +363,8 @@ function Student() {
   const [showTranscriptModal, setShowTranscriptModal] = useState(false)
   const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 1000)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  const [loadingVideoSrc] = useState(() => Math.random() > 0.5 ? '/animation_white.webm' : '/animation_black.webm')
 
   // 수강자 이름 인라인 편집 — 헤더 뱃지 클릭 시 input으로 전환
   const [isEditingName, setIsEditingName] = useState(false)
@@ -666,11 +625,10 @@ function Student() {
   // 원본 AudioContext suspend 복구 (옵션 B) — sync 보존형.
   //   단순 ctx.resume() 은 DelayNode 의 stale buffer 가 그대로 출력돼 visual/자막과
   //   N초 (= suspend 시간) desync 됨. 대신 resume 직후 DelayNode 와 MediaStreamSource 를
-  //   재생성해 buffer 를 비우고 새로 currentDelay 만큼 채우게 함 → 복귀 후 그만큼 무음 뒤 sync 복구.
-  //   gainNode 는 유지 (audioLang 별 mute 상태 보존). 새 DelayNode 의 delayTime 은 현재 적응형 lag.
-  const rebuildOriginalPipelineRef = useRef<() => Promise<void>>(async () => {})
+  //   재생성해 buffer 를 비우고 새로 15초 채우게 함 → 복귀 후 15초 무음 후 sync 그대로 복구.
+  //   gainNode 는 유지 (audioLang 별 mute 상태 보존).
   useEffect(() => {
-    rebuildOriginalPipelineRef.current = async () => {
+    const rebuildPipeline = async () => {
       const ctx = audioContextRef.current
       const gain = gainNodeRef.current
       if (!ctx || !gain) return
@@ -684,11 +642,9 @@ function Student() {
 
         await ctx.resume()
 
-        // 새 DelayNode — 이전 buffer (suspend 시점에 freeze 된 stale 샘플) 폐기.
-        // delayTime 은 현재 적응형 lag (clamp 0..max) — useDelayBufferPlayer 와 동기.
-        const newDelayNode = ctx.createDelay(ADAPTIVE_MAX_DELAY_SEC)
-        const targetSec = Math.max(0, Math.min(ADAPTIVE_MAX_DELAY_SEC, getCurrentDelay() / 1000))
-        newDelayNode.delayTime.value = targetSec
+        // 새 DelayNode — 이전 buffer (suspend 시점에 freeze 된 stale 샘플) 폐기
+        const newDelayNode = ctx.createDelay((delayMs / 1000) + 5)
+        newDelayNode.delayTime.value = delayMs / 1000
         newDelayNode.connect(gain)
         delayNodeRef.current = newDelayNode
 
@@ -707,84 +663,32 @@ function Student() {
             console.error('[OriginalAudio] resume 후 source 재연결 실패:', err)
           }
         }
-        console.log(`[OriginalAudio] sync 보존 — DelayNode 재생성 (${Math.round(targetSec * 1000)}ms 후 정상 출력)`)
+        console.log('[OriginalAudio] sync 보존 — DelayNode 재생성 (15초 후 정상 출력)')
       } catch (err) {
         console.error('[OriginalAudio] resume/rebuild 실패:', err)
       }
     }
-  }, [getCurrentDelay])
 
-  useEffect(() => {
-    const trigger = () => { rebuildOriginalPipelineRef.current() }
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') trigger()
+      if (document.visibilityState === 'visible') rebuildPipeline()
     }
     document.addEventListener('visibilitychange', onVisibility)
-    window.addEventListener('pageshow', trigger)
-    window.addEventListener('focus', trigger)
+    window.addEventListener('pageshow', rebuildPipeline)
+    window.addEventListener('focus', rebuildPipeline)
     return () => {
       document.removeEventListener('visibilitychange', onVisibility)
-      window.removeEventListener('pageshow', trigger)
-      window.removeEventListener('focus', trigger)
+      window.removeEventListener('pageshow', rebuildPipeline)
+      window.removeEventListener('focus', rebuildPipeline)
     }
-  }, [])
-
-  // 원본 음성 DelayNode 를 적응형 currentDelay 에 맞춰 동적 조정.
-  //   useDelayBufferPlayer 가 처리시간(ASR/NMT/네트워크/TTS합성)을 추적해 currentDelay 를
-  //   출렁이게 하면, 원본 음성도 같은 lag 을 따라가야 시각/자막/TTS 와 동기 유지.
-  //   1초 주기 폴링 + setTargetAtTime ramp:
-  //     · 줄일 땐 timeConstant 크게 (delayTime 줄이면 버퍼 빨리 소비 = 약간 빨리감기 → 천천히 ramp 해야 인지 안 됨)
-  //     · 늘릴 땐 작게 (delayTime 늘리면 무음 삽입 — 자연스러움)
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      const node = delayNodeRef.current
-      const ctx = audioContextRef.current
-      if (!node || !ctx || ctx.state !== 'running') return
-      const raw = getCurrentDelay() / 1000
-      if (!Number.isFinite(raw)) return  // 비정상 — DelayNode 건드리지 않음 (무음 방지)
-      const targetSec = Math.max(0, Math.min(ADAPTIVE_MAX_DELAY_SEC, raw))
-      const curSec = node.delayTime.value
-      if (Math.abs(targetSec - curSec) < 0.05) return  // 변화 미미 — skip
-      const timeConstant = targetSec < curSec ? 4.0 : 0.5
-      const now = ctx.currentTime
-      node.delayTime.cancelScheduledValues(now)
-      node.delayTime.setValueAtTime(node.delayTime.value, now)
-      node.delayTime.setTargetAtTime(targetSec, now, timeConstant)
-    }, 1000)
-    return () => window.clearInterval(id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [getCurrentDelay])
-
-  // 원본 재생 중 자동 suspend / 트랙 decoder back-off 방어 (watchdog).
-  //   - "TTS→원본 전환 시 무음" / "강의자 원본 첫 마디 후 끊김" 이슈는 둘 다 ctx.state 가
-  //     사용자 모르게 'suspended' 로 떨어지거나 <audio> 가 paused 로 전환되면서 WebRTC
-  //     트랙 디코더가 frame 흘리길 중단하는 패턴. visibility/focus 이벤트로는 잡히지 않음.
-  //   - 2초 주기로 점검 — ctx 가 suspended 면 rebuild (sync 보존), audio 가 paused 면 play().
-  //   - audioLang === 'original' && !isMuted && !isPaused 일 때만 동작 — TTS 모드에서는
-  //     원본 라인을 깨우지 않음 (불필요한 resume 으로 GainNode 0 인 채 트랙만 흘러 배터리만 소모).
-  useEffect(() => {
-    if (audioLang !== 'original' || isMuted || isPaused || !isAudioUnlocked) return
-    const id = window.setInterval(() => {
-      const ctx = audioContextRef.current
-      if (ctx && ctx.state === 'suspended') {
-        rebuildOriginalPipelineRef.current()
-      }
-      const audio = originalAudioRef.current
-      if (audio && audio.srcObject && audio.paused) {
-        audio.play().catch(() => { /* 다음 tick 에 재시도 */ })
-      }
-    }, 2000)
-    return () => window.clearInterval(id)
-  }, [audioLang, isMuted, isPaused, isAudioUnlocked])
+  }, [delayMs])
 
   // volume/muted/audioLang → TTS GainNode 실시간 동기화.
   // audioLang !== 'en' 이면 강제 mute — 토글 시 in-flight TTS 가 원본 음성과 동시 출력되는 것 차단.
   // (큐 새 진입은 unitPlayer 의 gate 가 막지만, 이미 재생 중인 sentence 는 GainNode mute 로만 차단 가능)
-  // isPaused 도 강제 mute 조건 — 일시정지 오버레이 중 in-flight TTS 가 들리는 것 차단.
   useEffect(() => {
-    const ttsEffectiveMuted = isMuted || audioLang !== 'en' || isPaused
+    const ttsEffectiveMuted = isMuted || audioLang !== 'en'
     setTTSVolume(volume, ttsEffectiveMuted)
-  }, [volume, isMuted, audioLang, isPaused, setTTSVolume])
+  }, [volume, isMuted, audioLang, setTTSVolume])
 
   // audioLang/volume/muted → 원본 음성 GainNode 동기화 (Web Audio 라인이 실제 출력).
   // <audio> 엘리먼트 정책 — Chrome WebRTC 트랙은 attached 된 element 가 "playing" 상태일 때만
@@ -803,12 +707,7 @@ function Student() {
     const gain = gainNodeRef.current
     const ctx = audioContextRef.current
     if (gain && ctx) {
-      // TTS→원본 전환 시 ctx 가 suspended 면 ramp 가 suspend 중에 완료돼 resume 후에도
-      // gain 0 인 채로 남음. audioLang === 'original' 이면 rebuild 우선 (sync 보존).
-      if (audioLang === 'original' && ctx.state === 'suspended') {
-        rebuildOriginalPipelineRef.current()
-      }
-      const target = (audioLang === 'original' && !isMuted && !isPaused) ? (volume / 100) : 0
+      const target = (audioLang === 'original' && !isMuted) ? (volume / 100) : 0
       // 10ms 선형 ramp — 사람의 짧은 gap 감지 임계(~5-10ms) 아래라 "즉시" 로 느껴지면서
       // sample boundary 클릭/팝 차단. (이전 setTargetAtTime(0.05) 는 ~250ms 까지 끌어
       // 토글 시 부드럽지만 살짝 느린 감 있었음.)
@@ -817,7 +716,7 @@ function Student() {
       gain.gain.setValueAtTime(gain.gain.value, now)
       gain.gain.linearRampToValueAtTime(target, now + 0.01)
     }
-  }, [audioLang, volume, isMuted, isAudioUnlocked, isPaused])
+  }, [audioLang, volume, isMuted, isAudioUnlocked])
 
   useEffect(() => {
     chatScrollRef.current?.scrollTo({
@@ -853,13 +752,12 @@ function Student() {
     : null
 
   const latestSubtitle = subtitles[subtitles.length - 1]
+  const primaryText = !latestSubtitle || subtitleLang === 'off' ? null
+    : subtitleLang === 'ko' ? latestSubtitle.original
+    : latestSubtitle.translated
   const secondaryText = !latestSubtitle || secondarySubtitleLang === 'off' ? null
     : secondarySubtitleLang === 'ko' ? latestSubtitle.original
     : latestSubtitle.translated
-  // 오버레이 자막 누적 — 최근 2줄 (이전 줄일수록 흐림). 8초 force-split 으로 한 문장이
-  // 두 조각으로 쪼개져도 앞 조각이 흐릿하게 남아 의미 조합 가능. secondary 는 최신 1개만.
-  const SUBTITLE_OVERLAY_LINES = 2
-  const overlaySubtitles = subtitleLang === 'off' ? [] : subtitles.slice(-SUBTITLE_OVERLAY_LINES)
   const effectiveVolume = isMuted ? 0 : volume
 
   const participantTotal =
@@ -874,21 +772,7 @@ function Student() {
       className="h-screen overflow-hidden flex flex-col bg-background text-onBackground"
     >
       {/* 원본 오디오 — audioLang=original 일 때만 언뮤트, 평소엔 muted */}
-      <audio
-        ref={originalAudioRef}
-        autoPlay
-        muted
-        playsInline
-        style={{ display: 'none' }}
-        onPause={() => {
-          // audio element 가 의도치 않게 paused → WebRTC 디코더가 frame 흘리는 걸
-          // 중단하기 직전. watchdog 이 곧 play() 재시도하지만 진단 로그로 기록.
-          console.warn('[OriginalAudio] <audio> paused — watchdog 이 재생 시도 예정')
-        }}
-        onError={(e) => {
-          console.error('[OriginalAudio] <audio> error:', (e.target as HTMLAudioElement).error)
-        }}
-      />
+      <audio ref={originalAudioRef} autoPlay muted playsInline style={{ display: 'none' }} />
 
       {/* 음성 활성화 오버레이 — 새로고침 / 직접 URL 진입 시 user gesture 확보 용도.
           브라우저 autoplay 정책상 사용자 클릭 없이 AudioContext.resume() 통과 불가 →
@@ -1171,35 +1055,21 @@ function Student() {
             ) : (
               <div className="absolute inset-0 flex items-center justify-center text-white/50">
                 <div className="text-center">
+                  <video src={loadingVideoSrc} autoPlay loop muted playsInline className="w-16 h-16 mx-auto" />
+                  <div className="loader --4 mb-4" />
                   {!isConnected ? (
-                    <>
-                      <svg className="w-16 h-16 mx-auto mb-4 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18.364 5.636a9 9 0 010 12.728M15.536 8.464a5 5 0 010 7.072" />
-                      </svg>
-                      <p className="text-lg">Connecting to server...</p>
-                    </>
+                    <p className="text-lg">Connecting to server...</p>
                   ) : !isLectureStarted ? (
-                    <>
-                      <svg className="w-16 h-16 mx-auto mb-4 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      <p className="text-lg">Waiting for the lecture to start...</p>
-                    </>
+                    <p className="text-lg">Waiting for the lecture to start...</p>
                   ) : (
-                    <>
-                      <svg className="w-16 h-16 mx-auto mb-4 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
-                      <p className="text-lg">Loading lecture material...</p>
-                    </>
+                    <p className="text-lg">Loading lecture material...</p>
                   )}
                 </div>
               </div>
             )}
 
-            {/* 자막 오버레이 — pause 중에는 숨김 (오버레이 위 자막 잔류 방지).
-                최근 2줄 누적: 최신 줄 선명(1.0), 직전 줄 흐림(0.45) — 경계 잘림 조각도 조합 가능. */}
-            {ccEnabled && !isPaused && (overlaySubtitles.length > 0 || secondaryText) && (() => {
+            {/* 자막 오버레이 */}
+            {ccEnabled && (primaryText || secondaryText) && (() => {
               const isBg = subtitleSettings.style === 'background'
               const textShadowIfNotBg = isBg ? {} : subtitleStyleToCss(subtitleSettings.style)
               const bgSpanStyle = isBg ? {
@@ -1219,22 +1089,11 @@ function Student() {
                     ...textShadowIfNotBg,
                   }}
                 >
-                  {overlaySubtitles.map((s, i) => {
-                    const text = subtitleLang === 'ko' ? s.original : s.translated
-                    if (!text) return null
-                    const isLatest = i === overlaySubtitles.length - 1
-                    // 이전 줄일수록 흐림 — 최신 1.0, 그 위 0.45
-                    const lineOpacity = isLatest ? 1 : 0.45
-                    return (
-                      <p
-                        key={s.id}
-                        className="font-medium leading-snug transition-opacity duration-300"
-                        style={{ opacity: lineOpacity }}
-                      >
-                        <span style={bgSpanStyle}>{text}</span>
-                      </p>
-                    )
-                  })}
+                  {primaryText && (
+                    <p className="font-medium leading-snug">
+                      <span style={bgSpanStyle}>{primaryText}</span>
+                    </p>
+                  )}
                   {secondaryText && (
                     <p
                       className="mt-1 leading-snug"
