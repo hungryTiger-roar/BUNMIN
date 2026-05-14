@@ -440,7 +440,7 @@ function Lecturer() {
     let lastSendTime = 0
     const SEND_INTERVAL = 50 // 20fps
 
-    const handleMove = (e: MouseEvent) => {
+    const handleMove = (e: PointerEvent) => {
       const container = slideBoxRef.current
       if (!container) {
         isInsideSlide = false
@@ -525,12 +525,12 @@ function Lecturer() {
       rafId = requestAnimationFrame(tick)
     }
 
-    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('pointermove', handleMove)
     document.addEventListener('mouseleave', handleLeave)
     rafId = requestAnimationFrame(tick)
 
     return () => {
-      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('pointermove', handleMove)
       document.removeEventListener('mouseleave', handleLeave)
       cancelAnimationFrame(rafId)
       // cleanup 시 visible:false 전송
@@ -681,7 +681,7 @@ function Lecturer() {
 
   const subtitleOverlay = ccEnabled && (primaryText || secondaryText) ? (
     <div
-      className={`absolute left-1/2 -translate-x-1/2 max-w-[85%] text-center text-white pointer-events-none z-10 ${
+      className={`absolute left-1/2 -translate-x-1/2 max-w-[85%] text-center text-white pointer-events-none z-40 ${
         subtitleSettings.position === 'top' ? 'top-6' : 'bottom-20'
       } px-4`}
       style={{

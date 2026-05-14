@@ -1055,8 +1055,11 @@ function Student() {
             ) : (
               <div className="absolute inset-0 flex items-center justify-center text-white/50">
                 <div className="text-center">
-                  <video src={loadingVideoSrc} autoPlay loop muted playsInline className="w-16 h-16 mx-auto" />
-                  <div className="loader --4 mb-4" />
+                  <div className="flex flex-col items-center justify-center">
+                    <video src={loadingVideoSrc} autoPlay loop muted playsInline className="w-16 h-16" />
+                    <div className="loader --4"></div>
+                  </div>
+
                   {!isConnected ? (
                     <p className="text-lg">Connecting to server...</p>
                   ) : !isLectureStarted ? (
@@ -1080,7 +1083,7 @@ function Student() {
               } as CSSProperties : {} as CSSProperties
               return (
                 <div
-                  className={`absolute left-1/2 -translate-x-1/2 max-w-[90%] text-center text-white pointer-events-none z-10 ${
+                  className={`absolute left-1/2 -translate-x-1/2 max-w-[90%] text-center text-white pointer-events-none z-40 ${
                     subtitleSettings.position === 'top' ? 'top-6' : 'bottom-20'
                   } px-4`}
                   style={{
