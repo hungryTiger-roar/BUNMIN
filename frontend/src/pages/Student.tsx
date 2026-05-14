@@ -1,5 +1,4 @@
-﻿
-import { useEffect, useState, useRef, useCallback, type CSSProperties } from 'react'
+﻿﻿﻿﻿﻿﻿import { useEffect, useState, useRef, useCallback, type CSSProperties } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import {
@@ -364,6 +363,8 @@ function Student() {
   const [showTranscriptModal, setShowTranscriptModal] = useState(false)
   const [isNarrow, setIsNarrow] = useState(() => window.innerWidth < 1000)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  const [loadingVideoSrc] = useState(() => Math.random() > 0.5 ? '/animation_white.webm' : '/animation_black.webm')
 
   // 수강자 이름 인라인 편집 — 헤더 뱃지 클릭 시 input으로 전환
   const [isEditingName, setIsEditingName] = useState(false)
@@ -1054,27 +1055,14 @@ function Student() {
             ) : (
               <div className="absolute inset-0 flex items-center justify-center text-white/50">
                 <div className="text-center">
+                  <video src={loadingVideoSrc} autoPlay loop muted playsInline className="w-16 h-16 mx-auto" />
+                  <div className="loader --4 mb-4" />
                   {!isConnected ? (
-                    <>
-                      <svg className="w-16 h-16 mx-auto mb-4 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M18.364 5.636a9 9 0 010 12.728M15.536 8.464a5 5 0 010 7.072" />
-                      </svg>
-                      <p className="text-lg">Connecting to server...</p>
-                    </>
+                    <p className="text-lg">Connecting to server...</p>
                   ) : !isLectureStarted ? (
-                    <>
-                      <svg className="w-16 h-16 mx-auto mb-4 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      <p className="text-lg">Waiting for the lecture to start...</p>
-                    </>
+                    <p className="text-lg">Waiting for the lecture to start...</p>
                   ) : (
-                    <>
-                      <svg className="w-16 h-16 mx-auto mb-4 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                      </svg>
-                      <p className="text-lg">Loading lecture material...</p>
-                    </>
+                    <p className="text-lg">Loading lecture material...</p>
                   )}
                 </div>
               </div>

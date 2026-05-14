@@ -1,93 +1,105 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Aunion AI - 실시간 강의 번역</title>
-    
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Special+Gothic+Expanded+One&display=swap"
-    />
-    
-    <script src="/ort.all.min.js"></script>
-    <script>window.ort.env.wasm.numThreads = 1;</script>
-    <script src="/vad-bundle.min.js"></script>
-
+    <title>Aunion AI</title>
     <style>
+      /* 기존 그라데이션 배경 애니메이션 */
+      body {
+        margin: 0;
+        background: linear-gradient(-45deg, #ee7752, #e73c7e, #23a6d5, #23d5ab);
+        background-size: 400% 400%;
+        animation: gradient 15s ease infinite;
+        height: 100vh;
+        overflow: hidden; /* 로딩 중 스크롤 방지 */
+      }
+
+      @keyframes gradient {
+        0% {
+          background-position: 0% 50%;
+        }
+        50% {
+          background-position: 100% 50%;
+        }
+        100% {
+          background-position: 0% 50%;
+        }
+      }
+
+      /* 초기 로딩 화면 스타일 */
       #initial-loader {
         position: fixed;
-        inset: 0;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
         display: flex;
-        flex-direction: column;
-        align-items: center;
         justify-content: center;
-        gap: 24px;
-        background: linear-gradient(135deg, #6E63E6 0%, #9D7AE8 50%, #C9A8F0 100%);
-        background-size: 800% 800%;
-        animation: initial-loader-bg 12s ease infinite;
-        color: #ffffff;
-        font-family: 'Special Gothic Expanded One', system-ui, -apple-system, sans-serif;
+        align-items: center;
+        flex-direction: column;
         z-index: 9999;
       }
-      #initial-loader .initial-loader__title {
-        font-size: clamp(2rem, 6vw, 3.5rem);
-        letter-spacing: 0.05em;
-        margin: 0;
+
+      #initial-loader.hidden {
+        opacity: 0;
+        pointer-events: none; /* 사라진 후 클릭 방지 */
       }
-      #initial-loader .initial-loader__subtitle {
-        font-family: system-ui, -apple-system, sans-serif;
-        font-size: 0.95rem;
-        opacity: 0.85;
-        margin: 0;
+
+      #initial-loader video {
+        display: none; /* 기본적으로 두 이미지 모두 숨김 */
+        max-width: 80%;
+        max-height: 80%;
+        width: 200px; /* 캐릭터 크기 2/3로 축소 */
+        height: auto;
       }
-      #initial-loader .initial-loader__spinner {
+
+      /* 좌우로 움직이는 로딩바 애니메이션 */
+      .loader {
+        --color: rgba(255, 255, 255, 0.85);
+        --size-bar: 4px;
+        display: grid;
+        place-items: center;
         position: relative;
-        width: 80px;
-        height: 80px;
-        border-radius: 50%;
-        background: conic-gradient(
-          from 0deg,
-          rgba(255,255,255,0) 0deg,
-          rgba(255,255,255,1) 270deg,
-          transparent 270deg
-        );
-        -webkit-mask: radial-gradient(circle, transparent 20px, black 21px, black 30px, transparent 31px);
-                mask: radial-gradient(circle, transparent 20px, black 21px, black 30px, transparent 31px);
-        animation: initial-loader-spin 1s linear infinite;
-        filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.6));
+        height: 10px;
+        margin-top: 12px;
       }
-      #initial-loader .initial-loader__spinner-head {
+      .loader::before {
+        content: '';
+        box-sizing: border-box;
         position: absolute;
-        width: 9px;
-        height: 9px;
-        border-radius: 50%;
-        background: #ffffff;
-        top: 35.5px;
-        left: 10px;
       }
-      @keyframes initial-loader-spin {
-        to { transform: rotate(360deg); }
+      .loader.--4::before {
+        height: var(--size-bar);
+        width: 60px;
+        background-color: var(--color);
+        border-radius: 2px;
+        animation: loader-4 0.8s cubic-bezier(0, 0, 0.03, 0.9) infinite;
       }
-      @keyframes initial-loader-bg {
-        0%   { background-position: 0% 50%; }
-        50%  { background-position: 100% 50%; }
-        100% { background-position: 0% 50%; }
+      @keyframes loader-4 {
+        0%, 44%, 88.1%, 100% { transform-origin: left; }
+        0%, 100%, 88% { transform: scaleX(0); }
+        44.1%, 88% { transform-origin: right; }
+        33%, 44% { transform: scaleX(1); }
       }
     </style>
   </head>
   <body>
-    <div id="root">
-      <div id="initial-loader" aria-live="polite" aria-busy="true">
-        <h1 class="initial-loader__title">Aunion AI</h1>
-        <div class="initial-loader__spinner" role="status" aria-label="로딩 중">
-          <div class="initial-loader__spinner-head"></div>
-        </div>
-      </div>
+    <!-- React 마운트 전 표시될 초기 로더 -->
+    <div id="initial-loader">
+      <!-- 투명 배경 동영상(WebM)으로 랜덤 로딩 애니메이션 재생 -->
+      <video id="loader-video" autoplay loop muted playsinline style="display: block;"></video>
+      <div class="loader --4"></div>
     </div>
+
+    <script>
+      document.getElementById('loader-video').src = Math.random() > 0.5 ? '/animation_white.webm' : '/animation_black.webm';
+    </script>
+
+    <div id="root"></div>
+
+    <!-- 랜덤 선택 스크립트는 잠시 비활성화합니다 -->
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
