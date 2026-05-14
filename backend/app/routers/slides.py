@@ -3,6 +3,7 @@
 PDF 업로드 및 전처리 (OCR + VLM 번역)
 """
 import asyncio
+import gc
 import hashlib
 import json
 import os
@@ -13,6 +14,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+import torch
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, BackgroundTasks, Query
 from fastapi.responses import FileResponse
@@ -1319,24 +1322,21 @@ def pdf_to_images(pdf_path: Path) -> list[bytes]:
 
 async def process_slide_pdf_layer(slide_id: str, pdf_path: Path, _skip_vlm_unload: bool = False):
     """
-    PDF 레이어 방식 슬라이드 처리 (통합 번역 파이프라인)
-
-    [새 아키텍처: extract → translate_blocks → apply]
-    - PDF Layer와 OCR 블록을 먼저 모두 추출
-    - 공통 translate_blocks()로 한 번에 번역 (문서 전체 맥락 공유)
-    - 각 파이프라인의 apply()로 결과 적용
+    PDF 레이어 방식 슬라이드 처리
 
     Stage 1: 페이지 분류
     Stage 2: 텍스트 추출 (PDF Layer + OCR)
-    Stage 3: 공통 번역 (translate_blocks)
-    Stage 4: 번역 적용 (PDF Layer apply + OCR apply)
+    Stage 3: 번역 (VLM on GPU, 청크 단위)
+    Stage 4: 번역 적용
     Stage 5: PDF 합성
 
     _skip_vlm_unload: 배치 처리 시 True — VLM을 언로드하지 않고 다음 파일에서 재사용
     """
     import fitz
     from app.services.slide_translation.pdf_pipeline import PDFLayerPipeline
-    from app.services.slide_translation.image_pipeline import OCRPipeline, unload_vlm_model
+    from app.services.slide_translation.image_pipeline import (
+        OCRPipeline, unload_vlm_model
+    )
     from app.services.slide_translation.translator import translate_blocks
     from app.services.slide_translation.models import TextBlock
 
@@ -1393,45 +1393,23 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path, _skip_vlm_unloa
         # 출력 경로
         translated_pdf_path = TRANSLATED_DIR / f"{slide_id}_translated.pdf"
 
-        # ========== Stage 2: 텍스트 추출 (PDF Layer + OCR) ==========
+        # OCR 필요 페이지 목록
+        all_ocr_pages = list(set(ocr_pages + image_region_pages))
+        all_ocr_pages.sort()
+        ocr_needed_set = set(all_ocr_pages)
+
+        # ========== Stage 2: 텍스트 추출 ==========
         print("\n" + "=" * 60)
         print(f"[Stage 2] 텍스트 추출")
         print("=" * 60)
         _set_stage(slide_id, "ocr", total_pages)
 
-        all_blocks: list[TextBlock] = []
-        pdf_blocks: list[TextBlock] = []
-        ocr_blocks: list[TextBlock] = []
         image_paths_map: dict[int, str] = {}
+        ocr_blocks: list[TextBlock] = []
 
-        # 2-1. PDF Layer 추출
-        if pdf_layer_pages:
-            print(f"\n  [PDF Layer] {len(pdf_layer_pages)}개 페이지 추출 중...")
-
-            pdf_pipeline = PDFLayerPipeline(
-                output_dir=str(TRANSLATED_DIR),
-                should_cancel=lambda sid=slide_id: _is_cancelled(sid),
-            )
-
-            pdf_blocks = await asyncio.to_thread(
-                pdf_pipeline.extract,
-                str(pdf_path)
-            )
-
-            print(f"  [PDF Layer] {len(pdf_blocks)}개 블록 추출 완료")
-            all_blocks.extend(pdf_blocks)
-
-        # 체크포인트
-        if _is_cancelled(slide_id):
-            await _cleanup_cancelled(slide_id)
-            return
-
-        # 2-2. OCR 추출 (Surya)
-        all_ocr_pages = list(set(ocr_pages + image_region_pages))
-        all_ocr_pages.sort()
-
+        # 2-1. OCR 페이지 처리 (Surya)
         if all_ocr_pages:
-            print(f"\n  [OCR] {len(all_ocr_pages)}개 페이지 추출 중...")
+            print(f"\n  [OCR] {len(all_ocr_pages)}개 페이지 처리 중...")
 
             # 이미지 준비
             image_paths_for_ocr: list[tuple[int, str]] = []
@@ -1448,47 +1426,62 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path, _skip_vlm_unloa
 
             doc.close()
 
-            # OCR 파이프라인으로 추출
+            # OCRPipeline으로 추출
             ocr_pipeline = OCRPipeline(
-                slide_id=slide_id,
+                should_cancel=lambda sid=slide_id: _is_cancelled(sid),
+            )
+            ocr_blocks = await asyncio.to_thread(
+                ocr_pipeline.extract,
+                image_paths_for_ocr,
+            )
+            print(f"  [OCR] {len(ocr_blocks)}개 블록 추출 완료")
+
+        # 2-2. PDF Layer 추출
+        all_pdf_blocks: list[TextBlock] = []
+        if pdf_layer_pages:
+            print(f"\n  [PDF Layer] {len(pdf_layer_pages)}개 페이지 추출 중...")
+
+            pdf_pipeline = PDFLayerPipeline(
+                output_dir=str(TRANSLATED_DIR),
                 should_cancel=lambda sid=slide_id: _is_cancelled(sid),
             )
 
-            ocr_blocks = await asyncio.to_thread(
-                ocr_pipeline.extract,
-                image_paths_for_ocr
+            all_pdf_blocks = await asyncio.to_thread(
+                pdf_pipeline.extract,
+                str(pdf_path)
             )
 
-            print(f"  [OCR] {len(ocr_blocks)}개 블록 추출 완료")
-            all_blocks.extend(ocr_blocks)
-
-            # 진행 상태 업데이트
-            for i, page_idx in enumerate(all_ocr_pages):
-                _page_completed(slide_id, i + 1)
+            print(f"  [PDF Layer] {len(all_pdf_blocks)}개 블록 추출 완료")
 
         # 체크포인트
         if _is_cancelled(slide_id):
             await _cleanup_cancelled(slide_id)
             return
 
-        # ========== Stage 3: 공통 번역 (translate_blocks) ==========
+        # ========== Stage 3: 번역 (VLM on GPU) ==========
         print("\n" + "=" * 60)
-        print(f"[Stage 3] 공통 번역 ({len(all_blocks)}개 블록)")
+        print(f"[Stage 3] 번역")
         print("=" * 60)
         _set_stage(slide_id, "translate", total_pages)
 
-        translation_result = None
+        # 모든 블록 합치기
+        all_blocks = all_pdf_blocks + ocr_blocks
 
-        if all_blocks:
-            # 한글 블록만 필터링
-            korean_blocks = [
-                b for b in all_blocks
-                if any('\uac00' <= c <= '\ud7af' for c in b.text)
-            ]
+        # 한글 블록만 필터링
+        korean_blocks = [
+            b for b in all_blocks
+            if any('\uac00' <= c <= '\ud7af' for c in b.text)
+        ]
 
-            if korean_blocks:
-                print(f"  한글 블록: {len(korean_blocks)}개 (PDF: {len([b for b in korean_blocks if b.source == 'pdf'])}, OCR: {len([b for b in korean_blocks if b.source == 'ocr'])})")
+        print(f"  전체 블록: {len(all_blocks)}개")
+        print(f"  한글 블록: {len(korean_blocks)}개")
 
+        all_translations: dict[str, str] = {}
+
+        if korean_blocks:
+            print(f"\n  번역 시작...")
+
+            try:
                 translation_result = await asyncio.to_thread(
                     translate_blocks,
                     korean_blocks,
@@ -1496,15 +1489,13 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path, _skip_vlm_unloa
                     15,    # chunk_size
                     None,  # context_summary
                 )
+                all_translations = translation_result.translations
+                print(f"  번역 완료: {len(all_translations)}개")
 
-                print(f"  번역 완료: {len(translation_result.translations)}개 성공, {len(translation_result.failed_ids)}개 실패")
+            except Exception as e:
+                print(f"  번역 실패: {e}")
 
-                # 진행 상태 업데이트
-                _page_completed(slide_id, total_pages)
-            else:
-                print("  번역할 한글 블록 없음 - 스킵")
-        else:
-            print("  추출된 블록 없음 - 스킵")
+        print(f"\n  총 번역 완료: {len(all_translations)}개 블록")
 
         # VLM 언로드 (배치 처리 시 마지막 파일까지 보류)
         if not _skip_vlm_unload:
@@ -1521,7 +1512,8 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path, _skip_vlm_unloa
         print(f"[Stage 4] 번역 적용")
         print("=" * 60)
 
-        translations = translation_result.translations if translation_result else {}
+        translations = all_translations
+        pdf_blocks = all_pdf_blocks
 
         # 4-1. PDF Layer apply
         if pdf_blocks and translations:

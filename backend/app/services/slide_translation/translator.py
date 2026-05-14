@@ -168,7 +168,7 @@ def _translate_block_group(
 
     # 청크별 번역
     for i, chunk in enumerate(chunks):
-        logger.info(f"[Translator] {source_label} chunk {i+1}/{len(chunks)}: {len(chunk)} blocks")
+        logger.info(f"[Translator] ===== {source_label} Chunk {i+1}/{len(chunks)} ({len(chunk)} blocks) =====")
 
         try:
             chunk_result = _translate_chunk(
@@ -178,8 +178,9 @@ def _translate_block_group(
                 context_summary=context_summary,
             )
             translations.update(chunk_result)
+            logger.info(f"[Translator] Chunk {i+1} completed: {len(chunk_result)} translations")
         except Exception as e:
-            logger.error(f"[Translator] Chunk {i+1} failed: {e}")
+            logger.error(f"[Translator] Chunk {i+1} FAILED: {e}")
             # 청크 실패 시 해당 블록들은 failed로 처리
             for block in chunk:
                 failed_ids.append(block.block_id)
@@ -264,6 +265,9 @@ def _build_prompt(
         "4. Keep symbols (⇒, →, ·) exactly in place.",
         "5. If Korean has English in parentheses, keep only the English term when appropriate.",
         "6. Output format: [BLOCK_ID]: translated text",
+        "7. NEVER omit place names, proper nouns, or specific details from the source.",
+        "8. Korean inequalities: 이상 = 'or more' (≥), 초과 = 'more than' (>), 이하 = 'or less' (≤), 미만 = 'less than' (<).",
+        "9. Use correct English grammar. For broken/failed states, use passive voice (e.g., 'the transmission broke' not 'broke the transmission').",
         "",
         "Texts to translate:",
     ])
@@ -317,6 +321,13 @@ def _parse_response(response: str, blocks: list[TextBlock]) -> dict[str, str]:
     # 매칭 처리
     for block_id, translated in matches:
         block_id = block_id.strip()
+        translated = translated.strip()
+
+        # VLM이 남긴 마크업 태그 제거
+        # 예: "(HEADING): text" → "text"
+        # 예: "[pdf_p14_b5] (BODY): text" → "text"
+        translated = re.sub(r'^\[[\w_]+\]\s*', '', translated)  # [block_id] 제거
+        translated = re.sub(r'^\((?:TITLE|HEADING|BODY|BULLET|CAPTION|TERM_DEFINITION)\)\s*:?\s*', '', translated, flags=re.IGNORECASE)
         translated = translated.strip()
 
         # LLM이 추가한 bullet 기호 제거

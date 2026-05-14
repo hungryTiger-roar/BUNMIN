@@ -74,7 +74,9 @@ import sys as _sys_init
 _BASE_DIR = Path(_sys_init.executable).parent if getattr(_sys_init, 'frozen', False) else Path(__file__).parent.parent.parent.parent.parent
 
 # .env 로드
-load_dotenv(_BASE_DIR / ".env")
+_env_path = _BASE_DIR / ".env"
+print(f"[Config] .env 경로: {_env_path} (존재: {_env_path.exists()})")
+load_dotenv(_env_path)
 
 # ============================================================
 # 파일 로깅 설정
@@ -273,7 +275,9 @@ def _resolve_vlm(value: str) -> str:
 
 VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL") or _vlm_default())
 VLM_DEVICE = os.environ.get("VLM_DEVICE", "cuda")
-VLM_USE_4BIT = os.environ.get("VLM_USE_4BIT", "true").lower() == "true"
+_vlm_4bit_raw = os.environ.get("VLM_USE_4BIT", "true")
+VLM_USE_4BIT = _vlm_4bit_raw.lower() == "true"
+print(f"[Config] VLM_USE_4BIT 환경변수: '{_vlm_4bit_raw}' → {VLM_USE_4BIT}")
 
 _vlm_model = None
 _vlm_processor = None
@@ -291,6 +295,12 @@ def get_vlm_model():
 
     from transformers import AutoProcessor, AutoModelForImageTextToText, BitsAndBytesConfig
 
+    # GPU 메모리 상태 출력
+    gpu_mem_total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    gpu_mem_used = torch.cuda.memory_allocated(0) / (1024**3)
+    gpu_mem_free = gpu_mem_total - gpu_mem_used
+    print(f"[VLM] GPU 메모리: {gpu_mem_free:.1f}GB 사용 가능 / {gpu_mem_total:.1f}GB 전체")
+
     print(f"[VLM] 모델 최초 로드 중... (4bit={VLM_USE_4BIT})")
     print(f"[VLM] Base: {VLM_BASE_MODEL}")
 
@@ -303,13 +313,13 @@ def get_vlm_model():
         )
         model_kwargs = {
             "quantization_config": bnb_config,
-            "device_map": "auto",
+            "device_map": {"": 0},  # GPU 0에 전체 로드 (CPU offload 금지)
             "trust_remote_code": True,
         }
     else:
         model_kwargs = {
             "torch_dtype": torch.float16,
-            "device_map": "auto",
+            "device_map": {"": 0},  # GPU 0에 전체 로드 (CPU offload 금지)
             "trust_remote_code": True,
         }
 
@@ -326,7 +336,9 @@ def get_vlm_model():
     )
     _vlm_model.eval()
 
-    print("[VLM] 모델 로드 완료!")
+    # 로드 후 GPU 메모리 상태
+    gpu_mem_used_after = torch.cuda.memory_allocated(0) / (1024**3)
+    print(f"[VLM] 모델 로드 완료! (VRAM 사용: {gpu_mem_used_after:.1f}GB)")
     return _vlm_model, _vlm_processor
 
 
@@ -369,6 +381,11 @@ def translate_text_vlm(prompt: str, max_new_tokens: int = 2048) -> str:
     """
     model, processor = get_vlm_model()
 
+    # 추론 전 VRAM 로그
+    if torch.cuda.is_available():
+        vram_before = torch.cuda.memory_allocated() / 1024**3
+        log_info(f"[VRAM] Before inference: {vram_before:.2f} GB")
+
     messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
 
     try:
@@ -380,20 +397,36 @@ def translate_text_vlm(prompt: str, max_new_tokens: int = 2048) -> str:
             messages, tokenize=False, add_generation_prompt=True
         )
 
-    inputs = processor(text=[text], return_tensors="pt").to(model.device)
+    inputs = None
+    outputs = None
+    try:
+        inputs = processor(text=[text], return_tensors="pt").to(model.device)
 
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            temperature=0.3,
-            do_sample=True
-        )
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                temperature=0.3,
+                do_sample=True
+            )
 
-    input_len = inputs["input_ids"].shape[1]
-    response = processor.decode(outputs[0][input_len:], skip_special_tokens=True).strip()
+        input_len = inputs["input_ids"].shape[1]
+        response = processor.decode(outputs[0][input_len:], skip_special_tokens=True).strip()
 
-    return response
+        return response
+
+    finally:
+        # 예외 발생 여부와 관계없이 항상 GPU 메모리 정리
+        if inputs is not None:
+            del inputs
+        if outputs is not None:
+            del outputs
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            vram_after = torch.cuda.memory_allocated() / 1024**3
+            log_info(f"[VRAM] After cleanup: {vram_after:.2f} GB")
 
 
 # ============================================================
