@@ -252,7 +252,7 @@ function Student() {
       if (!ctx || !node) return
       const targetSec = unitPlayerRef.current.getCurrentDelay() / 1000
       if (!Number.isFinite(targetSec)) return
-      const clamped = Math.min(targetSec, node.maxDelayTime)
+      const clamped = Math.min(targetSec, ORIGINAL_AUDIO_DELAY_MAX_SEC)
       const current = node.delayTime.value
       if (Math.abs(clamped - current) < 0.1) return
       const now = ctx.currentTime
