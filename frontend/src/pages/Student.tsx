@@ -233,6 +233,32 @@ function Student() {
     console.log(`[SyncMode] delay-buffer (delay=${delayMs}ms)`)
   }, [delayMs])
 
+  // unitPlayer 는 매 렌더 새 객체 — ref 캐시로 polling effect 재마운트 차단.
+  const unitPlayerRef = useRef(unitPlayer)
+  useEffect(() => { unitPlayerRef.current = unitPlayer }, [unitPlayer])
+
+  // 원본 음성 DelayNode 를 useDelayBufferPlayer 의 currentDelay 에 동기화.
+  // hook docstring 이 명시한 "Student.tsx 가 getCurrentDelay 폴링" 의 빠진 구현부 —
+  // 미구현 시 처리시간 > 고정 delayMs 인 발화에서 원본만 먼저 들리는 desync 발생.
+  // DelayNode max 는 (delayMs/1000)+5 라 env 작을 때 그 한도까지만 따라감 (clamp).
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const ctx = audioContextRef.current
+      const node = delayNodeRef.current
+      if (!ctx || !node) return
+      const targetSec = unitPlayerRef.current.getCurrentDelay() / 1000
+      if (!Number.isFinite(targetSec)) return
+      const clamped = Math.min(targetSec, node.maxDelayTime)
+      const current = node.delayTime.value
+      if (Math.abs(clamped - current) < 0.1) return
+      const now = ctx.currentTime
+      node.delayTime.cancelScheduledValues(now)
+      node.delayTime.setValueAtTime(current, now)
+      node.delayTime.linearRampToValueAtTime(clamped, now + 0.2)
+    }, 250)
+    return () => window.clearInterval(id)
+  }, [])
+
   // ref 기반 커서 오버레이 (React 상태 없이 DOM 직접 조작)
   // slideRef를 전달해서 컨테이너 크기 기준으로 px 변환
   const { spotlightRef, onCursor } = useCursorOverlay(slideRef)
