@@ -23,7 +23,6 @@ bbox_analyzer.py → image_pipeline.py (VLM 모델 공유)
 - batch_ocr_surya(): 배치 OCR (Surya 한 번 로드)
 - batch_translate_vlm(): 배치 번역 (VLM 한 번 로드)
 - batch_overlay(): 배치 오버레이
-- build_glossary_from_ocr_results(): 용어집 빌드
 - clear_cache(): 캐시 삭제
 
 [원본 파일]
@@ -47,8 +46,11 @@ __all__ = [
     "batch_translate_vlm",
     "batch_overlay",
     # 유틸리티
-    "build_glossary_from_ocr_results",
     "clear_cache",
+    # VLM 텍스트 번역 (pdf_pipeline에서 사용)
+    "translate_text_vlm",
+    # OCR Pipeline (extract/apply 패턴)
+    "OCRPipeline",
 ]
 import gc
 import logging
@@ -65,11 +67,16 @@ import yaml
 from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 
+from .term_corrections import get_terms_in_text, correct_ocr_text, build_ocr_corrector
+from .models import TextBlock
+
 import sys as _sys_init
 _BASE_DIR = Path(_sys_init.executable).parent if getattr(_sys_init, 'frozen', False) else Path(__file__).parent.parent.parent.parent.parent
 
 # .env 로드
-load_dotenv(_BASE_DIR / ".env")
+_env_path = _BASE_DIR / ".env"
+print(f"[Config] .env 경로: {_env_path} (존재: {_env_path.exists()})")
+load_dotenv(_env_path)
 
 # ============================================================
 # 파일 로깅 설정
@@ -159,66 +166,15 @@ def cfg(key: str, default=None):
     return value
 
 
-# ============================================================
-# 용어집 빌더
-# ============================================================
-_glossary_builder = None
-
-def get_glossary_builder():
-    """GlossaryBuilder 싱글톤 반환"""
-    global _glossary_builder
-    if _glossary_builder is None:
-        try:
-            from backend.app.services.glossary_builder import GlossaryBuilder
-            _glossary_builder = GlossaryBuilder()
-        except Exception as e:
-            print(f"[Glossary] GlossaryBuilder 로드 실패: {e}")
-            _glossary_builder = False
-    return _glossary_builder if _glossary_builder else None
-
-
-def build_glossary_from_ocr_results(ocr_results: list, lecture_title: str = "Lecture") -> dict:
-    """
-    전체 슬라이드 OCR 결과에서 용어집 빌드
-
-    Args:
-        ocr_results: [(image_path, regions), ...] OCR 결과 리스트
-        lecture_title: 강의 제목
-
-    Returns:
-        dict: {한글: 영어} 전문용어 매핑
-    """
-    builder = get_glossary_builder()
-    if not builder:
-        return {}
-
-    all_texts = []
-    for image_path, regions in ocr_results:
-        if regions:
-            for r in regions:
-                text = r.get("ocr_text", "")
-                if text:
-                    all_texts.append(text)
-
-    if not all_texts:
-        return {}
-
-    try:
-        return builder.build_glossary(all_texts, lecture_title)
-    except Exception as e:
-        print(f"[Glossary] 빌드 실패: {e}")
-        return {}
-
-
 # VLM 프롬프트에 포함할 용어집 최대 항목 수
 # - VLM 입력 토큰 길이 제한 (Qwen2.5-VL: 8192 tokens)
 # - 용어집이 너무 길면 번역할 텍스트가 잘릴 수 있음
 # - 25개 × ~30 chars ≈ 750 chars → 안전한 범위
-MAX_GLOSSARY_ITEMS = 25
+MAX_TERMS_ITEMS = 25
 
 
-def select_glossary_items(
-    glossary: dict,
+def select_terms_for_prompt(
+
     max_items: int = None,
     context_texts: list[str] = None
 ) -> list[tuple[str, str]]:
@@ -226,22 +182,34 @@ def select_glossary_items(
     VLM 프롬프트에 포함할 용어집 항목 선택
 
     선택 전략 (우선순위):
-    1. 현재 페이지 텍스트에 실제로 등장하는 용어 (context_texts 제공 시)
-    2. 나머지는 원래 순서대로 (빌드 시 빈도/중요도 순 정렬됨)
+    1. CSV 용어집에서 현재 페이지에 등장하는 용어 (최우선)
+
+    3. 나머지는 원래 순서대로 (빌드 시 빈도/중요도 순 정렬됨)
 
     Args:
-        glossary: {한글: 영어} 용어집
-        max_items: 최대 항목 수 (기본: MAX_GLOSSARY_ITEMS)
+
+        max_items: 최대 항목 수 (기본: MAX_TERMS_ITEMS)
         context_texts: 현재 페이지의 OCR 텍스트 리스트 (우선순위 판단용)
 
     Returns:
         [(한글, 영어), ...] 선택된 항목 리스트
     """
-    if not glossary:
+    max_items = max_items or MAX_TERMS_ITEMS
+
+    # CSV 용어집에서 현재 페이지에 등장하는 용어 추출
+    csv_terms = {}
+    if context_texts:
+        all_text = " ".join(context_texts)
+        csv_terms = get_terms_in_text(all_text)
+
+    # CSV 용어집만 사용
+
+
+
+    if not csv_terms:
         return []
 
-    max_items = max_items or MAX_GLOSSARY_ITEMS
-    items = list(glossary.items())
+    items = list(csv_terms.items())
 
     if len(items) <= max_items:
         return items
@@ -307,7 +275,9 @@ def _resolve_vlm(value: str) -> str:
 
 VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL") or _vlm_default())
 VLM_DEVICE = os.environ.get("VLM_DEVICE", "cuda")
-VLM_USE_4BIT = os.environ.get("VLM_USE_4BIT", "true").lower() == "true"
+_vlm_4bit_raw = os.environ.get("VLM_USE_4BIT", "true")
+VLM_USE_4BIT = _vlm_4bit_raw.lower() == "true"
+print(f"[Config] VLM_USE_4BIT 환경변수: '{_vlm_4bit_raw}' → {VLM_USE_4BIT}")
 
 _vlm_model = None
 _vlm_processor = None
@@ -325,6 +295,12 @@ def get_vlm_model():
 
     from transformers import AutoProcessor, AutoModelForImageTextToText, BitsAndBytesConfig
 
+    # GPU 메모리 상태 출력
+    gpu_mem_total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    gpu_mem_used = torch.cuda.memory_allocated(0) / (1024**3)
+    gpu_mem_free = gpu_mem_total - gpu_mem_used
+    print(f"[VLM] GPU 메모리: {gpu_mem_free:.1f}GB 사용 가능 / {gpu_mem_total:.1f}GB 전체")
+
     print(f"[VLM] 모델 최초 로드 중... (4bit={VLM_USE_4BIT})")
     print(f"[VLM] Base: {VLM_BASE_MODEL}")
 
@@ -337,13 +313,13 @@ def get_vlm_model():
         )
         model_kwargs = {
             "quantization_config": bnb_config,
-            "device_map": {"": 0},
+            "device_map": {"": 0},  # GPU 0에 전체 로드 (CPU offload 금지)
             "trust_remote_code": True,
         }
     else:
         model_kwargs = {
             "torch_dtype": torch.float16,
-            "device_map": {"": 0},
+            "device_map": {"": 0},  # GPU 0에 전체 로드 (CPU offload 금지)
             "trust_remote_code": True,
         }
 
@@ -360,7 +336,9 @@ def get_vlm_model():
     )
     _vlm_model.eval()
 
-    print("[VLM] 모델 로드 완료!")
+    # 로드 후 GPU 메모리 상태
+    gpu_mem_used_after = torch.cuda.memory_allocated(0) / (1024**3)
+    print(f"[VLM] 모델 로드 완료! (VRAM 사용: {gpu_mem_used_after:.1f}GB)")
     return _vlm_model, _vlm_processor
 
 
@@ -389,6 +367,66 @@ def unload_vlm_model():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     print("[VLM] VRAM 해제 완료")
+
+
+def translate_text_vlm(prompt: str, max_new_tokens: int = 2048) -> str:
+    """VLM으로 텍스트 번역 (pdf_pipeline에서 사용)
+
+    Args:
+        prompt: 번역 프롬프트 (전체 텍스트)
+        max_new_tokens: 최대 생성 토큰 수
+
+    Returns:
+        VLM 응답 텍스트
+    """
+    model, processor = get_vlm_model()
+
+    # 추론 전 VRAM 로그
+    if torch.cuda.is_available():
+        vram_before = torch.cuda.memory_allocated() / 1024**3
+        log_info(f"[VRAM] Before inference: {vram_before:.2f} GB")
+
+    messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+
+    try:
+        text = processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
+    except TypeError:
+        text = processor.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+
+    inputs = None
+    outputs = None
+    try:
+        inputs = processor(text=[text], return_tensors="pt").to(model.device)
+
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                temperature=0.3,
+                do_sample=True
+            )
+
+        input_len = inputs["input_ids"].shape[1]
+        response = processor.decode(outputs[0][input_len:], skip_special_tokens=True).strip()
+
+        return response
+
+    finally:
+        # 예외 발생 여부와 관계없이 항상 GPU 메모리 정리
+        if inputs is not None:
+            del inputs
+        if outputs is not None:
+            del outputs
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            vram_after = torch.cuda.memory_allocated() / 1024**3
+            log_info(f"[VRAM] After cleanup: {vram_after:.2f} GB")
 
 
 # ============================================================
@@ -507,10 +545,10 @@ def is_leaked_prompt(text: str) -> bool:
         "1. translation",
         "translate:",
         "rules:",
-        "glossary:",
+        "terminology:",
         "page context:",
         "[translate]",
-        "[glossary]",
+        "[terminology]",
         "[rules]",
     ]
     return any(p in lower for p in prompt_patterns)
@@ -855,13 +893,13 @@ def stage_ocr_surya(image_path: str) -> list:
 # ============================================================
 # 2단계: 번역 (VLM)
 # ============================================================
-def stage_translate(image_path: str, regions: list, glossary: dict = None) -> list:
+def stage_translate(image_path: str, regions: list) -> list:
     """VLM으로 번역"""
     log_info("\n" + "=" * 60)
     log_info("[2/3] 번역: VLM")
     log_info("=" * 60)
     log_debug(f"[stage_translate] 시작: {image_path}")
-    log_debug(f"  입력 regions: {len(regions)}개, glossary: {len(glossary) if glossary else 0}개")
+    log_debug(f"  입력 regions: {len(regions)}개")
 
     original_image = Image.open(image_path).convert("RGB")
     image_size = original_image.size
@@ -929,24 +967,26 @@ def stage_translate(image_path: str, regions: list, glossary: dict = None) -> li
     page_context_items = [r["ocr_text"] for r in regions if r.get("ocr_text")]
     page_context = ", ".join(page_context_items[:20])
 
-    glossary_section = ""
-    if glossary:
-        selected_glossary = select_glossary_items(glossary, context_texts=page_context_items)
-        glossary_lines = [f'  "{ko}": "{en}"' for ko, en in selected_glossary]
-        glossary_section = "\n[GLOSSARY]\n" + "\n".join(glossary_lines) + "\n"
+    terms_section = ""
+    # CSV 용어집에서 해당 용어 추출
+    csv_terms = get_terms_in_text(" ".join(page_context_items))
+    if csv_terms:
+        selected_terms = select_terms_for_prompt(context_texts=page_context_items)
+        terms_lines = [f'  "{ko}": "{en}"' for ko, en in selected_terms]
+        terms_section = "\n[TERMINOLOGY]\n" + "\n".join(terms_lines) + "\n"
 
     PROMPT = f"""Translate Korean to English for a lecture slide.
 
 [PAGE CONTEXT]
 {page_context}
-{glossary_section}
+{terms_section}
 [TRANSLATE]
 {text_list}
 
 RULES:
 1. Output EXACTLY {total_lines} lines, format: "1. translation"
 2. Use PAGE CONTEXT to disambiguate ambiguous/short terms
-3. Use GLOSSARY translations for technical terms if provided
+3. Use TERMINOLOGY translations for technical terms if provided
 4. Standard academic terminology
 5. Never romanize - translate to English
 6. KEEP: emails, URLs, filenames, code syntax
@@ -1508,7 +1548,7 @@ def batch_translate_vlm(
     ocr_results: dict[int, list],
     image_paths: dict[int, str],
     slide_id: str = None,
-    glossary: dict = None,
+
     chunk_size: int = None,
     is_cancelled_callback: callable = None
 ) -> dict[int, list]:
@@ -1519,7 +1559,7 @@ def batch_translate_vlm(
         ocr_results: {page_idx: regions, ...}
         image_paths: {page_idx: image_path, ...}
         slide_id: 캐시 저장용 슬라이드 ID
-        glossary: 용어집
+
         chunk_size: 청크 크기
         is_cancelled_callback: 취소 여부 확인 콜백 (페이지 처리 전 호출)
 
@@ -1530,7 +1570,7 @@ def batch_translate_vlm(
         return {}
 
     chunk_size = chunk_size or VLM_CHUNK_SIZE
-    glossary = glossary or {}
+
     results = {}
 
     # 캐시된 결과 먼저 로드
@@ -1553,7 +1593,7 @@ def batch_translate_vlm(
     log_info("\n" + "=" * 60)
     log_info(f"[VLM Batch] {len(pending_pages)}개 페이지 번역")
     log_info("=" * 60)
-    log_debug(f"[batch_translate_vlm] slide_id={slide_id}, glossary={len(glossary)}개, chunk_size={chunk_size}")
+    log_debug(f"[batch_translate_vlm] slide_id={slide_id}, chunk_size={chunk_size}")
 
     # VLM 모델 로드 (한 번만)
     log_info("  VLM 모델 로드 중...")
@@ -1584,7 +1624,7 @@ def batch_translate_vlm(
 
                 # 기존 stage_translate 로직 재사용 (모델 로드 제외)
                 translated = _translate_regions_with_vlm(
-                    regions, img_path, model, processor, glossary
+                    regions, img_path, model, processor
                 )
 
                 results[page_idx] = translated
@@ -1612,8 +1652,8 @@ def _translate_regions_with_vlm(
     regions: list,
     image_path: str,
     model,
-    processor,
-    glossary: dict
+    processor
+
 ) -> list:
     """VLM으로 영역 번역 (내부 함수)"""
     original_image = Image.open(image_path).convert("RGB")
@@ -1659,24 +1699,26 @@ def _translate_regions_with_vlm(
     page_context_items = [r["ocr_text"] for r in regions if r.get("ocr_text")]
     page_context = ", ".join(page_context_items[:20])
 
-    glossary_section = ""
-    if glossary:
-        selected_glossary = select_glossary_items(glossary, context_texts=page_context_items)
-        glossary_lines = [f'  "{ko}": "{en}"' for ko, en in selected_glossary]
-        glossary_section = "\n[GLOSSARY]\n" + "\n".join(glossary_lines) + "\n"
+    terms_section = ""
+    # CSV 용어집에서 해당 용어 추출
+    csv_terms = get_terms_in_text(" ".join(page_context_items))
+    if csv_terms:
+        selected_terms = select_terms_for_prompt(context_texts=page_context_items)
+        terms_lines = [f'  "{ko}": "{en}"' for ko, en in selected_terms]
+        terms_section = "\n[TERMINOLOGY]\n" + "\n".join(terms_lines) + "\n"
 
     PROMPT = f"""Translate Korean to English for a lecture slide.
 
 [PAGE CONTEXT]
 {page_context}
-{glossary_section}
+{terms_section}
 [TRANSLATE]
 {text_list}
 
 RULES:
 1. Output EXACTLY {total_lines} lines, format: "1. translation"
 2. Use PAGE CONTEXT to disambiguate ambiguous/short terms
-3. Use GLOSSARY translations for technical terms if provided
+3. Use TERMINOLOGY translations for technical terms if provided
 4. Standard academic terminology
 5. Never romanize - translate to English
 6. KEEP: emails, URLs, filenames, code syntax
@@ -1825,3 +1867,643 @@ def batch_overlay(
 
     log_debug(f"[batch_overlay] 완료: {len(output_paths)}개 이미지 생성됨")
     return output_paths
+
+
+# ============================================================
+# OCRPipeline: extract() / apply() 패턴
+# ============================================================
+class OCRPipeline:
+    """
+    OCR 기반 번역 파이프라인 (extract/apply 분리)
+
+    [설계 원칙]
+    - 저신뢰도 원본 유지 정책 폐기: 모든 한글은 번역
+    - confidence는 진단용 메타데이터로만 사용
+    - 번역 전 OCR 오인식 보정 (ocr_corrections.csv)
+
+    TODO: OCR 후처리 개선 필요 (docs/slide/TODO_OCR_POSTPROCESS.md 참조)
+        - 현재 OCR 오인식 보정이 수동 등록(ocr_corrections.csv) 방식만 지원
+        - Surya OCR 인식률이 낮을 때 오역 발생 가능
+        - 개선안: fuzzy matching, 맞춤법 검사기, LLM 후보정 등
+
+    [사용법]
+    pipeline = OCRPipeline()
+
+    # Step 1: 이미지에서 텍스트 추출
+    blocks = pipeline.extract(image_paths, slide_id="abc123")
+
+    # Step 2: 공통 번역 (translate_blocks 사용)
+    from .translator import translate_blocks
+    result = translate_blocks(blocks, target_lang="en")
+
+    # Step 3: 번역 결과 오버레이
+    output_paths = pipeline.apply(image_paths, blocks, result.translations, output_dir)
+    """
+
+    def __init__(
+        self,
+        slide_id: str = None,
+        should_cancel: callable = None,
+    ):
+        """
+        Args:
+            slide_id: 캐시용 슬라이드 ID
+            should_cancel: 취소 여부 확인 콜백
+        """
+        self.slide_id = slide_id
+        self.should_cancel = should_cancel
+        self._ocr_corrector = build_ocr_corrector()
+
+    def _check_cancelled(self) -> bool:
+        if self.should_cancel is None:
+            return False
+        try:
+            return bool(self.should_cancel())
+        except Exception:
+            return False
+
+    # =========================================================================
+    # extract() - Surya OCR → list[TextBlock]
+    # =========================================================================
+    def extract(
+        self,
+        image_paths: list[tuple[int, str]],
+        chunk_size: int = None,
+    ) -> list[TextBlock]:
+        """
+        이미지들에서 텍스트 블록 추출 (번역 없이)
+
+        Args:
+            image_paths: [(page_idx, image_path), ...]
+            chunk_size: Surya 배치 크기 (기본: OCR_CHUNK_SIZE)
+
+        Returns:
+            list[TextBlock]: 추출된 텍스트 블록 리스트
+                - OCR 보정 적용됨
+                - confidence 포함 (진단용)
+                - font=None (OCR은 폰트 정보 없음)
+        """
+        if not image_paths:
+            return []
+
+        log_info("\n" + "=" * 60)
+        log_info("[OCR Extract] Surya OCR 시작")
+        log_info(f"  이미지 수: {len(image_paths)}")
+        log_info("=" * 60)
+
+        chunk_size = chunk_size or OCR_CHUNK_SIZE
+        blocks: list[TextBlock] = []
+
+        # GPU 메모리 정리
+        log_info("  GPU 메모리 정리 중...")
+        unload_vlm_model()
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+
+        # Surya 모델 로드
+        from surya.foundation import FoundationPredictor
+        from surya.detection import DetectionPredictor
+        from surya.recognition import RecognitionPredictor
+
+        log_info("  Surya 모델 로드 중...")
+        foundation_predictor = FoundationPredictor()
+        det_predictor = DetectionPredictor()
+        rec_predictor = RecognitionPredictor(foundation_predictor)
+        log_info("  Surya 모델 로드 완료")
+
+        # 캐시 확인 및 처리할 페이지 분류
+        pending_pages = []
+        for page_idx, img_path in image_paths:
+            if self._check_cancelled():
+                log_warning("  [OCR Extract] 취소됨")
+                break
+
+            # 캐시 확인
+            if self.slide_id:
+                cached = load_ocr_cache(self.slide_id, page_idx)
+                if cached is not None:
+                    log_info(f"  페이지 {page_idx+1}: 캐시 사용")
+                    # 캐시된 regions를 TextBlock으로 변환
+                    page_blocks = self._regions_to_blocks(cached, page_idx)
+                    blocks.extend(page_blocks)
+                    continue
+
+            pending_pages.append((page_idx, img_path))
+
+        # 청크 단위 OCR 처리
+        for chunk_start in range(0, len(pending_pages), chunk_size):
+            if self._check_cancelled():
+                log_warning("  [OCR Extract] 취소됨")
+                break
+
+            chunk = pending_pages[chunk_start:chunk_start + chunk_size]
+            log_info(f"\n  [Chunk {chunk_start//chunk_size + 1}] {len(chunk)}개 페이지")
+
+            for page_idx, img_path in chunk:
+                if self._check_cancelled():
+                    break
+
+                try:
+                    image = Image.open(img_path).convert("RGB")
+                    log_info(f"    페이지 {page_idx+1}: {image.size[0]}x{image.size[1]}px")
+
+                    rec_results = rec_predictor([image], det_predictor=det_predictor)
+
+                    regions = []
+                    region_idx = 0
+
+                    for page_result in rec_results:
+                        for line in page_result.text_lines:
+                            raw_text = normalize_ocr_text(line.text.strip())
+                            confidence = float(line.confidence)
+
+                            if not raw_text:
+                                continue
+
+                            # 저신뢰도 로깅 (스킵하지 않음 - 진단용)
+                            if confidence < 0.5:
+                                log_warning(f"      [LOW_CONF {confidence:.2f}] {raw_text[:30]}...")
+
+                            # OCR 보정 적용
+                            corrected_text = self._ocr_corrector(raw_text)
+                            if corrected_text != raw_text:
+                                log_debug(f"      [OCR 보정] '{raw_text}' → '{corrected_text}'")
+
+                            bbox = (
+                                float(line.bbox[0]),
+                                float(line.bbox[1]),
+                                float(line.bbox[2]),
+                                float(line.bbox[3]),
+                            )
+
+                            # 한글 포함 여부 확인 (번역 대상)
+                            text_has_korean = has_korean(corrected_text)
+
+                            # 번역 스킵 조건 (한글 없는 경우만)
+                            skip = not text_has_korean
+
+                            regions.append({
+                                "bbox": list(bbox),
+                                "ocr_text": corrected_text,
+                                "raw_ocr_text": raw_text,  # 원본 보존 (디버깅용)
+                                "confidence": confidence,
+                                "skip_translate": skip,
+                                "has_korean": text_has_korean,
+                            })
+
+                            # TextBlock 생성
+                            block = TextBlock(
+                                block_id=f"ocr_p{page_idx}_r{region_idx}",
+                                source="ocr",
+                                page=page_idx,
+                                text=corrected_text,
+                                bbox=bbox,
+                                role=self._infer_role(corrected_text, bbox),
+                                font=None,  # OCR은 폰트 정보 없음
+                                confidence=confidence,
+                            )
+                            blocks.append(block)
+                            region_idx += 1
+
+                    image.close()
+                    log_info(f"    → {region_idx}개 영역 감지")
+
+                    # 캐시 저장
+                    if self.slide_id:
+                        save_ocr_cache(self.slide_id, page_idx, regions)
+
+                except Exception as e:
+                    log_error(f"    페이지 {page_idx+1} OCR 실패: {e}")
+
+        # Surya 모델 해제
+        log_info("\n  Surya 모델 메모리 해제 중...")
+        del foundation_predictor, det_predictor, rec_predictor
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        log_info("  Surya 모델 메모리 해제 완료")
+
+        log_info(f"\n[OCR Extract] 완료: {len(blocks)}개 블록")
+        return blocks
+
+    def _regions_to_blocks(self, regions: list, page_idx: int) -> list[TextBlock]:
+        """캐시된 regions를 TextBlock 리스트로 변환"""
+        blocks = []
+        for idx, r in enumerate(regions):
+            bbox = r.get("bbox", [0, 0, 0, 0])
+            if isinstance(bbox, list):
+                bbox = tuple(bbox)
+
+            # OCR 보정 적용 (캐시된 데이터에도)
+            text = r.get("ocr_text", "")
+            corrected = self._ocr_corrector(text)
+
+            block = TextBlock(
+                block_id=f"ocr_p{page_idx}_r{idx}",
+                source="ocr",
+                page=page_idx,
+                text=corrected,
+                bbox=bbox,
+                role=self._infer_role(corrected, bbox),
+                font=None,
+                confidence=r.get("confidence"),
+            )
+            blocks.append(block)
+        return blocks
+
+    def _infer_role(self, text: str, bbox: tuple) -> str:
+        """텍스트 역할 추정"""
+        x0, y0, x1, y1 = bbox
+        height = y1 - y0
+
+        # 간단한 휴리스틱
+        if height > 40:
+            return "title"
+        elif height > 25:
+            return "heading"
+        elif text.strip().startswith(("•", "-", "·", "▶", "►")):
+            return "bullet"
+        else:
+            return "body"
+
+    # =========================================================================
+    # apply() - TextBlock + translations → 이미지 오버레이
+    # =========================================================================
+    def apply(
+        self,
+        image_paths: dict[int, str],
+        blocks: list[TextBlock],
+        translations: dict[str, str],
+        output_dir: str,
+    ) -> dict[int, str]:
+        """
+        번역 결과를 이미지에 오버레이
+
+        Args:
+            image_paths: {page_idx: image_path, ...}
+            blocks: extract()에서 반환된 TextBlock 리스트
+            translations: {block_id: translated_text, ...}
+            output_dir: 출력 디렉토리
+
+        Returns:
+            {page_idx: output_path, ...}
+
+        Notes:
+            - 모든 한글 블록 번역 (저신뢰도도 포함)
+            - 원문 제거 (배경색 덮기 / 인페인팅)
+            - 폰트 크기: bbox 높이에서 역산
+            - 텍스트 색상: 주변 픽셀에서 추정
+            - 오버플로우: 줄바꿈 + 폰트 축소
+        """
+        log_info("\n" + "=" * 60)
+        log_info("[OCR Apply] 오버레이 시작")
+        log_info(f"  블록 수: {len(blocks)}, 번역 수: {len(translations)}")
+        log_info("=" * 60)
+
+        # 페이지별 블록 그룹화
+        page_blocks: dict[int, list[tuple[TextBlock, str]]] = {}
+        for block in blocks:
+            page_idx = block.page
+            translated = translations.get(block.block_id, "")
+
+            # 번역 없으면 원문 유지 (한글 없는 경우)
+            if not translated:
+                if not has_korean(block.text):
+                    translated = block.text
+                else:
+                    # 한글인데 번역 없으면 로그 (하지만 스킵하지 않음)
+                    log_warning(f"  [NO_TRANS] {block.block_id}: {block.text[:30]}...")
+                    translated = block.text  # 원문 유지
+
+            if page_idx not in page_blocks:
+                page_blocks[page_idx] = []
+            page_blocks[page_idx].append((block, translated))
+
+        output_paths = {}
+        os.makedirs(output_dir, exist_ok=True)
+
+        for page_idx, img_path in image_paths.items():
+            if self._check_cancelled():
+                log_warning("  [OCR Apply] 취소됨")
+                break
+
+            if page_idx not in page_blocks:
+                continue
+
+            try:
+                output_path = os.path.join(
+                    output_dir,
+                    f"{self.slide_id or 'page'}_{page_idx}.png"
+                )
+
+                self._render_page(
+                    img_path,
+                    page_blocks[page_idx],
+                    output_path,
+                )
+                output_paths[page_idx] = output_path
+                log_info(f"  페이지 {page_idx+1}: 완료 → {output_path}")
+
+            except Exception as e:
+                log_error(f"  페이지 {page_idx+1} 렌더링 실패: {e}")
+
+        log_info(f"\n[OCR Apply] 완료: {len(output_paths)}개 이미지 생성")
+        return output_paths
+
+    def _render_page(
+        self,
+        img_path: str,
+        block_translations: list[tuple[TextBlock, str]],
+        output_path: str,
+    ):
+        """단일 페이지 렌더링"""
+        img = Image.open(img_path).convert("RGB")
+        img_np = np.array(img)
+
+        # 렌더링할 영역 수집
+        render_regions = []
+
+        for block, translated in block_translations:
+            # 원문과 번역이 같으면 스킵 (한글 없는 경우)
+            if translated == block.text and not has_korean(block.text):
+                continue
+
+            x0, y0, x1, y1 = block.bbox
+            width = x1 - x0
+            height = y1 - y0
+
+            # 너무 작은 영역 스킵
+            if width * height < 300:
+                continue
+
+            render_regions.append({
+                "bbox": block.bbox,
+                "original": block.text,
+                "translated": translated,
+                "confidence": block.confidence,
+            })
+
+        if not render_regions:
+            img.save(output_path)
+            img.close()
+            return
+
+        # PIL 이미지로 작업
+        img_pil = Image.fromarray(img_np)
+        draw = ImageDraw.Draw(img_pil)
+
+        for region in render_regions:
+            bbox = region["bbox"]
+            x0, y0, x1, y1 = [int(v) for v in bbox]
+            translated = region["translated"]
+
+            # 1. 배경 처리 (원문 제거)
+            bg_color = self._estimate_background_color(img_np, bbox)
+            self._fill_region(img_pil, bbox, bg_color, img_np)
+
+            # 2. 폰트 크기 추정 (박스 높이 기반)
+            height = y1 - y0
+            font_size = max(10, int(height * 0.7))
+
+            # 3. 텍스트 색상 추정 (배경 대비)
+            text_color = self._estimate_text_color(bg_color)
+
+            # 4. 텍스트 렌더링 (오버플로우 처리)
+            self._render_text(
+                img_pil, bbox, translated, font_size, text_color
+            )
+
+            # 저신뢰도 블록 로깅
+            if region["confidence"] and region["confidence"] < 0.5:
+                log_debug(f"    [RENDERED LOW_CONF {region['confidence']:.2f}] {region['original'][:20]} → {translated[:20]}")
+
+        img_pil.save(output_path)
+        img_pil.close()
+
+    def _estimate_background_color(
+        self,
+        img_np: np.ndarray,
+        bbox: tuple,
+        margin: int = 5,
+    ) -> tuple:
+        """주변 픽셀에서 배경색 추정"""
+        x0, y0, x1, y1 = [int(v) for v in bbox]
+        h, w = img_np.shape[:2]
+
+        samples = []
+        positions = [
+            (max(0, x0 - margin), (y0 + y1) // 2),
+            (min(w - 1, x1 + margin), (y0 + y1) // 2),
+            ((x0 + x1) // 2, max(0, y0 - margin)),
+            ((x0 + x1) // 2, min(h - 1, y1 + margin)),
+        ]
+
+        for px, py in positions:
+            if 0 <= px < w and 0 <= py < h:
+                samples.append(img_np[py, px])
+
+        if not samples:
+            return (255, 255, 255)
+
+        samples = np.array(samples)
+        avg_color = tuple(samples.mean(axis=0).astype(int))
+        return avg_color
+
+    def _estimate_text_color(self, bg_color: tuple) -> tuple:
+        """배경색 대비 텍스트 색상 결정"""
+        r, g, b = int(bg_color[0]), int(bg_color[1]), int(bg_color[2])
+        # 가중치 기반 명도 (인간 시각 특성)
+        brightness = (r * 299 + g * 587 + b * 114) / 1000
+        return (0, 0, 0) if brightness > 128 else (255, 255, 255)
+
+    def _fill_region(
+        self,
+        img_pil: Image.Image,
+        bbox: tuple,
+        bg_color: tuple,
+        img_np: np.ndarray,
+    ):
+        """영역 배경 채우기 (단색 또는 인페인팅)"""
+        x0, y0, x1, y1 = [int(v) for v in bbox]
+
+        # 배경 균일도 확인
+        is_solid = self._is_solid_background(img_np, bbox)
+
+        if is_solid:
+            # 단색 배경: 직접 채우기
+            draw = ImageDraw.Draw(img_pil)
+            draw.rectangle([x0, y0, x1, y1], fill=bg_color)
+        else:
+            # 복잡한 배경: 인페인팅
+            region_mask = np.zeros(img_np.shape[:2], dtype=np.uint8)
+            region_mask[y0:y1, x0:x1] = 255
+
+            img_bgr = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+            inpainted_bgr = cv2.inpaint(
+                img_bgr, region_mask, inpaintRadius=2, flags=cv2.INPAINT_TELEA
+            )
+            inpainted_rgb = cv2.cvtColor(inpainted_bgr, cv2.COLOR_BGR2RGB)
+
+            # 해당 영역만 복사
+            img_pil_np = np.array(img_pil)
+            img_pil_np[y0:y1, x0:x1] = inpainted_rgb[y0:y1, x0:x1]
+
+            # img_pil 업데이트 (in-place)
+            img_pil.paste(Image.fromarray(img_pil_np))
+
+    def _is_solid_background(
+        self,
+        img_np: np.ndarray,
+        bbox: tuple,
+        threshold: int = 20,
+    ) -> bool:
+        """배경이 단색인지 확인"""
+        x0, y0, x1, y1 = [int(v) for v in bbox]
+        h, w = img_np.shape[:2]
+
+        # 가장자리 픽셀 샘플링
+        samples = []
+        margin = 3
+
+        for px in range(max(0, x0), min(w, x1), 5):
+            if y0 - margin >= 0:
+                samples.append(img_np[y0 - margin, px])
+            if y1 + margin < h:
+                samples.append(img_np[y1 + margin, px])
+
+        for py in range(max(0, y0), min(h, y1), 5):
+            if x0 - margin >= 0:
+                samples.append(img_np[py, x0 - margin])
+            if x1 + margin < w:
+                samples.append(img_np[py, x1 + margin])
+
+        if len(samples) < 4:
+            return True
+
+        samples = np.array(samples)
+        std = np.std(samples, axis=0).mean()
+        return std < threshold
+
+    def _render_text(
+        self,
+        img_pil: Image.Image,
+        bbox: tuple,
+        text: str,
+        font_size: int,
+        text_color: tuple,
+    ):
+        """텍스트 렌더링 (오버플로우 처리 포함)"""
+        x0, y0, x1, y1 = [int(v) for v in bbox]
+        width = x1 - x0
+        height = y1 - y0
+
+        draw = ImageDraw.Draw(img_pil)
+
+        # 폰트 로드
+        font = self._get_font(font_size)
+
+        # 텍스트 피팅 (줄바꿈 + 폰트 축소)
+        lines, final_font, final_size, line_height = self._fit_text_to_box(
+            text, width - 4, height - 4, font_size, draw
+        )
+
+        # 세로 중앙 정렬
+        total_text_height = line_height * len(lines)
+        start_y = y0 + (height - total_text_height) / 2
+
+        # 렌더링
+        for i, line in enumerate(lines):
+            text_y = start_y + (i * line_height)
+            draw.text((x0 + 2, text_y), line, font=final_font, fill=text_color)
+
+    def _get_font(self, size: int) -> ImageFont.FreeTypeFont:
+        """폰트 로드"""
+        font_paths = [
+            os.environ.get("ENGLISH_FONT_PATH", ""),
+            "C:/Windows/Fonts/arial.ttf",
+            "C:/Windows/Fonts/segoeui.ttf",
+            "C:/Windows/Fonts/NotoSansKR-Regular.ttf",
+            "C:/Windows/Fonts/malgun.ttf",
+        ]
+
+        for font_path in font_paths:
+            if font_path:
+                try:
+                    return ImageFont.truetype(font_path, size)
+                except Exception:
+                    continue
+
+        return ImageFont.load_default()
+
+    def _fit_text_to_box(
+        self,
+        text: str,
+        max_width: float,
+        max_height: float,
+        font_size: int,
+        draw: ImageDraw.ImageDraw,
+    ) -> tuple:
+        """텍스트를 박스에 맞게 조정 (줄바꿈 + 폰트 축소)"""
+        MIN_FONT_SIZE = 8
+
+        for size in range(font_size, MIN_FONT_SIZE - 1, -1):
+            font = self._get_font(size)
+            lines = self._wrap_text(text, max_width, font, draw)
+            line_height = size + 2
+            total_height = line_height * len(lines)
+
+            # 모든 라인이 너비에 맞는지 확인
+            all_fit = True
+            for line in lines:
+                line_width = draw.textbbox((0, 0), line, font=font)[2]
+                if line_width > max_width:
+                    all_fit = False
+                    break
+
+            if total_height <= max_height and all_fit:
+                return lines, font, size, line_height
+
+        # 최소 폰트 크기로 강제 피팅
+        font = self._get_font(MIN_FONT_SIZE)
+        lines = self._wrap_text(text, max_width, font, draw)
+        line_height = MIN_FONT_SIZE + 2
+
+        # 라인 수 제한
+        max_lines = max(1, int(max_height / line_height))
+        if len(lines) > max_lines:
+            lines = lines[:max_lines]
+            if lines[-1]:
+                lines[-1] = lines[-1][:-1] + "..."
+
+        return lines, font, MIN_FONT_SIZE, line_height
+
+    def _wrap_text(
+        self,
+        text: str,
+        max_width: float,
+        font: ImageFont.FreeTypeFont,
+        draw: ImageDraw.ImageDraw,
+    ) -> list[str]:
+        """단어 단위 줄바꿈"""
+        words = text.split()
+        lines = []
+        current_line = ""
+
+        for word in words:
+            test_line = f"{current_line} {word}".strip() if current_line else word
+            test_width = draw.textbbox((0, 0), test_line, font=font)[2]
+
+            if test_width <= max_width:
+                current_line = test_line
+            else:
+                if current_line:
+                    lines.append(current_line)
+                current_line = word
+
+        if current_line:
+            lines.append(current_line)
+
+        return lines if lines else [text]
