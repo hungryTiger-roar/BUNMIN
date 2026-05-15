@@ -1904,14 +1904,17 @@ class OCRPipeline:
         self,
         slide_id: str = None,
         should_cancel: callable = None,
+        on_progress: callable = None,
     ):
         """
         Args:
             slide_id: 캐시용 슬라이드 ID
             should_cancel: 취소 여부 확인 콜백
+            on_progress: 진행률 콜백 (current, total) -> None
         """
         self.slide_id = slide_id
         self.should_cancel = should_cancel
+        self.on_progress = on_progress
         self._ocr_corrector = build_ocr_corrector()
 
     def _check_cancelled(self) -> bool:
@@ -1921,6 +1924,14 @@ class OCRPipeline:
             return bool(self.should_cancel())
         except Exception:
             return False
+
+    def _report_progress(self, current: int, total: int) -> None:
+        if self.on_progress is None:
+            return
+        try:
+            self.on_progress(current, total)
+        except Exception:
+            pass
 
     # =========================================================================
     # extract() - Surya OCR → list[TextBlock]
@@ -1974,6 +1985,8 @@ class OCRPipeline:
         log_info("  Surya 모델 로드 완료")
 
         # 캐시 확인 및 처리할 페이지 분류
+        total_pages = len(image_paths)
+        processed_count = 0
         pending_pages = []
         for page_idx, img_path in image_paths:
             if self._check_cancelled():
@@ -1988,6 +2001,8 @@ class OCRPipeline:
                     # 캐시된 regions를 TextBlock으로 변환
                     page_blocks = self._regions_to_blocks(cached, page_idx)
                     blocks.extend(page_blocks)
+                    processed_count += 1
+                    self._report_progress(processed_count, total_pages)
                     continue
 
             pending_pages.append((page_idx, img_path))
@@ -2074,8 +2089,14 @@ class OCRPipeline:
                     if self.slide_id:
                         save_ocr_cache(self.slide_id, page_idx, regions)
 
+                    # 진행률 보고
+                    processed_count += 1
+                    self._report_progress(processed_count, total_pages)
+
                 except Exception as e:
                     log_error(f"    페이지 {page_idx+1} OCR 실패: {e}")
+                    processed_count += 1
+                    self._report_progress(processed_count, total_pages)
 
         # Surya 모델 해제
         log_info("\n  Surya 모델 메모리 해제 중...")

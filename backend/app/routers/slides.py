@@ -140,8 +140,8 @@ else:
 
 # 합리적 범위 — 이상치(GPU 일시 stuck, 첫 모델 로드 후 페이지 등) 저장 차단
 _SANITY_RANGE = {
-    "ocr":       (2.0, 60.0),
-    "translate": (5.0, 300.0),
+    "ocr":       (2.0, 60.0),   # 2~60초/페이지
+    "translate": (10.0, 180.0), # 10~180초/페이지
 }
 
 
@@ -1402,7 +1402,6 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path, _skip_vlm_unloa
         print("\n" + "=" * 60)
         print(f"[Stage 2] 텍스트 추출")
         print("=" * 60)
-        _set_stage(slide_id, "ocr", total_pages)
 
         image_paths_map: dict[int, str] = {}
         ocr_blocks: list[TextBlock] = []
@@ -1410,6 +1409,7 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path, _skip_vlm_unloa
         # 2-1. OCR 페이지 처리 (Surya)
         if all_ocr_pages:
             print(f"\n  [OCR] {len(all_ocr_pages)}개 페이지 처리 중...")
+            _set_stage(slide_id, "ocr", len(all_ocr_pages))
 
             # 이미지 준비
             image_paths_for_ocr: list[tuple[int, str]] = []
@@ -1427,8 +1427,14 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path, _skip_vlm_unloa
             doc.close()
 
             # OCRPipeline으로 추출
+            def ocr_progress(current: int, total: int) -> None:
+                s = slide_status.get(slide_id)
+                if s:
+                    s["stage_current"] = current
+
             ocr_pipeline = OCRPipeline(
                 should_cancel=lambda sid=slide_id: _is_cancelled(sid),
+                on_progress=ocr_progress,
             )
             ocr_blocks = await asyncio.to_thread(
                 ocr_pipeline.extract,
@@ -1462,7 +1468,6 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path, _skip_vlm_unloa
         print("\n" + "=" * 60)
         print(f"[Stage 3] 번역")
         print("=" * 60)
-        _set_stage(slide_id, "translate", total_pages)
 
         # 모든 블록 합치기
         all_blocks = all_pdf_blocks + ocr_blocks
@@ -1481,13 +1486,24 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path, _skip_vlm_unloa
         if korean_blocks:
             print(f"\n  번역 시작...")
 
+            # 번역 진행률 콜백
+            def translate_progress(current: int, total: int) -> None:
+                s = slide_status.get(slide_id)
+                if s:
+                    s["stage_current"] = current
+                    s["stage_total"] = total
+
+            # stage 설정 (total은 콜백에서 업데이트됨)
+            _set_stage(slide_id, "translate", 0)
+
             try:
                 translation_result = await asyncio.to_thread(
                     translate_blocks,
                     korean_blocks,
                     "en",  # target_lang
-                    15,    # chunk_size
+                    None,  # chunk_size (TRANSLATION_CHUNK_SIZE 환경변수 사용)
                     None,  # context_summary
+                    translate_progress,  # on_progress
                 )
                 all_translations = translation_result.translations
                 print(f"  번역 완료: {len(all_translations)}개")
