@@ -4,12 +4,13 @@
 
 /* Electron frame: false + 자체 타이틀바(32px)용 — 페이지의 min-h-screen / h-screen 이
    타이틀바 영역을 침범하지 않도록 viewport 에서 32px 차감. App.tsx 의 wrapper 가
-   pt-8(32px) 로 콘텐츠를 아래로 밀고, 페이지는 남은 영역만 채우게 됨. */
+   pt-8(32px) 로 콘텐츠를 아래로 밀고, 페이지는 남은 영역만 채우게 됨.
+   body.electron 안에서만 적용 — 웹 학생 화면(브라우저)에서는 TitleBar 가 없으므로 차감 X. */
 @layer utilities {
-  .min-h-screen {
+  body.electron .min-h-screen {
     min-height: calc(100vh - 32px);
   }
-  .h-screen {
+  body.electron .h-screen {
     height: calc(100vh - 32px);
   }
 }
