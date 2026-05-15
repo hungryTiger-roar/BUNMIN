@@ -48,6 +48,11 @@ const ASPECT_OPTIONS: { value: AspectRatio; label: string; className: string }[]
   { value: '5/3', label: '5:3', className: 'aspect-[5/3]' },
 ]
 
+// 원본 음성 DelayNode 의 buffer max (sec) — useDelayBufferPlayer 의 DELAY_MAX_MS(20s) + 5s 헤드룸.
+// currentDelay 가 부하/긴 발화로 적응 상한까지 올라가도 폴링 effect 가 clamp 없이 따라감.
+// hook 의 DELAY_MAX_MS 변경 시 이 값도 같이 조정 필요 (현재 hook 내부 상수라 import 안 함).
+const ORIGINAL_AUDIO_DELAY_MAX_SEC = 25
+
 interface MaterialItem {
   slide_id: string
   filename: string
@@ -180,8 +185,7 @@ function Student() {
     if (!audioContextRef.current) {
       try {
         const ctx = new AudioContext()
-        // maxDelayTime 은 delayMs + 5s buffer (실행 중 동적 조정 여지).
-        const delayNode = ctx.createDelay((delayMs / 1000) + 5)
+        const delayNode = ctx.createDelay(ORIGINAL_AUDIO_DELAY_MAX_SEC)
         delayNode.delayTime.value = delayMs / 1000
         const gainNode = ctx.createGain()
         gainNode.gain.value = 0  // 초기 0 — sync effect 가 즉시 올림
@@ -669,8 +673,8 @@ function Student() {
 
         await ctx.resume()
 
-        // 새 DelayNode — 이전 buffer (suspend 시점에 freeze 된 stale 샘플) 폐기
-        const newDelayNode = ctx.createDelay((delayMs / 1000) + 5)
+        // 새 DelayNode — 이전 buffer (suspend 시점에 freeze 된 stale 샘플) 폐기.
+        const newDelayNode = ctx.createDelay(ORIGINAL_AUDIO_DELAY_MAX_SEC)
         newDelayNode.delayTime.value = delayMs / 1000
         newDelayNode.connect(gain)
         delayNodeRef.current = newDelayNode
