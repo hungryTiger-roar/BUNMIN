@@ -2,7 +2,7 @@
  * IndexedDB 기반 piper-tts-web voice 영구 캐시
  *
  * 왜 IndexedDB 인가:
- *   브라우저 HTTP 캐시는 storage pressure / 모바일 Safari ITP (7일) 등으로 evict 가능.
+ *   브라우저 HTTP 캐시는 storage pressure / 일부 브라우저 ITP 등으로 evict 가능.
  *   IndexedDB 에 voice 모델 ArrayBuffer (~63MB/voice) 를 영구 저장 → 캐시 evict 후에도
  *   재진입 시 재다운로드 안 함.
  *

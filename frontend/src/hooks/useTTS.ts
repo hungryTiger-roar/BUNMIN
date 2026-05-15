@@ -213,7 +213,7 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
           `[TTS] ONNX 백엔드: ${useWebGPU ? 'WebGPU (high-performance)' : `WASM (${navigator.hardwareConcurrency} threads, COI=${self.crossOriginIsolated})`}`
         )
 
-        // IndexedDB 영구 캐시 — HTTP 캐시 evict (모바일 Safari 7일+ / 사용자 cache clear)
+        // IndexedDB 영구 캐시 — HTTP 캐시 evict (storage pressure / 사용자 cache clear)
         // 후에도 voice 모델 살아남음. 처음엔 HF 에서 fetch 하지만 이후 영구 hit.
         // engine.destroy() 시 voiceProvider.destroy() 까지 자동 호출 → blob URL revoke.
         const voiceProvider = new HuggingFaceVoiceProvider({
@@ -348,10 +348,10 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
     return () => clearInterval(interval)
   }, [enabled])
 
-  // AudioContext suspend 자동 복구 — iOS Safari / 모바일 백그라운드 진입 시 ctx 가 강제
-  // suspend 됨. 학생이 화면 다시 켜도 자동 resume 안 되어 음성 영원히 안 들리는 현상.
+  // AudioContext suspend 자동 복구 — 탭 백그라운드 / 장시간 미사용 시 브라우저가 ctx 를
+  // 강제 suspend. 학생이 탭 복귀해도 자동 resume 안 되어 음성 영원히 안 들리는 현상.
   // visibilitychange / pageshow / focus 모두 hook (브라우저별 발화 이벤트 다름).
-  // ctx.resume() 은 이미 unlock 후엔 user-gesture 없이 호출 가능 (다만 일부 iOS 버전
+  // ctx.resume() 은 이미 unlock 후엔 user-gesture 없이 호출 가능 (다만 일부 브라우저
   // 에선 거부될 수 있어 try-catch silent fail — 다음 사용자 인터랙션에서 자동 재시도).
   useEffect(() => {
     if (!enabled) return
