@@ -157,7 +157,7 @@ export function StudentCursorOverlay({ spotlightRef }: StudentCursorOverlayProps
   return (
     <div
       ref={spotlightRef}
-      className="pointer-events-none absolute z-[9999]"
+      className="pointer-events-none absolute z-10"
       style={{
         width: SPOTLIGHT_SIZE,
         height: SPOTLIGHT_SIZE,

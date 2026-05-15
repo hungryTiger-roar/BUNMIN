@@ -32,6 +32,45 @@
   font-display: swap;
 }
 
+/* paybooc — 본문/소제목용 한글 폰트.
+   각 weight 를 범위로 등록해 Tailwind 의 font-light/normal/medium/semibold/bold/extrabold
+   클래스가 가까운 weight 글리프로 정확히 잡히도록 한다.
+   - Light(300)      → font-light
+   - Medium(500)     → font-normal(400), font-medium(500)
+   - Bold(700)       → font-semibold(600), font-bold(700)  ← 소제목 700 요구사항 자동 충족
+   - ExtraBold(800)  → font-extrabold(800) */
+@font-face {
+  font-family: 'paybooc';
+  src: url('../assets/fonts/paybooc OTF Light.otf') format('opentype');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'paybooc';
+  src: url('../assets/fonts/paybooc OTF Medium.otf') format('opentype');
+  font-weight: 400 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'paybooc';
+  src: url('../assets/fonts/paybooc OTF Bold.otf') format('opentype');
+  font-weight: 600 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'paybooc';
+  src: url('../assets/fonts/paybooc OTF ExtraBold.otf') format('opentype');
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+
 @font-face {
   font-family: 'A2z';
   src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2601-6@1.0/에이투지체-6SemiBold.woff2') format('woff2');
@@ -169,7 +208,8 @@ html.theme-gradient .sidebar-card {
 }
 
 body {
-  font-family: 'Hakgyoansim Allimjang', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'paybooc', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-weight: 500;
   background-color: var(--color-background);
   color: var(--color-on-background);
 }

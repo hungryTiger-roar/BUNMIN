@@ -6,6 +6,8 @@ interface ParticipantsPanelProps {
   fallbackStudentCount?: number
   onClose: () => void
   locale?: 'en' | 'ko'
+  /** 학생별 audioLang('원본'/'번역') 라벨 표시 여부. 강의자 화면에서만 true. */
+  showAudioLang?: boolean
 }
 
 const THEME_COLORS = {
@@ -49,6 +51,7 @@ function ParticipantsPanel({
   fallbackStudentCount = 0,
   onClose,
   locale = 'en',
+  showAudioLang = false,
 }: ParticipantsPanelProps) {
   const theme = usePreferencesStore((s) => s.theme)
   const c = THEME_COLORS[theme]
@@ -116,6 +119,11 @@ function ParticipantsPanel({
                 {s.name || t.guestFallback}
               </div>
             </div>
+            {showAudioLang && (
+              <span className={`text-xs px-2 py-0.5 rounded-full ${c.iconBg} ${c.textMuted}`}>
+                {s.audioLang === 'original' ? '원본' : '번역'}
+              </span>
+            )}
             <span className="w-2 h-2 rounded-full bg-green-500" />
           </div>
         ))}

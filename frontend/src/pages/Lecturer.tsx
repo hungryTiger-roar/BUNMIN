@@ -94,6 +94,29 @@ function Lecturer() {
 
   const [shareUrl, setShareUrl] = useState('')
   const [copied, setCopied] = useState(false)
+  // 채팅 패널 높이 — 상단 리사이즈 핸들로 드래그해서 조절.
+  const [chatHeight, setChatHeight] = useState(260)
+
+  const handleChatResizeMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startHeight = chatHeight
+    const onMove = (mv: MouseEvent) => {
+      const delta = startY - mv.clientY // 위로 드래그 → 양수 → 채팅창 확대
+      const next = Math.max(120, Math.min(700, startHeight + delta))
+      setChatHeight(next)
+    }
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    document.body.style.cursor = 'row-resize'
+    document.body.style.userSelect = 'none'
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
   const [chatInput, setChatInput] = useState('')
   const [showParticipants, setShowParticipants] = useState(false)
   const [ccEnabled, setCcEnabled] = useState(false)
@@ -602,6 +625,11 @@ function Lecturer() {
   }
 
   const handleExit = () => {
+    // 강의가 진행 중인 상태에서 나가기 → 수강자가 대기 화면에 갇히지 않도록
+    // lecture_end 를 명시적으로 송신해 학생 측 종료 lifecycle 트리거.
+    if (isLectureStarted) {
+      send({ type: 'lecture_end', slide_id: slideId })
+    }
     stopAudioCapture()
     stopScreenCapture()
     reset()
@@ -1005,7 +1033,7 @@ function Lecturer() {
               <h2 className="text-lg font-semibold text-onSurface">강의 자막 저장</h2>
               <button
                 type="button"
-                onClick={() => { setShowTranscriptModal(false); reset(); navigate('/lecturer') }}
+                onClick={() => { setShowTranscriptModal(false); reset(); navigate('/lecturer/home') }}
                 className="w-7 h-7 rounded-full flex items-center justify-center text-onSurface/60 hover:bg-black/10 transition-colors"
               >✕</button>
             </div>
@@ -1041,7 +1069,11 @@ function Lecturer() {
       {/* 헤더 */}
       <header className="flex items-center justify-between gap-3 px-4 py-3 bg-surface border-b border-primaryContainer flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          <h1 className="text-xl font-bold tracking-wide bg-gradient-to-r from-gradientBlue to-gradientPurple bg-clip-text text-transparent">
+          <h1 className={`text-xl font-allimjang font-bold tracking-wide ${
+            theme === 'gradient'
+              ? 'text-white'
+              : 'bg-gradient-to-r from-gradientBlue to-gradientPurple bg-clip-text text-transparent'
+          }`}>
             번역의 민족
           </h1>
           {isLectureStarted && !isPaused && (
@@ -1613,8 +1645,16 @@ function Lecturer() {
           {isLectureStarted && (
             <div
               className="relative bg-surface dark:bg-overlaySurface text-onSurface rounded-xl shadow-sm flex flex-col overflow-hidden flex-shrink-0 sidebar-card"
-              style={{ height: '260px' }}
+              style={{ height: `${chatHeight}px` }}
             >
+              {/* 상단 리사이즈 핸들 — 마우스 hover 시 row-resize 커서, 드래그로 위/아래 높이 조절 */}
+              <div
+                onMouseDown={handleChatResizeMouseDown}
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="채팅창 크기 조절"
+                className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize hover:bg-primary/40 transition-colors z-10"
+              />
               <div className="px-4 py-2.5 border-b border-primaryContainer flex items-center gap-2">
                 <svg className="w-4 h-4 text-onSurface/60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
@@ -1633,7 +1673,7 @@ function Lecturer() {
                   chatMessages.map((msg) => (
                     <div key={msg.id}>
                       <div className="flex items-center gap-1.5 mb-0.5">
-                        {msg.sender === 'lecturer' && (
+                        {msg.sender === 'lecturer' ? (
                           <svg
                             className="w-4 h-4 text-lecturerAccent flex-shrink-0"
                             fill="none"
@@ -1643,6 +1683,17 @@ function Lecturer() {
                             aria-hidden="true"
                           >
                             <path strokeLinecap="round" strokeLinejoin="round" d="M4.26 10.147a60.438 60.438 0 0 0-.491 6.347A48.62 48.62 0 0 1 12 20.904a48.62 48.62 0 0 1 8.232-4.41 60.46 60.46 0 0 0-.491-6.347m-15.482 0a50.636 50.636 0 0 0-2.658-.813A59.906 59.906 0 0 1 12 3.493a59.903 59.903 0 0 1 10.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.717 50.717 0 0 1 12 13.489a50.702 50.702 0 0 1 7.74-3.342M6.75 15a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm0 0v-3.675A55.378 55.378 0 0 1 12 8.443m-7.007 11.55A5.981 5.981 0 0 0 6.75 15.75v-1.5" />
+                          </svg>
+                        ) : (
+                          <svg
+                            className="w-4 h-4 text-onSurface/60 flex-shrink-0"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth={1.7}
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
                           </svg>
                         )}
                         <span
@@ -1694,6 +1745,7 @@ function Lecturer() {
                   fallbackStudentCount={studentCount}
                   onClose={() => setShowParticipants(false)}
                   locale="ko"
+                  showAudioLang
                 />
               )}
             </div>
@@ -1709,6 +1761,7 @@ function Lecturer() {
                 fallbackStudentCount={studentCount}
                 onClose={() => setShowParticipants(false)}
                 locale="ko"
+                showAudioLang
               />
             </div>
           )}

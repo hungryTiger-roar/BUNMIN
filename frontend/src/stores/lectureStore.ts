@@ -31,6 +31,8 @@ export interface ChatMessage {
 export interface Participant {
   id: string
   name: string
+  /** 학생이 듣는 음성 모드 — 'original' 이면 강사 원본 목소리, 그 외는 TTS 번역본. */
+  audioLang: string
 }
 
 export interface Participants {

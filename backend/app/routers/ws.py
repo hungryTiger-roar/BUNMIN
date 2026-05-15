@@ -250,7 +250,7 @@ class ConnectionManager:
         self.lecturer: Optional[WebSocket] = None
         self.lecturer_name: str = "professor"
         self.students: list[WebSocket] = []
-        self.student_info: dict[WebSocket, dict] = {}  # ws -> {id, name}
+        self.student_info: dict[WebSocket, dict] = {}  # ws -> {id, name, audio_lang}
         self.current_slide_id: Optional[str] = None
         self.current_page: int = 1
         self.is_lecture_started: bool = False
@@ -358,6 +358,7 @@ class ConnectionManager:
                 {
                     "id": info["id"],
                     "name": info["name"],
+                    "audio_lang": info.get("audio_lang", "en"),
                 }
                 for ws, info in self.student_info.items()
                 if ws in self.students
@@ -582,7 +583,7 @@ async def websocket_pipeline(websocket: WebSocket):
             student_id = str(uuid.uuid4())
             student_name = name or f"Guest{len(manager.students) + 1}"
             manager.students.append(websocket)
-            manager.student_info[websocket] = {"id": student_id, "name": student_name}
+            manager.student_info[websocket] = {"id": student_id, "name": student_name, "audio_lang": "en"}
             print(f"[WS] 수강자 연결됨 (이름: {student_name}, 총 {len(manager.students)}명)")
             await websocket.send_json({
                 "type": "registered",
@@ -927,6 +928,17 @@ async def handle_student(websocket: WebSocket, pong_event: asyncio.Event | None 
                     continue
                 info["name"] = new_name
                 print(f"[WS] 수강자 이름 변경: {info.get('id')} → {new_name}")
+                await manager.broadcast_participants()
+
+            elif msg_type == "student_audio_lang":
+                # 학생이 자기 audioLang 변경/초기 통보 → 강의자 참여자 패널 라벨 갱신용
+                new_lang = (message.get("audio_lang") or "").strip()
+                if not new_lang:
+                    continue
+                info = manager.student_info.get(websocket)
+                if info is None:
+                    continue
+                info["audio_lang"] = new_lang
                 await manager.broadcast_participants()
 
             # WebRTC 시그널링 — 수강자가 강의자에게 answer/ICE 전달

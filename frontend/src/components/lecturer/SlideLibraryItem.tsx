@@ -126,6 +126,9 @@ export default function SlideLibraryItem({
   }
 
   const disabled = item.status !== 'completed'
+  // 다른 자료가 업로드/처리 중이면 라이브러리 카드 클릭(자료 로드) 잠금.
+  // 미리보기/이름변경 버튼은 stopPropagation 으로 별도 동작하므로 영향 없음.
+  const libraryLocked = slideStatus === 'uploading' || slideStatus === 'processing'
 
   return (
     <div
@@ -141,8 +144,8 @@ export default function SlideLibraryItem({
       }}
       className={`group flex items-center gap-3 p-3 bg-surface rounded-lg border transition-colors
         ${selected ? 'border-primary bg-primary/5' : 'border-primaryContainer hover:border-primary/50'}
-        ${(disabled || loading) && !editing ? 'opacity-50 cursor-not-allowed' : editing ? '' : 'cursor-pointer'}`}
-      aria-disabled={disabled || loading}
+        ${(disabled || loading || libraryLocked) && !editing ? 'opacity-50 cursor-not-allowed' : editing ? '' : 'cursor-pointer'}`}
+      aria-disabled={disabled || loading || libraryLocked}
     >
       {selectionMode && (
         <input

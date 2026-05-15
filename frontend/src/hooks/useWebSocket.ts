@@ -470,10 +470,14 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
         break
 
       case 'participants':
-        // 참여자 목록
+        // 참여자 목록 (audio_lang 은 강의자 참여자 패널에서 '원본/번역' 라벨로 사용)
         setParticipants({
           lecturer: data.lecturer as { name: string; connected: boolean } | null,
-          students: (data.students as { id: string; name: string }[]) || [],
+          students: ((data.students as { id: string; name: string; audio_lang?: string }[]) || []).map((s) => ({
+            id: s.id,
+            name: s.name,
+            audioLang: s.audio_lang ?? 'en',
+          })),
         })
         break
 
@@ -644,6 +648,14 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     }
   }, [])
 
+  const sendStudentAudioLang = useCallback((audioLang: string) => {
+    const trimmed = audioLang.trim()
+    if (!trimmed) return
+    if (socketRef.current?.readyState === WebSocket.OPEN) {
+      socketRef.current.send(JSON.stringify({ type: 'student_audio_lang', audio_lang: trimmed }))
+    }
+  }, [])
+
   const connect = useCallback(() => {
     if (socketRef.current?.readyState === WebSocket.OPEN ||
         socketRef.current?.readyState === WebSocket.CONNECTING) {
@@ -727,6 +739,7 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     sendLectureTitle,
     sendLecturerName,
     sendStudentRename,
+    sendStudentAudioLang,
     getBufferedAmount,
   }
 }

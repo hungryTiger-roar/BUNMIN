@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { API_BASE } from '@/lib/api'
 
 interface Props {
@@ -8,11 +9,15 @@ interface Props {
   onClose: () => void
 }
 
+type PreviewMode = 'original' | 'translated'
+
 export default function SlidePreviewModal({ slideId, filename, totalPages, onClose }: Props) {
   // 0-indexed (backend 이미지 경로 규약)
   const [page, setPage] = useState(0)
   const [imgLoaded, setImgLoaded] = useState(false)
   const [imgError, setImgError] = useState(false)
+  // 강사 기준 미리보기 — 원본 PDF 를 기본으로, 토글로 번역본 비교.
+  const [mode, setMode] = useState<PreviewMode>('original')
 
   // 키보드 네비게이션 (ESC, 좌/우 화살표)
   useEffect(() => {
@@ -32,17 +37,19 @@ export default function SlidePreviewModal({ slideId, filename, totalPages, onClo
     return () => document.removeEventListener('keydown', handler)
   }, [totalPages, onClose])
 
-  // 페이지 변경 시 로딩 상태 리셋
+  // 페이지/모드 변경 시 로딩 상태 리셋
   useEffect(() => {
     setImgLoaded(false)
     setImgError(false)
-  }, [page])
+  }, [page, mode])
 
   const canPrev = page > 0
   const canNext = page < totalPages - 1
-  const imageUrl = `${API_BASE}/slides/image/${slideId}/${page}`
+  const imageUrl = `${API_BASE}/slides/image/${slideId}/${page}?translated=${mode === 'translated'}`
 
-  return (
+  // 호출 위치(라이브러리 카드)가 업로드 중에 opacity-50 으로 흐려지면 자식 모달까지
+  // CSS opacity 가 곱해져 흐릿해진다. portal 로 body 직속에 렌더해 그 누적을 끊는다.
+  return createPortal(
     <div
       className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
       onClick={onClose}
@@ -83,9 +90,9 @@ export default function SlidePreviewModal({ slideId, filename, totalPages, onClo
             <p className="text-white/70 text-sm">이미지를 불러올 수 없습니다</p>
           ) : (
             <img
-              key={page}
+              key={`${page}-${mode}`}
               src={imageUrl}
-              alt={`${filename} 페이지 ${page + 1}`}
+              alt={`${filename} 페이지 ${page + 1} (${mode === 'translated' ? '번역' : '원본'})`}
               onLoad={() => setImgLoaded(true)}
               onError={() => setImgError(true)}
               className={`max-w-full max-h-[70vh] object-contain transition-opacity ${
@@ -93,6 +100,32 @@ export default function SlidePreviewModal({ slideId, filename, totalPages, onClo
               }`}
             />
           )}
+
+          {/* 원본 ↔ 번역 토글 — 어디든 누르면 반대로 전환.
+             배경(검은 슬라이드/흰 슬라이드) 무관하게 시인성 확보 위해 어두운 트랙 사용. */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={mode === 'translated'}
+            aria-label="미리보기 모드 전환 (원본 / 번역)"
+            onClick={() => setMode((m) => (m === 'original' ? 'translated' : 'original'))}
+            className="absolute top-3 right-3 flex items-center bg-black/40 backdrop-blur-sm rounded-full p-1 hover:bg-black/50 transition-colors"
+          >
+            <span
+              className={`px-3 py-1 text-xs rounded-full transition-colors ${
+                mode === 'original' ? 'bg-white text-gray-900' : 'text-white'
+              }`}
+            >
+              원본
+            </span>
+            <span
+              className={`px-3 py-1 text-xs rounded-full transition-colors ${
+                mode === 'translated' ? 'bg-white text-gray-900' : 'text-white'
+              }`}
+            >
+              번역
+            </span>
+          </button>
 
           {/* 좌측 이전 버튼 */}
           <button
@@ -128,6 +161,7 @@ export default function SlidePreviewModal({ slideId, filename, totalPages, onClo
           </span>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }

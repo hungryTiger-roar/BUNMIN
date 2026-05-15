@@ -337,7 +337,7 @@ function Student() {
     unitPlayer.enqueueLifecycle(apply, label)
   }, [unitPlayer])
 
-  const { isConnected, connect, send, sendChat, sendStudentRename } = useWebSocket(
+  const { isConnected, connect, send, sendChat, sendStudentRename, sendStudentAudioLang } = useWebSocket(
     WS_PIPELINE_URL,
     'student',
     {
@@ -366,6 +366,38 @@ function Student() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
   const [loadingVideoSrc] = useState(() => Math.random() > 0.5 ? '/animation_white.webm' : '/animation_black.webm')
+
+  // 채팅 패널 높이 — 강의자 측과 동일하게 상단 핸들로 드래그해서 조절.
+  const [chatHeight, setChatHeight] = useState(260)
+
+  const handleChatResizeMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startHeight = chatHeight
+    const onMove = (mv: MouseEvent) => {
+      const delta = startY - mv.clientY // 위로 드래그 → 양수 → 채팅창 확대
+      const next = Math.max(120, Math.min(700, startHeight + delta))
+      setChatHeight(next)
+    }
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    document.body.style.cursor = 'row-resize'
+    document.body.style.userSelect = 'none'
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+
+  // 학생 audioLang 을 강의자 참여자 패널('원본/번역' 라벨)에 반영.
+  // 연결 직후 + 사용자가 음성 언어 변경할 때마다 송신.
+  useEffect(() => {
+    if (isConnected) {
+      sendStudentAudioLang(audioLang)
+    }
+  }, [isConnected, audioLang, sendStudentAudioLang])
 
   // 수강자 이름 인라인 편집 — 헤더 뱃지 클릭 시 input으로 전환
   const [isEditingName, setIsEditingName] = useState(false)
@@ -811,7 +843,7 @@ function Student() {
               <h2 className="text-lg font-semibold text-onSurface">Save Lecture Subtitles</h2>
               <button
                 type="button"
-                onClick={() => setShowTranscriptModal(false)}
+                onClick={() => { setShowTranscriptModal(false); navigate('/student/start') }}
                 className="w-7 h-7 rounded-full flex items-center justify-center text-onSurface/60 hover:bg-black/10 transition-colors"
               >✕</button>
             </div>
@@ -839,7 +871,7 @@ function Student() {
       {/* 헤더 */}
       <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-primaryContainer bg-surface backdrop-blur-md shadow-sm flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          <h1 className={`text-xl tracking-wide ${lang === 'ko' ? 'font-bold' : 'font-special-gothic'}`}>
+          <h1 className={`text-xl tracking-wide ${lang === 'ko' ? 'font-allimjang font-bold' : 'font-special-gothic'}`}>
             {lang === 'ko' ? '번역의 민족' : 'BUNMIN'}
           </h1>
           {isLectureStarted && !isPaused && (
@@ -1458,11 +1490,10 @@ function Student() {
           ? `absolute right-0 top-0 bottom-0 w-80 flex flex-col gap-3 min-h-0 px-3 py-4 sidebar-panel z-[55] transition-transform duration-300 ease-in-out ${sidebarOpen ? 'translate-x-0' : 'translate-x-full'}`
           : 'relative z-[55] w-80 flex-shrink-0 flex flex-col gap-3 min-h-0'
         }>
-          {/* 오늘의 강의 자료 — 강의 시작 후에만 노출 */}
+          {/* 오늘의 강의 자료 — 강의 시작 후에만 노출. 채팅 외 나머지 사이드 영역을 채움. */}
           {isLectureStarted && (
           <div
-            className="flex-shrink-0 flex flex-col bg-surface text-onSurface backdrop-blur-md rounded-xl border border-primaryContainer shadow-sm overflow-hidden sidebar-card"
-            style={{ maxHeight: '50%' }}
+            className="flex-1 flex flex-col bg-surface text-onSurface backdrop-blur-md rounded-xl border border-primaryContainer shadow-sm overflow-hidden sidebar-card min-h-0"
           >
             <div className="px-4 py-3 border-b border-primaryContainer flex items-center gap-2 flex-shrink-0">
               <svg className="w-5 h-5 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1544,8 +1575,22 @@ function Student() {
           </div>
           )}
 
-          {/* 채팅 패널 (참여자 패널이 오버레이로 덮음) */}
-          <div className="relative flex-1 flex flex-col bg-surface text-onSurface backdrop-blur-md rounded-xl border border-primaryContainer shadow-sm overflow-hidden min-h-0 sidebar-card">
+          {/* 채팅 패널 (참여자 패널이 오버레이로 덮음) — 강의 시작 후엔 고정 height + 상단 리사이저, 시작 전엔 flex-1 로 사이드 전체 차지. */}
+          <div
+            className={`relative flex flex-col bg-surface text-onSurface backdrop-blur-md rounded-xl border border-primaryContainer shadow-sm overflow-hidden sidebar-card ${
+              isLectureStarted ? 'flex-shrink-0' : 'flex-1 min-h-0'
+            }`}
+            style={isLectureStarted ? { height: `${chatHeight}px` } : undefined}
+          >
+            {isLectureStarted && (
+              <div
+                onMouseDown={handleChatResizeMouseDown}
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label="채팅창 크기 조절"
+                className="absolute top-0 left-0 right-0 h-1.5 cursor-row-resize hover:bg-primary/40 transition-colors z-10"
+              />
+            )}
             <div className="px-4 py-3 border-b border-primaryContainer flex items-center gap-2 flex-shrink-0">
               <svg className="w-5 h-5 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
@@ -1565,7 +1610,7 @@ function Student() {
               chatMessages.map((msg) => (
                 <div key={msg.id}>
                   <div className="flex items-center gap-1.5 mb-0.5">
-                    {msg.sender === 'lecturer' && (
+                    {msg.sender === 'lecturer' ? (
                       <svg
                         className="w-4 h-4 text-lecturerAccent flex-shrink-0"
                         fill="none"
@@ -1575,6 +1620,17 @@ function Student() {
                         aria-hidden="true"
                       >
                         <path strokeLinecap="round" strokeLinejoin="round" d="M4.26 10.147a60.438 60.438 0 0 0-.491 6.347A48.62 48.62 0 0 1 12 20.904a48.62 48.62 0 0 1 8.232-4.41 60.46 60.46 0 0 0-.491-6.347m-15.482 0a50.636 50.636 0 0 0-2.658-.813A59.906 59.906 0 0 1 12 3.493a59.903 59.903 0 0 1 10.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.717 50.717 0 0 1 12 13.489a50.702 50.702 0 0 1 7.74-3.342M6.75 15a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm0 0v-3.675A55.378 55.378 0 0 1 12 8.443m-7.007 11.55A5.981 5.981 0 0 0 6.75 15.75v-1.5" />
+                      </svg>
+                    ) : (
+                      <svg
+                        className="w-4 h-4 text-onSurface/60 flex-shrink-0"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={1.7}
+                        viewBox="0 0 24 24"
+                        aria-hidden="true"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
                       </svg>
                     )}
                     <span

@@ -139,7 +139,7 @@ export default function Start() {
       </button>
 
       <div className="text-center mb-16">
-        <h1 className={`text-6xl mb-3 text-white ${lang === 'ko' ? 'font-bold' : 'font-special-gothic'}`}>
+        <h1 className={`text-7xl mb-5 text-white [filter:drop-shadow(0_4px_8px_rgba(0,0,0,0.18))_drop-shadow(0_12px_24px_rgba(0,0,0,0.12))] ${lang === 'ko' ? 'font-allimjang font-bold' : 'font-special-gothic'}`}>
           {lang === 'ko' ? '번역의 민족' : 'BUNMIN'}
         </h1>
         <p className="font-a2z text-white text-lg tracking-wide">
