@@ -12,6 +12,7 @@ slides.py → translator.py (이 파일)
            └── image_pipeline.py (translate_text_vlm)
            └── term_corrections.py (용어집)
 """
+import os
 import re
 import logging
 from collections import Counter
@@ -23,8 +24,14 @@ from .term_corrections import get_terms_in_text
 
 logger = logging.getLogger(__name__)
 
+# 번역 배치 크기 (VRAM 부족 시 줄이기)
+# - 8GB+ VRAM: 15 (기본값)
+# - 6GB VRAM: 5 권장
+# - 4GB VRAM: 1~3 권장
+TRANSLATION_CHUNK_SIZE = int(os.environ.get("TRANSLATION_CHUNK_SIZE", "15"))
 
-def _is_invalid_translation(text: str) -> bool:
+
+def _is_invalid_translation(text: str, target_lang: str = "en") -> bool:
     """무효한 번역인지 확인"""
     if not text or not text.strip():
         return True
@@ -52,14 +59,64 @@ def _is_invalid_translation(text: str) -> bool:
     if not re.search(r'[A-Za-z0-9가-힣]', text):
         return True
 
+    # 영어 번역인데 한국어가 주로 남아있으면 무효
+    # (괄호 안 용어 등 일부 한국어는 허용)
+    if target_lang == "en":
+        korean_chars = len(re.findall(r'[가-힣]', text))
+        total_chars = len(re.sub(r'\s', '', text))  # 공백 제외
+        if total_chars > 0 and korean_chars / total_chars > 0.3:
+            # 한국어가 30% 이상이면 번역 실패로 판단
+            return True
+
+        # 비라틴 문자가 포함되어 있으면 무효 (폰트 미지원)
+        # CJK: U+4E00-U+9FFF, Hiragana: U+3040-U+309F, Katakana: U+30A0-U+30FF
+        # Greek: U+0370-U+03FF, Cyrillic: U+0400-U+04FF
+        if re.search(r'[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\u0370-\u03ff\u0400-\u04ff]', text):
+            return True
+
     return False
+
+
+def _count_chunks(blocks: list[TextBlock], chunk_size: int) -> int:
+    """블록 리스트의 청크 수 계산 (페이지 단위 그룹화 기준)"""
+    if not blocks:
+        return 0
+
+    page_groups: dict[int, list[TextBlock]] = {}
+    for block in blocks:
+        page = block.page
+        if page not in page_groups:
+            page_groups[page] = []
+        page_groups[page].append(block)
+
+    chunks = 0
+    current_size = 0
+
+    for page in sorted(page_groups.keys()):
+        page_blocks = page_groups[page]
+
+        if current_size and current_size + len(page_blocks) > chunk_size:
+            chunks += 1
+            current_size = 0
+
+        current_size += len(page_blocks)
+
+        if current_size >= chunk_size:
+            chunks += 1
+            current_size = 0
+
+    if current_size > 0:
+        chunks += 1
+
+    return chunks
 
 
 def translate_blocks(
     blocks: list[TextBlock],
     target_lang: str = "en",
-    chunk_size: int = 15,
+    chunk_size: int = None,
     context_summary: Optional[str] = None,
+    on_progress: Optional[callable] = None,
 ) -> TranslationResult:
     """
     TextBlock 리스트 번역
@@ -69,6 +126,7 @@ def translate_blocks(
         target_lang: 목표 언어 (기본: en)
         chunk_size: 배치당 최대 블록 수 (기본: 15)
         context_summary: 이전 페이지 요약 (맥락 공유용)
+        on_progress: 진행률 콜백 (current, total) -> None
 
     Returns:
         TranslationResult: {block_id: 번역문} 매핑
@@ -78,6 +136,10 @@ def translate_blocks(
         - 용어집(term_corrections.csv)은 모든 배치에 공유
         - 페이지 단위로 청크 (같은 페이지 블록은 함께)
     """
+    # 환경변수에서 기본값 사용
+    if chunk_size is None:
+        chunk_size = TRANSLATION_CHUNK_SIZE
+
     if not blocks:
         return TranslationResult(translations={}, failed_ids=[])
 
@@ -92,6 +154,22 @@ def translate_blocks(
     all_text = " ".join(b.text for b in blocks)
     shared_terms = get_terms_in_text(all_text)
 
+    # 총 청크 수 미리 계산
+    pdf_chunks = _count_chunks(pdf_blocks, chunk_size) if pdf_blocks else 0
+    ocr_chunks = _count_chunks(ocr_blocks, chunk_size) if ocr_blocks else 0
+    total_chunks = pdf_chunks + ocr_chunks
+
+    # 진행률 추적
+    progress_state = {"current": 0}
+
+    def report_chunk_done():
+        progress_state["current"] += 1
+        if on_progress:
+            try:
+                on_progress(progress_state["current"], total_chunks)
+            except Exception:
+                pass
+
     # PDF 블록 번역
     if pdf_blocks:
         logger.info(f"[Translator] Translating {len(pdf_blocks)} PDF blocks")
@@ -102,6 +180,7 @@ def translate_blocks(
             shared_terms=shared_terms,
             context_summary=context_summary,
             source_label="PDF",
+            on_chunk_done=report_chunk_done,
         )
         translations.update(pdf_result.translations)
         failed_ids.extend(pdf_result.failed_ids)
@@ -116,6 +195,7 @@ def translate_blocks(
             shared_terms=shared_terms,
             context_summary=context_summary,
             source_label="OCR",
+            on_chunk_done=report_chunk_done,
         )
         translations.update(ocr_result.translations)
         failed_ids.extend(ocr_result.failed_ids)
@@ -131,6 +211,7 @@ def _translate_block_group(
     shared_terms: dict[str, str],
     context_summary: Optional[str],
     source_label: str,
+    on_chunk_done: Optional[callable] = None,
 ) -> TranslationResult:
     """블록 그룹 번역 (PDF 또는 OCR)"""
     translations: dict[str, str] = {}
@@ -185,6 +266,13 @@ def _translate_block_group(
             for block in chunk:
                 failed_ids.append(block.block_id)
 
+        # 청크 완료 콜백
+        if on_chunk_done:
+            try:
+                on_chunk_done()
+            except Exception:
+                pass
+
     return TranslationResult(translations=translations, failed_ids=failed_ids)
 
 
@@ -202,7 +290,7 @@ def _translate_chunk(
     response = translate_text_vlm(prompt)
 
     # 응답 파싱
-    return _parse_response(response, blocks)
+    return _parse_response(response, blocks, target_lang)
 
 
 def _build_prompt(
@@ -266,8 +354,10 @@ def _build_prompt(
         "5. If Korean has English in parentheses, keep only the English term when appropriate.",
         "6. Output format: [BLOCK_ID]: translated text",
         "7. NEVER omit place names, proper nouns, or specific details from the source.",
-        "8. Korean inequalities: 이상 = 'or more' (≥), 초과 = 'more than' (>), 이하 = 'or less' (≤), 미만 = 'less than' (<).",
-        "9. Use correct English grammar. For broken/failed states, use passive voice (e.g., 'the transmission broke' not 'broke the transmission').",
+        "8. Korean inequalities: 이상='or more'(≥), 초과='more than'(>), 이하='or less'(≤), 미만='less than'(<).",
+        "9. Use correct English grammar. For broken/failed states, use passive voice.",
+        "10. NEVER add numbers that do not exist in the source text. Translate each block independently.",
+        "11. Use ONLY Latin alphabet (A-Z). Keep romanized forms like 'oikos' instead of Greek letters 'οἶκος'.",
         "",
         "Texts to translate:",
     ])
@@ -289,7 +379,7 @@ def _build_prompt(
     return "\n".join(prompt_parts)
 
 
-def _parse_response(response: str, blocks: list[TextBlock]) -> dict[str, str]:
+def _parse_response(response: str, blocks: list[TextBlock], target_lang: str = "en") -> dict[str, str]:
     """VLM 응답 파싱"""
     translations: dict[str, str] = {}
 
@@ -334,7 +424,7 @@ def _parse_response(response: str, blocks: list[TextBlock]) -> dict[str, str]:
         translated = re.sub(r'^[\-\*•■◆◇○●\s]+', '', translated).strip()
 
         # 무효 번역 스킵
-        if _is_invalid_translation(translated):
+        if _is_invalid_translation(translated, target_lang):
             logger.warning(f"[Translator] Invalid translation for {block_id}: '{translated[:30]}'")
             continue
 
