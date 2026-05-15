@@ -2,17 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLectureStore } from '@/stores/lectureStore'
 import { API_BASE } from '@/lib/api'
 
-type Stage = 'pending' | 'ocr' | 'translate' | 'bundling' | 'completed' | 'failed'
-
-const STAGE_LABELS: Record<Stage, string> = {
-  pending: '준비 중',
-  ocr: 'OCR',
-  translate: '번역',
-  bundling: 'PDF 생성',
-  completed: '완료',
-  failed: '실패',
-}
-
 function formatEta(seconds: number): string {
   if (seconds < 1) return ''
   if (seconds < 60) return `약 ${Math.ceil(seconds)}초 남음`
@@ -37,7 +26,6 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
   const [queueProcessed, setQueueProcessed] = useState(0)
   const [currentFileName, setCurrentFileName] = useState('')
 
-  const [stage, setStage] = useState<Stage>('pending')
   const [stageCurrent, setStageCurrent] = useState(0)
   const [stageTotal, setStageTotal] = useState(0)
   const [etaAnchor, setEtaAnchor] = useState<{ value: number; at: number } | null>(null)
@@ -58,7 +46,6 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
   useEffect(() => {
     if (slideStatus === 'none') {
       setEtaReachedZero(false)
-      setStage('pending')
       setStageCurrent(0)
       setStageTotal(0)
       setEtaAnchor(null)
@@ -116,7 +103,6 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
           const data = await response.json()
 
           if (data.status === 'completed') {
-            setStage('completed')
             setEtaAnchor(null)
             setDisplayEta(0)
             setSlideId(null)
@@ -129,16 +115,13 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
           }
 
           if (data.status === 'failed') {
-            setStage('failed')
             setError('강의자료 처리에 실패했습니다.')
             setSlideStatus('none')
             return
           }
 
-          const nextStage = (data.stage ?? 'pending') as Stage
           const current = data.stage_current ?? 0
           const total = data.stage_total ?? 0
-          setStage(nextStage)
           setStageCurrent(current)
           setStageTotal(total)
 

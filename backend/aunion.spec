@@ -67,12 +67,18 @@ hiddenimports += collect_submodules('starlette')
 hiddenimports += collect_submodules('uvicorn')
 hiddenimports += collect_submodules('transformers')
 hiddenimports += collect_submodules('torch')
+# Surya OCR — image_pipeline.stage_ocr_surya 가 lazy import 라 정적 분석이 자동 감지 못함.
+# 누락 시 이미지/스캔 PDF 의 OCR 단계에서 ImportError → 번역이 silent fail (원본만 학생에게 표시).
+# pdftext 등 surya 의존성은 PyInstaller 가 surya 분석 시 자동 추적함.
+hiddenimports += collect_submodules('surya')
 
 # 데이터 파일
 datas = []
 datas += collect_data_files('transformers')
 # faster_whisper의 assets/silero_vad_v6.onnx — vad_filter=True 사용 시 필수
 datas += collect_data_files('faster_whisper')
+# Surya — tokenizer · processor 메타데이터 동봉. (실제 OCR 모델 weight 는 첫 호출 시 HF 캐시에 다운로드)
+datas += collect_data_files('surya')
 
 # 앱 디렉토리 포함
 datas += [

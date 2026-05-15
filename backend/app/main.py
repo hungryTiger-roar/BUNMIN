@@ -727,6 +727,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# 학생 브라우저(=Electron renderer)에서 SharedArrayBuffer 활성화 →
+# onnxruntime-web WASM 이 멀티스레드로 동작 → piper-tts 합성 지연 단축.
+# 미설정 시 crossOriginIsolated=false 라 ort 가 numThreads=1 로 강제됨 (useTTS.ts 경고).
+# credentialless: HuggingFace 등 cross-origin 자원도 CORP 헤더 없이 fetch 가능.
+@app.middleware("http")
+async def add_cross_origin_isolation_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    response.headers["Cross-Origin-Embedder-Policy"] = "credentialless"
+    return response
+
+
 app.include_router(ws.router)
 app.include_router(slides.router)
 app.include_router(transcripts.router)

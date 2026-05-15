@@ -167,7 +167,8 @@ function Student() {
   const pendingAudioStreamRef = useRef<MediaStream | null>(null)
 
   // delayMs 는 useDelayBufferPlayer 와 동일한 값 사용 — 강사 박자 정합성.
-  const delayMs = Number(import.meta.env.VITE_SYNC_DELAY_MS) || 15000
+  // fallback 2000 = DELAY_MIN_MS — env 미설정 시에도 적응형 하한과 일치하게 시작.
+  const delayMs = Number(import.meta.env.VITE_SYNC_DELAY_MS) || 2000
 
   const unlockAudio = useCallback(async () => {
     const ok = await unlockTTS()

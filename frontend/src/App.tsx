@@ -4,7 +4,6 @@ import Start from './pages/Start'
 import Install from './pages/Install'
 import Home from './pages/Home'
 import LecturerHome from './pages/LecturerHome'
-import LecturerSettings from './pages/LecturerSettings'
 import { TitleBar } from './components/common/TitleBar'
 import { usePreferencesStore } from './stores/preferencesStore'
 
@@ -76,7 +75,6 @@ function App() {
             <Route path="/student/start" element={<Start />} />
             <Route path="/lecturer" element={<Suspense fallback={<LecturerFallback />}><Lecturer /></Suspense>} />
             <Route path="/lecturer/home" element={<LecturerHome />} /> {/* LecturerHome은 lazy가 아니므로 Suspense 불필요 */}
-            <Route path="/lecturer/settings" element={<LecturerSettings />} /> {/* 이것도 eager */}
             <Route path="/home" element={<Home />} />
             <Route path="/student" element={<Student />} />
           </Routes>

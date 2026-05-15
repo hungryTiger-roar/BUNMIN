@@ -36,6 +36,11 @@
       "from": "models/nllb-200-distilled-600M-ct2",
       "to": "backend/models/nllb-200-distilled-600M-ct2",
       "filter": ["**/*"]
+    },
+    {
+      "from": "config",
+      "to": "backend/config",
+      "filter": ["**/*.csv"]
     }
   ],
   "compression": "store",

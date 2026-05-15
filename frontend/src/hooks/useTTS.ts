@@ -417,7 +417,10 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
     if (!audioCtxRef.current) {
       audioCtxRef.current = new AudioContext()
       gainRef.current = audioCtxRef.current.createGain()
-      gainRef.current.gain.value = gainValueRef.current
+      // gain 0 으로 시작 — Student.tsx 의 setTTSVolume effect 가 audioLang 보고 ramp 로 올림.
+      // 디폴트 gainValueRef(0.7) 로 시작하면 audioLang='original' 진입 시 useEffect 선언 순서 race
+      // (autoEnter unlock 이 mute effect 보다 먼저 fire) 로 첫 발화가 잠깐 들릴 가능성 차단.
+      gainRef.current.gain.value = 0
       gainRef.current.connect(audioCtxRef.current.destination)
     }
     if (audioCtxRef.current.state === 'suspended') {
