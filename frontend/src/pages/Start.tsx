@@ -139,8 +139,8 @@ export default function Start() {
       </button>
 
       <div className="text-center mb-16">
-        <h1 className="text-6xl font-special-gothic text-white mb-3">
-          Aunion AI LECTURE
+        <h1 className={`text-6xl mb-3 text-white ${lang === 'ko' ? 'font-bold' : 'font-special-gothic'}`}>
+          {lang === 'ko' ? '번역의 민족' : 'BUNMIN'}
         </h1>
         <p className="font-a2z text-white text-lg tracking-wide">
           {t.subtitle}

@@ -122,6 +122,7 @@ function Student() {
     ''
 
   const {
+    lang,
     subtitleSettings,
     setSubtitleSettings,
     audioLang,
@@ -838,7 +839,9 @@ function Student() {
       {/* 헤더 */}
       <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-primaryContainer bg-surface backdrop-blur-md shadow-sm flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          <h1 className="text-xl font-special-gothic tracking-wide">Aunion AI</h1>
+          <h1 className={`text-xl tracking-wide ${lang === 'ko' ? 'font-bold' : 'font-special-gothic'}`}>
+            {lang === 'ko' ? '번역의 민족' : 'BUNMIN'}
+          </h1>
           {isLectureStarted && !isPaused && (
             <span className="flex items-center gap-1.5 px-2.5 py-1 bg-error text-white text-xs font-semibold rounded-full shadow-lg shadow-error/30">
               <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />

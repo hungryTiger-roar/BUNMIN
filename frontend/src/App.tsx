@@ -7,6 +7,7 @@ import LecturerHome from './pages/LecturerHome'
 import LecturerSettings from './pages/LecturerSettings'
 import { TitleBar } from './components/common/TitleBar'
 import { usePreferencesStore } from './stores/preferencesStore'
+import { isElectron } from './lib/api'
 
 // 라우트 코드 스플리팅 — Student.tsx 는 piper-tts-web + onnxruntime-web/webgpu 를 끌어와
 // 진입 번들을 수십 MB 로 부풀린다. lazy 로 분리하면 /lecturer 등은 이 청크를 받지 않는다.
@@ -48,6 +49,13 @@ function App() {
     else if (theme === 'gradient') root.classList.add('theme-gradient')
   }, [theme])
 
+  // Electron frame-less 윈도우에서만 자체 타이틀바(32px)를 깐다.
+  // 브라우저 접속(학생이 강의자 링크로 들어오는 경로)에서는 html.is-electron 클래스를 빼서
+  // index.css 의 calc(100vh - 32px) 보정이 적용되지 않게 한다.
+  useEffect(() => {
+    if (isElectron) document.documentElement.classList.add('is-electron')
+  }, [])
+
   // 초기 로딩 화면 제거
   useEffect(() => {
     const loader = document.getElementById('initial-loader')
@@ -65,10 +73,11 @@ function App() {
 
   return (
     <>
-      <TitleBar />
+      {isElectron && <TitleBar />}
       {/* 타이틀바(32px) 만큼 콘텐츠 아래로 밀어줌. 각 페이지의 min-h-screen 은 index.css 에서
-          calc(100vh - 32px) 로 재정의되어 wrapper 의 pt-8 와 합쳐 정확히 viewport 에 맞음. */}
-      <div className="pt-8">
+          calc(100vh - 32px) 로 재정의되어 wrapper 의 pt-8 와 합쳐 정확히 viewport 에 맞음.
+          브라우저 접속 시에는 타이틀바가 없으므로 pt-8 도 빼서 빈 32px 공간이 안 생기게 한다. */}
+      <div className={isElectron ? 'pt-8' : ''}>
         <Suspense fallback={<RouteFallback />}>
           <Routes>
             <Route path="/install" element={<Install />} />

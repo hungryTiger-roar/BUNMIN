@@ -247,7 +247,7 @@ function StepHeader({ title, description }: { title: string; description: string
       <div className="flex items-center gap-2 mb-3">
         <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
         <span className="text-[11px] font-semibold tracking-[0.18em] uppercase text-stone-500">
-          Aunion AI · 초기 설정
+          번역의 민족 · 초기 설정
         </span>
       </div>
       <h1 className="text-[26px] font-semibold text-stone-900 leading-tight tracking-tight">
@@ -293,7 +293,7 @@ function IntroPanel({
     <>
       <StepHeader
         title="AI 모델 설치"
-        description="Aunion AI를 처음 실행합니다. 강의 자료 번역 기능을 사용하기 위해 AI 모델을 한 번 다운로드해야 합니다."
+        description="번역의 민족을 처음 실행합니다. 강의 자료 번역 기능을 사용하기 위해 AI 모델을 한 번 다운로드해야 합니다."
       />
 
       <div className="px-12 py-8">

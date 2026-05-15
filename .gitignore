@@ -102,6 +102,9 @@ backend/app/services/slide_translation/glossaries/*.json
 # 임시 파일 (커밋 메시지 작성용 등)
 *.tmp
 
+# 백업 파일 (아이콘/로고 교체 시 남기는 .bak 등)
+*.bak
+
 # 로컬 설명용 HTML 문서 — 저장소에 안 올림 (프로젝트 문서는 docs/*.md)
 docs/*.html
 

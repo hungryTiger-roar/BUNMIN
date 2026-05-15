@@ -44,8 +44,8 @@ export default function LecturerHome() {
 
       {/* 타이틀 */}
       <div className="text-center mb-16">
-        <h1 className="text-6xl font-special-gothic text-white mb-3">
-          Aunion AI LECTURE
+        <h1 className="text-6xl font-bold text-white mb-3">
+          번역의 민족
         </h1>
         <p className="font-a2z text-white text-lg tracking-wide">
           실시간 AI 강의 번역 시스템

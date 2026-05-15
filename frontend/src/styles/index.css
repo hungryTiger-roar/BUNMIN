@@ -4,22 +4,32 @@
 
 /* Electron frame: false + 자체 타이틀바(32px)용 — 페이지의 min-h-screen / h-screen 이
    타이틀바 영역을 침범하지 않도록 viewport 에서 32px 차감. App.tsx 의 wrapper 가
-   pt-8(32px) 로 콘텐츠를 아래로 밀고, 페이지는 남은 영역만 채우게 됨. */
+   pt-8(32px) 로 콘텐츠를 아래로 밀고, 페이지는 남은 영역만 채우게 됨.
+   브라우저로 직접 접속한 경우(html.is-electron 없음)에는 자체 타이틀바가 없으므로
+   이 보정을 끄고 Tailwind 기본값(100vh)을 그대로 사용. */
 @layer utilities {
-  .min-h-screen {
+  html.is-electron .min-h-screen {
     min-height: calc(100vh - 32px);
   }
-  .h-screen {
+  html.is-electron .h-screen {
     height: calc(100vh - 32px);
   }
 }
 
 @font-face {
-  font-family: 'Pretendard Variable';
-  font-weight: 45 920;
+  font-family: 'Hakgyoansim Allimjang';
+  src: url('../assets/fonts/Hakgyoansim Allimjang OTF R.otf') format('opentype');
+  font-weight: 400;
   font-style: normal;
   font-display: swap;
-  src: url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/variable/woff2/PretendardVariable.woff2') format('woff2-variations');
+}
+
+@font-face {
+  font-family: 'Hakgyoansim Allimjang';
+  src: url('../assets/fonts/Hakgyoansim Allimjang OTF B.otf') format('opentype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
 }
 
 @font-face {
@@ -159,7 +169,7 @@ html.theme-gradient .sidebar-card {
 }
 
 body {
-  font-family: 'Pretendard Variable', 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Hakgyoansim Allimjang', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   background-color: var(--color-background);
   color: var(--color-on-background);
 }

@@ -55,6 +55,7 @@ export default {
         pink40: "#7D5260"
       },
       fontFamily: {
+        sans: ['"Hakgyoansim Allimjang"', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', 'sans-serif'],
         'special-gothic': ['"Special Gothic Expanded One"', 'sans-serif'],
         'a2z': ['"A2z"', 'sans-serif'],
       },

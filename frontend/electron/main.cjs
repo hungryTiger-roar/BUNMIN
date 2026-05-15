@@ -601,13 +601,13 @@ function createWindow() {
 
 // ─── 트레이 아이콘 + 컨텍스트 메뉴 ────────────────────────────────────
 function createTray() {
-  const iconPath = path.join(__dirname, 'assets', 'tray-icon-32.png')
+  const iconPath = path.join(__dirname, 'assets', 'bm-applogo.png')
   const icon = nativeImage.createFromPath(iconPath)
   if (icon.isEmpty()) {
     devLog(`[경고] 트레이 아이콘 로드 실패: ${iconPath}`)
   }
   tray = new Tray(icon)
-  tray.setToolTip('Aunion AI')
+  tray.setToolTip('번역의 민족')
 
   const showWindow = () => {
     if (!mainWindow || mainWindow.isDestroyed()) return

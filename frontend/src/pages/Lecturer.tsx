@@ -1041,8 +1041,8 @@ function Lecturer() {
       {/* 헤더 */}
       <header className="flex items-center justify-between gap-3 px-4 py-3 bg-surface border-b border-primaryContainer flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          <h1 className="text-xl font-special-gothic tracking-wide bg-gradient-to-r from-gradientBlue to-gradientPurple bg-clip-text text-transparent">
-            Aunion AI
+          <h1 className="text-xl font-bold tracking-wide bg-gradient-to-r from-gradientBlue to-gradientPurple bg-clip-text text-transparent">
+            번역의 민족
           </h1>
           {isLectureStarted && !isPaused && (
             <span className="flex items-center gap-1.5 px-2.5 py-1 bg-error text-white text-xs font-semibold rounded-full">

@@ -1,13 +1,15 @@
 import { useNavigate } from 'react-router-dom'
+import { usePreferencesStore } from '../stores/preferencesStore'
 
 function Home() {
   const navigate = useNavigate()
+  const lang = usePreferencesStore((s) => s.lang)
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-home-gradient [background-size:800%_800%] animate-gradient-shift">
       <div className="text-center mb-12">
-        <h1 className="text-4xl font-special-gothic text-onPrimary mb-3">
-          Aunion AI LECTURE
+        <h1 className={`text-4xl mb-3 text-onPrimary ${lang === 'ko' ? 'font-bold' : 'font-special-gothic'}`}>
+          {lang === 'ko' ? '번역의 민족' : 'BUNMIN'}
         </h1>
         <p className="text-onPrimary/80 text-lg">
           실시간 AI 강의 번역 시스템
