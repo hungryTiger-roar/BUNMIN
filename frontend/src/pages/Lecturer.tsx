@@ -628,27 +628,10 @@ function Lecturer() {
   }
 
   const handleExit = () => {
-    // 강의 진행 중이었으면 학생/백엔드에 강의 종료 신호 송신 — 그렇지 않으면 학생 측엔
-    // 강의가 계속 진행 중인 것처럼 남아 자막 다운로드 모달이 안 뜨고 unitPlayer 잔여
-    // sentence 가 멈추지 않는다. endLecture 와 달리 transcript 모달은 안 띄우고 곧장
-    // navigate — 강사가 다른 화면으로 이동하려는 의도가 명확하므로.
-    const wasStarted = useLectureStore.getState().isLectureStarted
-    if (wasStarted) {
-      send({ type: 'lecture_end', slide_id: slideId })
-      // 새 강의 시 이전 필기 잔류 차단 (endLecture 와 동일 정책).
-      drawingCanvasRef.current?.clearAllPages()
-    }
     stopAudioCapture()
     stopScreenCapture()
-    // WebSocket send → 컴포넌트 unmount → useWebSocket cleanup 의 disconnect race 차단:
-    // send 는 enqueue 즉시 반환하지만 실제 flush 는 다음 tick 이상이 필요. 80ms 만 미뤄
-    // socket.close 전에 lecture_end 가 확실히 전송되게 한다. 강의 중이 아니었으면 즉시.
-    const doExit = () => {
-      reset()
-      navigate('/lecturer/home')
-    }
-    if (wasStarted) setTimeout(doExit, 80)
-    else doExit()
+    reset()
+    navigate('/lecturer/home')
   }
 
   const openMaterialChangeModal = async () => {
@@ -1194,17 +1177,12 @@ function Lecturer() {
             <span>{displayParticipantCount}</span>
           </button>
 
-          {/* "나가기"는 강의 자료 미선택 상태(준비 화면)에서만 노출.
-              자료를 골라 실제 강의 가능한 환경(slideId 존재)에선 숨겨 사고 차단 +
-              왼쪽 버튼들(테마/참가자)이 자연스럽게 오른쪽 끝으로 이동하게 한다. */}
-          {!slideId && (
-            <button
-              onClick={handleExit}
-              className="px-3 py-1.5 bg-primaryContainer/60 hover:bg-primaryContainer text-onSurface rounded-lg text-sm"
-            >
-              나가기
-            </button>
-          )}
+          <button
+            onClick={handleExit}
+            className="px-3 py-1.5 bg-primaryContainer/60 hover:bg-primaryContainer text-onSurface rounded-lg text-sm"
+          >
+            나가기
+          </button>
         </div>
       </header>
 
