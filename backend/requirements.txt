@@ -34,7 +34,7 @@ kss>=6.0.0
 surya-ocr>=0.17.0  # Transformer 기반 OCR (한글 정확도 향상), torch>=2.7.0 필요 (cu126 사용)
 # paddleocr - Windows protobuf 충돌로 제외 (필요 시 수동 설치)
 Pillow>=10.0.0,<12.0.0  # surya-ocr 호환성
-opencv-python>=4.8.0  # Inpainting (번역 오버레이 시 배경 자연스럽게 복원)
+opencv-python-headless>=4.8.0  # Inpainting (번역 오버레이 시 배경 자연스럽게 복원). headless: GUI(Qt) 의존성 제거 — surya-ocr 도 동일 패키지 사용해 cv2 모듈 단일 빌드 보장 (둘 다 깔리면 같은 site-packages 안에서 .pyd 충돌해 backend uvicorn 안 import 시 DLL 초기화 실패)
 
 # PDF 처리
 pymupdf>=1.23.0
