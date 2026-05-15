@@ -48,6 +48,15 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
     }
   }, [slideStatus])
 
+  // 컴포넌트 언마운트 시 진행 중인 업로드/폴링 정리
+  useEffect(() => {
+    return () => {
+      cancelledRef.current = true
+      abortControllerRef.current?.abort()
+      abortControllerRef.current = null
+    }
+  }, [])
+
   const processOneFile = useCallback(async (file: File) => {
     setCurrentFileName(file.name)
     setError(null)

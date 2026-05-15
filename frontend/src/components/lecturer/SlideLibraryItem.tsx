@@ -31,6 +31,7 @@ export default function SlideLibraryItem({
   const setSlideFilename = useLectureStore((s) => s.setSlideFilename)
   const setModelMode = useLectureStore((s) => s.setModelMode)
   const setCurrentPage = useLectureStore((s) => s.setCurrentPage)
+  const slideStatus = useLectureStore((s) => s.slideStatus)
 
   useEffect(() => {
     if (editing && inputRef.current) {
@@ -47,6 +48,8 @@ export default function SlideLibraryItem({
     }
     // 편집 중에는 카드 클릭 동작 안 함
     if (editing) return
+    // 업로드/처리 중에는 카드 클릭으로 인한 상태 전환 방지 (미리보기 버튼은 stopPropagation으로 별도 동작)
+    if (slideStatus === 'uploading' || slideStatus === 'processing') return
     // 일반 모드: 카드 클릭 = 무조건 불러오기 (요구사항)
     if (item.status !== 'completed') return
     setLoading(true)
