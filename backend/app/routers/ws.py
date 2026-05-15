@@ -743,14 +743,6 @@ async def handle_lecturer(websocket: WebSocket, pong_event: asyncio.Event | None
                 manager.current_session_id = transcripts.start_session(
                     manager.current_slide_id
                 )
-                # 슬라이드 도메인 용어집 → 실시간 NMT 에 주입 (도메인 용어 환각 억제)
-                if _nmt_service and manager.current_slide_id:
-                    try:
-                        from app.routers.slides import get_slide_glossary
-                        glossary = get_slide_glossary(manager.current_slide_id)
-                        _nmt_service.set_glossary(glossary)
-                    except Exception as e:
-                        print(f"[WS] 용어집 주입 실패 (무시): {e}")
                 print(f"[WS] 강의 시작: {manager.current_slide_id}, 모드: {manager.presentation_mode}, 세션: {manager.current_session_id}")
                 # 강의자에게 session_id 회신 (다운로드 시 필요)
                 await websocket.send_json({
@@ -1017,9 +1009,6 @@ async def process_audio(message: dict):
         try:
             if manager.lecture_title:
                 asr_hint_terms.append(manager.lecture_title)
-            if speech_start_slide_id:
-                from app.routers.slides import get_slide_glossary
-                asr_hint_terms.extend(get_slide_glossary(speech_start_slide_id).keys())
         except Exception:
             asr_hint_terms = []
 

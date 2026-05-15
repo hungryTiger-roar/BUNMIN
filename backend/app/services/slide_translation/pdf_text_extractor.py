@@ -382,13 +382,17 @@ def extract_korean_texts_for_translation(
 
                 # 한글 포함 여부 확인
                 has_korean = bool(re.search(r'[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]', full_text))
-                if not has_korean:
+                # 화살표/연결 기호는 한글 없어도 추출 (레이아웃 보존용)
+                is_connector = _is_connector_symbol(full_text)
+                if not has_korean and not is_connector:
                     continue
 
                 # 숫자/페이지 번호 스킵 (숫자가 주된 내용인 경우)
-                text_without_numbers = re.sub(r'[0-9.,/:%\s-]', '', full_text)
-                if len(text_without_numbers) < 1:  # 숫자/기호만으로 구성된 경우
-                    continue
+                # 단, 연결 기호는 예외
+                if not is_connector:
+                    text_without_numbers = re.sub(r'[0-9.,/:%\s-]', '', full_text)
+                    if len(text_without_numbers) < 1:  # 숫자/기호만으로 구성된 경우
+                        continue
 
 
                 # 자모 분리된 한글 감지 (폰트 인코딩 문제)
@@ -532,16 +536,61 @@ def _is_sentence_end(text: str) -> bool:
     return text[-1] in '.!?。？！'
 
 
-def _is_continuation(text: str) -> bool:
-    """이전 문장의 continuation인지 확인"""
+def _is_continuation(text: str, prev_text: str = None) -> bool:
+    """
+    이전 문장의 continuation인지 확인
+
+    Args:
+        text: 현재 텍스트
+        prev_text: 이전 텍스트 (옵션). 제공 시 두 텍스트 간 연결 패턴도 확인
+    """
+    import re
     text = text.lstrip()
     if not text:
         return False
+
+    # 영어 소문자로 시작하면 continuation
     if text[0].islower():
         return True
+
+    # 한글 연결 조사/어미로 시작
     continuation_starts = ['고', '며', '면', '니', '라', '를', '을', '는', '은', '이', '가', '에', '로', '와', '과']
     if text[0] in continuation_starts:
         return True
+
+    # prev_text가 제공된 경우: 두 텍스트 간 연결 패턴 확인
+    if prev_text:
+        prev_text = prev_text.rstrip()
+
+        # 이전 라인이 연결 조사/어미로 끝나는지
+        continuation_endings = [
+            r'지에$',       # 결정을 내리는지에
+            r'는지에$',     # 상호작용하는지에
+            r'인지에$',     # 무엇인지에
+            r'과$',         # ~와/과
+            r'와$',
+            r'야$',         # 고쳐야, 해야
+            r'해야$',       # ~해야
+            r'어야$',       # ~어야
+        ]
+        prev_ends_continuation = any(re.search(p, prev_text) for p in continuation_endings)
+
+        # 현재 라인이 연결 접속사로 시작하거나 짧은 종결어미
+        continuation_word_starts = [
+            r'^관한\s',     # 관한 기본원리
+            r'^관련된\s',   # 관련된 4가지
+            r'^관하여\s',   # 관하여 설명
+            r'^대한\s',     # 대한 내용
+            r'^하는가\??$', # 하는가?
+            r'^할까\??$',   # 할까?
+            r'^한다\.$',    # 한다.
+            r'^있다\.$',    # 있다.
+        ]
+        curr_starts_continuation = any(re.search(p, text) for p in continuation_word_starts)
+
+        if prev_ends_continuation and curr_starts_continuation:
+            return True
+
     return False
 
 
@@ -969,12 +1018,22 @@ def _group_adjacent_lines(
         text = line["text"]
         has_bullet = line.get("has_bullet", False)
 
-        # 기호/화살표만 있는 라인은 스킵 (번역 대상 아님, 원본 유지)
+        # 기호/화살표만 있는 라인은 개별 블록으로 추가 (번역 안 함, 원본 유지)
         if _is_connector_symbol(text):
-            # 현재 그룹이 있으면 끊고 새 그룹 시작 준비
+            # 현재 그룹이 있으면 끊고 저장
             if current_group:
                 groups.append(current_group)
                 current_group = None
+            # 기호 블록을 별도 그룹으로 추가 (is_symbol=True 표시)
+            groups.append({
+                "lines": [line],
+                "role": "symbol",
+                "is_bullet": False,
+                "is_diagram": False,
+                "is_principle": False,
+                "is_option": False,
+                "is_symbol": True,  # 기호/화살표 표시
+            })
             continue
 
         # 도식 라벨은 항상 개별 그룹 (병합 안 함)
@@ -1004,7 +1063,14 @@ def _group_adjacent_lines(
             start_new_group = True
         elif is_section and current_group:
             # section_header가 새로 시작되면 새 그룹
-            start_new_group = True
+            # 단, 이전 라인과 연결되는 경우는 병합 (예: "~지에" + "관한 기본원리들")
+            prev_line = current_group["lines"][-1]
+            prev_text = prev_line["text"]
+            if _is_continuation(text, prev_text):
+                # 이전 라인의 continuation이면 병합
+                start_new_group = False
+            else:
+                start_new_group = True
         else:
             prev_line = current_group["lines"][-1]
             prev_text = prev_line["text"]
@@ -1034,7 +1100,7 @@ def _group_adjacent_lines(
             prev_ends_sentence = _is_sentence_end(prev_text)
 
             # 현재 줄이 continuation인지
-            curr_is_continuation = _is_continuation(text)
+            curr_is_continuation = _is_continuation(text, prev_text)
 
             # 이전 줄이 option (A., B., a., b.)이고 현재 줄이 continuation인 경우 병합 (최우선)
             if current_group.get("is_option") and not prev_ends_sentence and y_close:
@@ -1102,6 +1168,30 @@ def _group_adjacent_lines(
         group_lines = group["lines"]
         role = group["role"]
         is_bullet = group.get("is_bullet", False)
+        is_symbol = group.get("is_symbol", False)
+
+        # 기호/화살표만 있는 그룹: 번역 없이 원본 유지
+        if is_symbol and len(group_lines) == 1:
+            line = group_lines[0]
+            result.append({
+                "page_num": page_num,
+                "block_id": f"p{page_num}_b{block_idx}",
+                "text": line["text"],
+                "text_for_translation": line["text"],  # 원본 그대로 (번역 안 함)
+                "prefix": "",
+                "prefix_width": 0.0,
+                "bbox": line["bbox"],
+                "font": line["font"],
+                "size": line["size"],
+                "color": line["color"],
+                "role": "symbol",
+                "is_arrow": True,  # 화살표/기호 표시 → 번역 스킵
+                "line_colors": [line["color"]],
+                "line_texts": [line["text"]],
+                "has_multi_color": False,
+            })
+            block_idx += 1
+            continue
 
         # bbox 병합 (전체 영역)
         # 각 라인의 x0은 이미 symbol_width만큼 조정되어 있음
