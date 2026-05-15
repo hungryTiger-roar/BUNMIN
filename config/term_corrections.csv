@@ -6,6 +6,10 @@ korean,english
 부주의한 운전,reckless driving
 아르바이트,part-time job
 소비재,consumer goods
+# ===== 3p 오역 방지: 가정=household (가정=assumption 아님) =====
+가정,household
+가정처럼,like a household
+가정에서,in a household
 # ===== 경제학 핵심 용어 (Mankiw 스타일) =====
 평균비용,average cost
 한계변화,marginal change
@@ -25,6 +29,52 @@ korean,english
 희소자원,scarce resources
 자급자족,self-sufficiency
 보이지 않는 손,invisible hand
+# ===== 경제학 추가 용어 (QA 리포트 기반) =====
+상충관계,trade-off
+상충 관계,trade-off
+경제주체,economic agents
+경제 주체,economic agents
+사회 구성원,members of society
+사회구성원,members of society
+국가경제,the national economy
+국가 경제,the national economy
+수리비용,repair cost
+수리 비용,repair cost
+잠재적 임금소득,forgone potential earnings
+재화와 용역,goods and services
+경제 파이,economic pie
+안전띠,seat belt
+담배세,tobacco tax
+휘발유 가격,gasoline price
+# ===== 무역/비교우위 (19p 반대 번역 방지) =====
+더 값싸게,at lower prices
+더 싸게,more cheaply
+값싸게,cheaply
+전문화,specialization
+비교우위,comparative advantage
+절대우위,absolute advantage
+# ===== 거시경제 용어 =====
+생활수준,standard of living
+생산성,productivity
+노동 한 단위,one unit of labor
+인플레이션,inflation
+물가수준,price level
+실질구매력,real purchasing power
+통화량,money supply
+실업,unemployment
+단기적 상충관계,short-run trade-off
+# ===== 금액 (만원 단위 - VLM 오변환 방지) =====
+1만원,10000 won
+5만원,50000 won
+10만원,100000 won
+50만원,500000 won
+60만원,600000 won
+80만원,800000 won
+100만원,1 million won
+550만원,5.5 million won
+570만원,5.7 million won
+600만원,6 million won
+650만원,6.5 million won
 # ===== 기존 사전 (경제/자동차/고유명사) =====
 한계,Marginal
 한계비용,Marginal cost
@@ -86,6 +136,30 @@ korean,english
 순환 대기,Circular wait
 순환 참조,Circular reference
 # ===== 컴퓨터공학 - 운영체제/시스템 (번역기 오역 빈발) =====
+협의의 운영체제,operating system in the narrow sense
+광의의 운영체제,operating system in the broad sense
+커널,kernel
+시분할,time sharing
+일괄 처리,batch processing
+실시간 시스템,real-time system
+경성 실시간 시스템,hard real-time system
+연성 실시간 시스템,soft real-time system
+다중 작업,multitasking
+단일 작업,single tasking
+다중 사용자,multi-user
+단일 사용자,single-user
+다중 프로그래밍,multiprogramming
+다중 처리,multiprocessing
+다중 프로세서,multiprocessor
+입출력 장치,I/O device
+입출력 관리,I/O management
+CPU 스케줄링,CPU scheduling
+메모리 관리,memory management
+파일 관리,file management
+명령어해석기,command line interpreter
+자원 할당,resource allocation
+자원 반환,resource return
+프로세스 간 협력,process cooperation
 선점,Preemption
 선점형 스케줄링,Preemptive scheduling
 비선점형 스케줄링,Non-preemptive scheduling

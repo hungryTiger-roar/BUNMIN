@@ -76,6 +76,59 @@ if not _pdf_logger.handlers:
 def pdf_log_debug(msg: str):
     _pdf_logger.debug(msg)
 
+
+def _normalize_for_pdf(text: str) -> str:
+    """유니코드 특수문자를 ASCII로 정규화 (PDF 폰트 호환성)
+    
+    helvetica 등 기본 PDF 폰트는 유니코드 따옴표/대시를 지원하지 않아
+    렌더링 시 '?'로 표시됨. ASCII 문자로 변환하여 해결.
+    """
+    replacements = [
+        # 따옴표 (curly quotes → straight quotes)
+        ('“', '"'),  # "
+        ('”', '"'),  # "
+        ('‘', "'"),  # '
+        ('’', "'"),  # '
+        # CJK 따옴표
+        ('「', '"'),  # 「
+        ('」', '"'),  # 」
+        ('『', '"'),  # 『
+        ('』', '"'),  # 』
+        # guillemets
+        ('«', '"'),  # «
+        ('»', '"'),  # »
+        # 대시/하이픈
+        ('–', '-'),  # en-dash
+        ('—', '-'),  # em-dash
+        ('−', '-'),  # minus sign
+        # 공백
+        (' ', ' '),  # non-breaking space
+        (' ', ' '),  # em space
+        (' ', ' '),  # en space
+        # 말줄임표
+        ('…', '...'),  # …
+        # 화살표 (helvetica 미지원 → ASCII 안전 문자로)
+        ('⇒', '->'),  # double arrow
+        ('⇨', '->'),  # double arrow variant
+        ('⟹', '->'),  # long double arrow
+        ('→', '->'),  # single arrow
+        ('➡', '->'),  # heavy arrow
+        ('➔', '->'),  # arrow
+        ('←', '<-'),  # left arrow
+        ('⇐', '<-'),  # left double arrow
+        ('↔', '<->'),  # bidirectional
+        ('⇔', '<->'),  # bidirectional double
+        # 전각 기호 → 반각
+        ('＝', '='),  # fullwidth equals
+        ('：', ':'),  # fullwidth colon
+        ('；', ';'),  # fullwidth semicolon
+        ('，', ','),  # fullwidth comma
+        ('．', '.'),  # fullwidth period
+    ]
+    for old_char, new_char in replacements:
+        text = text.replace(old_char, new_char)
+    return text
+
 def pdf_log_warning(msg: str):
     _pdf_logger.warning(msg)
 
@@ -164,7 +217,7 @@ def _render_multi_color_text(
     - definition_color: 원본 definition 색상, 없으면 black (NEVER term_color)
     - 의미 구조 보존이 색상 보존보다 우선
     """
-    translated = trans.get('translated', '')
+    translated = _normalize_for_pdf(trans.get('translated', ''))
     line_colors = trans.get('line_colors', [])
     role = trans.get('role', 'body')
     page_rect = page.rect
@@ -551,7 +604,7 @@ def _replace_single_block(
 
     bbox = trans.get("bbox", (0, 0, 0, 0))
     original = trans.get("original", "")
-    translated = trans.get("translated", "")
+    translated = _normalize_for_pdf(trans.get("translated", ""))
     role = trans.get("role", "body")
     block_id = trans.get("block_id", "unknown")
     original_font = trans.get("font", "")

@@ -343,3 +343,101 @@ def build_ocr_corrector() -> Callable[[str], str]:
         return pattern.sub(lambda m: corrections[m.group(0)], text)
 
     return _correct
+
+
+# ── 한국어 금액(만원) 후처리 ─────────────────────────────────────────────────────
+# VLM이 "60만원"을 "6 million won"으로 잘못 번역하는 문제 해결
+# 만원 = 10,000원이므로 60만원 = 600,000원
+# ─────────────────────────────────────────────────────────────────────────────────
+
+
+def validate_korean_currency(korean_text: str, english_text: str) -> str:
+    """
+    한국어 금액(만원)이 영어로 정확히 변환되었는지 검증하고 수정.
+
+    예시:
+        - 60만원 → 600,000 won (NOT 6 million won)
+        - 100만원 → 1 million won 또는 1,000,000 won
+        - 550만원 → 5.5 million won 또는 5,500,000 won
+
+    Args:
+        korean_text: 원본 한국어 텍스트
+        english_text: VLM이 생성한 영어 번역
+
+    Returns:
+        검증/수정된 영어 텍스트
+    """
+    if not korean_text or not english_text:
+        return english_text
+
+    # 한국어에서 만원 금액 추출: XX만원, XX만 원, XX.X만원 등
+    korean_amounts = re.findall(r'(\d+(?:\.\d+)?)\s*만\s*원', korean_text)
+
+    if not korean_amounts:
+        return english_text
+
+    result = english_text
+
+    for amount_str in korean_amounts:
+        amount = float(amount_str)
+        correct_won = int(amount * 10_000)  # 만원 = 10,000원
+
+        # 영어에서 "X million won" 패턴 찾기
+        million_matches = re.findall(
+            r'(\d+(?:\.\d+)?)\s*million\s*won',
+            result,
+            re.IGNORECASE
+        )
+
+        for million_str in million_matches:
+            million_val = float(million_str)
+            million_in_won = int(million_val * 1_000_000)
+
+            # 정확한 값과 비교 (10% 오차 허용)
+            if correct_won > 0 and abs(million_in_won - correct_won) > correct_won * 0.1:
+                # 잘못된 값 감지 - 수정 필요
+                if correct_won >= 1_000_000:
+                    # 100만원 이상: X.X million won 형식
+                    millions = correct_won / 1_000_000
+                    if millions == int(millions):
+                        correct_str = f"{int(millions)} million won"
+                    else:
+                        correct_str = f"{millions:.1f} million won"
+                else:
+                    # 100만원 미만: XXX,XXX won 형식
+                    correct_str = f"{correct_won:,} won"
+
+                # 잘못된 패턴 교체
+                wrong_pattern = rf'{re.escape(million_str)}\s*million\s*won'
+                result = re.sub(wrong_pattern, correct_str, result, count=1, flags=re.IGNORECASE)
+                print(f"[CurrencyFix] {million_str} million won → {correct_str} (원본: {amount_str}만원)")
+
+    return result
+
+
+def fix_currency_in_translations(
+    regions: list[dict],
+    korean_key: str = "ocr_text",
+    english_key: str = "english"
+) -> list[dict]:
+    """
+    번역된 region 리스트에서 금액 오류를 일괄 수정.
+
+    Args:
+        regions: 번역된 region 리스트
+        korean_key: 원본 한국어 텍스트 키
+        english_key: 영어 번역 텍스트 키
+
+    Returns:
+        수정된 region 리스트
+    """
+    for region in regions:
+        korean = region.get(korean_key, "")
+        english = region.get(english_key, "")
+
+        if korean and english:
+            fixed = validate_korean_currency(korean, english)
+            if fixed != english:
+                region[english_key] = fixed
+
+    return regions

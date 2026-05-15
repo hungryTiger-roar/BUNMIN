@@ -278,7 +278,7 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
                   : stage === 'pending'
                     ? '준비 중...'
                     : stageTotal > 0
-                      ? `${STAGE_LABELS[stage]} ${stageCurrent}/${stageTotal}`
+                      ? `${STAGE_LABELS[stage]} ${Math.round((stageCurrent / stageTotal) * 100)}%`
                       : `${STAGE_LABELS[stage]}...`}
             </p>
             {isMultiple && (

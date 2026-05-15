@@ -416,11 +416,11 @@ step(7, TOTAL, '설치 검증...')
     }
   }
 
-  // VLM Base 모델 확인 — 로컬 디렉토리 + safetensors 5 shards 존재
+  // VLM Base 모델 확인 — 로컬 디렉토리 + safetensors shards 존재
   // HF 캐시 대신 평탄 디렉토리 사용으로 Windows 심볼릭 이슈 우회
-  const vlmBaseDir = path.join(ROOT, 'models', 'qwen2.5-vl-7b-instruct')
+  const vlmBaseDir = path.join(ROOT, 'models', 'qwen3-vl-4b-instruct')
   if (!fs.existsSync(vlmBaseDir)) {
-    console.error(`  ${C.red}✗ 누락:${C.reset} models/qwen2.5-vl-7b-instruct/ (VLM Base)`)
+    console.error(`  ${C.red}✗ 누락:${C.reset} models/qwen3-vl-4b-instruct/ (VLM Base)`)
     ok = false
   } else {
     const shards = fs.readdirSync(vlmBaseDir).filter(f => f.endsWith('.safetensors'))
@@ -428,9 +428,9 @@ step(7, TOTAL, '설치 검증...')
       (sum, f) => sum + fs.statSync(path.join(vlmBaseDir, f)).size, 0
     )
     const sizeGb = totalBytes / (1024 ** 3)
-    if (shards.length < 5 || sizeGb < 12) {
+    if (shards.length < 2 || sizeGb < 6) {
       console.error(
-        `  ${C.red}✗ VLM Base 부분 다운로드${C.reset} (shards ${shards.length}/5, ${sizeGb.toFixed(2)}GB / 14GB 기대)`
+        `  ${C.red}✗ VLM Base 부분 다운로드${C.reset} (shards ${shards.length}/2+, ${sizeGb.toFixed(2)}GB / 8GB 기대)`
       )
       console.error('     conda run -n aunion python scripts/download_models.py 로 재실행')
       ok = false
