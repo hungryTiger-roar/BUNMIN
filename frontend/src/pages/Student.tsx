@@ -946,6 +946,22 @@ function Student() {
             <span>{displayParticipantCount}</span>
           </button>
 
+          {/* 자막 다운로드 — 강의 종료 후에만 노출 (sessionId 있고 isLectureStarted=false).
+              강의 진행 중엔 의미 없고 헤더만 어수선해지므로 숨김. 종료 시 자동으로 뜨는
+              모달을 실수로 닫아도 이 버튼으로 언제든 다시 오픈. */}
+          {sessionId && !isLectureStarted && (
+            <button
+              onClick={() => setShowTranscriptModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-primaryContainer/60 hover:bg-primaryContainer text-onSurface transition-colors"
+              title="자막 다운로드"
+              aria-label="자막 다운로드"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+            </button>
+          )}
+
           {studentName && (
             <div className="flex items-center gap-1.5 px-3 py-1.5 bg-primaryContainer/60 rounded-lg text-sm text-onSurface">
               {isEditingName ? (
