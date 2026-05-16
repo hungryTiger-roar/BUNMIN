@@ -549,8 +549,13 @@ function createWindow() {
     return _allowedPermissions.has(permission)
   })
 
+  // 진입 URL 은 항상 /install. Install 페이지가 backend /health 폴링해서
+  //   - wait_user_action / loading / downloading → 마법사 UI 표시
+  //   - ready/ok 면서 다운로드 흐름 안 거쳤으면 (캐시 hit) → 즉시 navigate('/lecturer/home')
+  //   - ready/ok 면서 다운로드 거쳤으면 → '확인' 누르고 /lecturer/home
+  // 한 곳에서 분기 → main.cjs 가 backend status 미리 안 봐도 됨 (race / 추가 RTT 회피).
   if (isDev) {
-    const url = `http://127.0.0.1:${FRONTEND_PORT}/#/lecturer/home`
+    const url = `http://127.0.0.1:${FRONTEND_PORT}/#/install`
     devLog(`loadURL: ${url}`)
     mainWindow.loadURL(url)
     mainWindow.webContents.openDevTools({ mode: 'detach' })
@@ -564,10 +569,10 @@ function createWindow() {
       if (!mainWindow || mainWindow.isDestroyed()) return
       if (!ok) {
         devLog('waitForHealth 실패 — file://로 폴백 (마이크 안 될 수 있음)')
-        mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: '/lecturer/home' })
+        mainWindow.loadFile(path.join(__dirname, '../dist/index.html'), { hash: '/install' })
         return
       }
-      const url = `http://127.0.0.1:${BACKEND_PORT}/#/lecturer/home`
+      const url = `http://127.0.0.1:${BACKEND_PORT}/#/install`
       devLog(`백엔드 HTTP 준비 완료 → loadURL: ${url}`)
       mainWindow.loadURL(url)
     })
