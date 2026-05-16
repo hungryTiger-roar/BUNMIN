@@ -29,12 +29,12 @@ MODELS_DIR = _PROJECT_ROOT / "models"
 
 # VLM Base 모델 (HuggingFace 캐시에 저장)
 VLM_BASE = {
-    "repo_id": "Qwen/Qwen2.5-VL-7B-Instruct",
+    "repo_id": "Qwen/Qwen3-VL-4B-Instruct",
     # 로컬 평탄 디렉토리 사용 — Windows 심볼릭 미지원 환경에서 HF 캐시
     # snapshots/blobs 분리 구조가 부분 실패하는 문제 회피
-    "local_dir": MODELS_DIR / "qwen2.5-vl-7b-instruct",
-    "description": "VLM Base 모델",
-    "size": "~14GB",  # bf16 가중치 5 shards (7B params × 2 bytes)
+    "local_dir": MODELS_DIR / "qwen3-vl-4b-instruct",
+    "description": "VLM Base 모델 (4B)",
+    "size": "~8GB",  # bf16 가중치 (4B params × 2 bytes)
 }
 
 # ASR 모델 (음성 인식) — openai 원본 turbo를 CTranslate2 int8로 변환
@@ -110,6 +110,34 @@ def download_to_local(model: dict, step: str, retries: int = 3) -> bool:
     print(f"✗ {model['description']} 다운로드 실패 (재시도 {retries}회 모두 실패): {last_err}")
     return False
 
+
+
+
+def download_vlm_processor(model: dict, step: str) -> bool:
+    """VLM 프로세서 파일 다운로드 (AutoProcessor가 필요로 하는 추가 파일)"""
+    print(f"\n[{step}] VLM 프로세서 파일 확인")
+    print(f"      경로: {model['local_dir']}")
+    print("-" * 60)
+
+    try:
+        print("VLM 프로세서 로드 중 (추가 파일 다운로드)...")
+        from transformers import AutoProcessor
+
+        # AutoProcessor.from_pretrained 호출 시 누락된 파일 자동 다운로드
+        processor = AutoProcessor.from_pretrained(
+            str(model["local_dir"]),
+            trust_remote_code=True,
+        )
+        del processor
+
+        import gc
+        gc.collect()
+
+        print("✓ VLM 프로세서 파일 준비 완료!")
+        return True
+    except Exception as e:
+        print(f"✗ VLM 프로세서 다운로드 실패: {e}")
+        return False
 
 def download_surya_ocr(model: dict, step: str) -> bool:
     """Surya OCR 모델 다운로드 (Transformer 기반)"""
@@ -269,21 +297,24 @@ def main():
     print(f"  2. {ASR_MODEL['description']} ({ASR_MODEL['size']})")
     print(f"  3. {NMT_MODEL['description']} ({NMT_MODEL['size']})")
     print(f"  4. {SURYA_OCR['description']} ({SURYA_OCR['size']})")
-    print(f"\n총 예상 용량: ~18GB (최초 1회만 다운로드)")
+    print(f"\n총 예상 용량: ~10GB (최초 1회만 다운로드)")
 
     results = []
 
     # 1. VLM Base 모델 (로컬 디렉토리 — HF 캐시 심볼릭 이슈 회피)
-    results.append(("VLM Base", download_to_local(VLM_BASE, "1/4")))
+    results.append(("VLM Base", download_to_local(VLM_BASE, "1/5")))
+
+    # 1-b. VLM 프로세서 파일 (AutoProcessor가 필요로 하는 추가 파일)
+    results.append(("VLM Processor", download_vlm_processor(VLM_BASE, "1-b/5")))
 
     # 2. ASR 모델 (CTranslate2 int8 변환)
-    results.append(("ASR", convert_asr_ct2(ASR_MODEL, "2/4")))
+    results.append(("ASR", convert_asr_ct2(ASR_MODEL, "2/5")))
 
     # 3. NMT 모델 (CTranslate2 변환)
-    results.append(("NMT", convert_nmt_ct2(NMT_MODEL, "3/4")))
+    results.append(("NMT", convert_nmt_ct2(NMT_MODEL, "3/5")))
 
     # 4. Surya OCR 모델 (Transformer 기반)
-    results.append(("Surya OCR", download_surya_ocr(SURYA_OCR, "4/4")))
+    results.append(("Surya OCR", download_surya_ocr(SURYA_OCR, "4/5")))
 
     # 결과 출력
     print("\n" + "=" * 60)
@@ -307,7 +338,7 @@ def main():
 
     # 핵심 모델(VLM Base, ASR, NMT) 실패 시 setup이 멈추도록 종료 코드 1
     # → silent fail로 첫 추론에서 16GB를 다시 받는 사고 방지
-    critical = {"VLM Base", "ASR", "NMT"}
+    critical = {"VLM Base", "VLM Processor", "ASR", "NMT"}
     failed_critical = [name for name, ok in results if not ok and name in critical]
     if failed_critical:
         print(f"\n[중단] 핵심 모델 실패: {', '.join(failed_critical)}")

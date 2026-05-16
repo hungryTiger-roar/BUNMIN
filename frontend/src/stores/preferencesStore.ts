@@ -64,7 +64,7 @@ const DEFAULT_SUBTITLE_SETTINGS: SubtitleSettings = {
 export const usePreferencesStore = create<PreferencesState>()(
   persist(
     (set) => ({
-      lang: 'ko',
+      lang: 'en',
       setLang: (lang) => set({ lang }),
 
       subtitleSettings: DEFAULT_SUBTITLE_SETTINGS,
@@ -103,7 +103,15 @@ export const usePreferencesStore = create<PreferencesState>()(
     }),
     {
       name: 'aunion-preferences',
-      version: 8,
+      version: 9,
+      migrate: (persistedState, version) => {
+        const state = persistedState as Partial<PreferencesState> | undefined
+        if (version < 9 && state) {
+          // v9: 기본 UI 언어를 영어로 변경. 기존에 저장된 lang 값은 무시하고 'en'으로 리셋.
+          return { ...state, lang: 'en' } as PreferencesState
+        }
+        return state as PreferencesState
+      },
     }
   )
 )

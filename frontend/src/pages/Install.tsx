@@ -147,11 +147,11 @@ function Install() {
           case 'ready':
           case 'ok':
             // VLM 다운로드 / 사용자 액션 단계 거쳤으면 Complete 페이지로 사용자에게 명시적 확인.
-            // 거치지 않은 (캐시 hit) 케이스면 곧장 /lecturer 로 진행 — 불필요한 클릭 제거.
+            // 거치지 않은 (캐시 hit) 케이스면 곧장 /lecturer/home (이름 입력) 으로 진행 — 불필요한 클릭 제거.
             if (sawDownloadFlowRef.current) {
               setPhase('complete')
             } else {
-              navigate('/lecturer')
+              navigate('/lecturer/home')
             }
             return
           case 'error':
@@ -200,7 +200,7 @@ function Install() {
     }
   }
 
-  const handleConfirm = () => navigate('/lecturer')
+  const handleConfirm = () => navigate('/lecturer/home')
 
   const handleCancel = () => {
     if (window.electron?.quitApp) window.electron.quitApp()
@@ -247,7 +247,7 @@ function StepHeader({ title, description }: { title: string; description: string
       <div className="flex items-center gap-2 mb-3">
         <div className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
         <span className="text-[11px] font-semibold tracking-[0.18em] uppercase text-stone-500">
-          Aunion AI · 초기 설정
+          번역의 민족 · 초기 설정
         </span>
       </div>
       <h1 className="text-[26px] font-semibold text-stone-900 leading-tight tracking-tight">
@@ -293,7 +293,7 @@ function IntroPanel({
     <>
       <StepHeader
         title="AI 모델 설치"
-        description="Aunion AI를 처음 실행합니다. 강의 자료 번역 기능을 사용하기 위해 AI 모델을 한 번 다운로드해야 합니다."
+        description="번역의 민족을 처음 실행합니다. 강의 자료 번역 기능을 사용하기 위해 AI 모델을 한 번 다운로드해야 합니다."
       />
 
       <div className="px-12 py-8">

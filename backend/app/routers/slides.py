@@ -21,6 +21,8 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Background
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from app.utils.keep_awake import keep_awake
+
 # translate_slide_v3 모듈 경로 추가
 _REPO_DIR = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(_REPO_DIR))
@@ -1104,6 +1106,10 @@ async def process_slide(slide_id: str, pdf_path: Path, _skip_vlm_unload: bool = 
     _skip_vlm_unload: 배치 처리 시 마지막 파일이 아니면 True — VLM을 언로드하지 않고 다음 파일에서 재사용
     """
     try:
+        # 장시간 작업 중 절전모드 방지
+        _awake_ctx = keep_awake()
+        _awake_ctx.__enter__()
+        
         slide_status[slide_id]["status"] = "processing"
 
         # 체크포인트 ①: processing 진입 직후
@@ -1298,6 +1304,12 @@ async def process_slide(slide_id: str, pdf_path: Path, _skip_vlm_unload: bool = 
                 await asyncio.to_thread(unload_vlm_model)
             except Exception:
                 pass
+    finally:
+        # 절전모드 방지 해제
+        try:
+            _awake_ctx.__exit__(None, None, None)
+        except Exception:
+            pass
 
 
 def pdf_to_images(pdf_path: Path) -> list[bytes]:
@@ -1339,6 +1351,10 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path, _skip_vlm_unloa
     )
     from app.services.slide_translation.translator import translate_blocks
     from app.services.slide_translation.models import TextBlock
+
+    # 장시간 작업 중 절전모드 방지
+    _awake_ctx2 = keep_awake()
+    _awake_ctx2.__enter__()
 
     try:
         # ========== Stage 1: 페이지 분류 ==========
@@ -1711,6 +1727,12 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path, _skip_vlm_unloa
                 await asyncio.to_thread(unload_vlm_model)
             except Exception:
                 pass
+    finally:
+        # 절전모드 방지 해제
+        try:
+            _awake_ctx2.__exit__(None, None, None)
+        except Exception:
+            pass
 
 
 async def process_slide_batch(items: list[tuple[str, Path]]):

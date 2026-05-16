@@ -53,43 +53,6 @@ export async function switchToRealtimeMode(): Promise<ModeResponse> {
   return res.json()
 }
 
-// 토큰 설정 API
-export interface TokenStatusResponse {
-  hf_token_set: boolean
-  openai_api_key_set: boolean
-  hf_token_masked: string
-  openai_api_key_masked: string
-}
-
-export interface UpdateTokensRequest {
-  hf_token?: string
-  openai_api_key?: string
-}
-
-export interface UpdateTokensResponse {
-  updated: string[]
-  message: string
-}
-
-export async function getTokenStatus(): Promise<TokenStatusResponse> {
-  const res = await fetch(`${API_BASE}/api/settings/tokens`)
-  if (!res.ok) throw new Error('토큰 상태 조회 실패')
-  return res.json()
-}
-
-export async function updateTokens(payload: UpdateTokensRequest): Promise<UpdateTokensResponse> {
-  const res = await fetch(`${API_BASE}/api/settings/tokens`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  })
-  if (!res.ok) {
-    const detail = await res.json().catch(() => ({}))
-    throw new Error(detail.detail || '토큰 저장 실패')
-  }
-  return res.json()
-}
-
 // 강의자료 라이브러리 API
 export async function getSlideLibrary(sort: SortOrder = 'recent'): Promise<SlideLibraryResponse> {
   const res = await fetch(`${API_BASE}/slides/library?sort=${sort}`)

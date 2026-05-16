@@ -50,6 +50,8 @@ export default function SlideLibrarySearchModal({ items, onClose, onDeleted, cla
   const [previewPage, setPreviewPage] = useState(0)
   const [previewLoaded, setPreviewLoaded] = useState(false)
   const [previewError, setPreviewError] = useState(false)
+  // 강사 기준 미리보기 — 원본 PDF 를 기본으로, 토글로 번역본 비교. (SlidePreviewModal 과 동일 동작)
+  const [previewMode, setPreviewMode] = useState<'original' | 'translated'>('original')
   const [loading, setLoading] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -108,12 +110,19 @@ export default function SlideLibrarySearchModal({ items, onClose, onDeleted, cla
     }
   }, [filteredItems, selectedId])
 
-  // 선택 변경 시 미리보기 페이지/로딩 상태 리셋
+  // 선택 변경 시 미리보기 페이지/모드/로딩 상태 리셋
   useEffect(() => {
     setPreviewPage(0)
+    setPreviewMode('original')
     setPreviewLoaded(false)
     setPreviewError(false)
   }, [selectedId])
+
+  // 모드 변경 시 로딩 상태 리셋 (페이지 이동 핸들러는 이미 직접 리셋)
+  useEffect(() => {
+    setPreviewLoaded(false)
+    setPreviewError(false)
+  }, [previewMode])
 
   // 전체선택 체크박스 indeterminate 동기화
   useEffect(() => {
@@ -346,9 +355,9 @@ export default function SlideLibrarySearchModal({ items, onClose, onDeleted, cla
                     <p className="text-white/70 text-sm">미리보기를 불러올 수 없습니다</p>
                   ) : (
                     <img
-                      key={`${selected.slide_id}-${previewPage}`}
-                      src={`${API_BASE}/slides/image/${selected.slide_id}/${previewPage}`}
-                      alt={`${selected.filename} 페이지 ${previewPage + 1}`}
+                      key={`${selected.slide_id}-${previewPage}-${previewMode}`}
+                      src={`${API_BASE}/slides/image/${selected.slide_id}/${previewPage}?translated=${previewMode === 'translated'}`}
+                      alt={`${selected.filename} 페이지 ${previewPage + 1} (${previewMode === 'translated' ? '번역' : '원본'})`}
                       onLoad={() => setPreviewLoaded(true)}
                       onError={() => setPreviewError(true)}
                       className={`max-w-full max-h-full object-contain transition-opacity ${
@@ -356,6 +365,31 @@ export default function SlideLibrarySearchModal({ items, onClose, onDeleted, cla
                       }`}
                     />
                   )}
+
+                  {/* 원본 ↔ 번역 토글 — 어디든 누르면 반대로 전환 */}
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={previewMode === 'translated'}
+                    aria-label="미리보기 모드 전환 (원본 / 번역)"
+                    onClick={() => setPreviewMode((m) => (m === 'original' ? 'translated' : 'original'))}
+                    className="absolute top-3 right-3 flex items-center bg-black/40 backdrop-blur-sm rounded-full p-1 hover:bg-black/50 transition-colors"
+                  >
+                    <span
+                      className={`px-3 py-1 text-xs rounded-full transition-colors ${
+                        previewMode === 'original' ? 'bg-white text-gray-900' : 'text-white'
+                      }`}
+                    >
+                      원본
+                    </span>
+                    <span
+                      className={`px-3 py-1 text-xs rounded-full transition-colors ${
+                        previewMode === 'translated' ? 'bg-white text-gray-900' : 'text-white'
+                      }`}
+                    >
+                      번역
+                    </span>
+                  </button>
 
                   {selected.total_pages > 1 && (
                     <>
