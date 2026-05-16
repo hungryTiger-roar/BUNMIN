@@ -67,7 +67,7 @@ import yaml
 from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 
-from .term_corrections import get_terms_in_text, correct_ocr_text, build_ocr_corrector
+from .term_corrections import get_terms_in_text, correct_ocr_text, build_ocr_corrector, validate_korean_currency
 from .models import TextBlock
 
 import sys as _sys_init
@@ -253,10 +253,10 @@ def _has_vlm_weights(directory: Path) -> bool:
 
 
 def _vlm_default() -> str:
-    local = _PROJECT_ROOT / "models" / "qwen2.5-vl-7b-instruct"
+    local = _PROJECT_ROOT / "models" / "qwen3-vl-4b-instruct"
     if _has_vlm_weights(local):
         return str(local)
-    return "Qwen/Qwen2.5-VL-7B-Instruct"
+    return "Qwen/Qwen3-VL-4B-Instruct"
 
 
 def _resolve_vlm(value: str) -> str:
@@ -275,9 +275,20 @@ def _resolve_vlm(value: str) -> str:
 
 VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL") or _vlm_default())
 VLM_DEVICE = os.environ.get("VLM_DEVICE", "cuda")
-_vlm_4bit_raw = os.environ.get("VLM_USE_4BIT", "true")
-VLM_USE_4BIT = _vlm_4bit_raw.lower() == "true"
-print(f"[Config] VLM_USE_4BIT 환경변수: '{_vlm_4bit_raw}' → {VLM_USE_4BIT}")
+
+# 양자화 설정: "4bit" (기본), "8bit", "none"/"fp16"
+# VLM_USE_4BIT=false 이면 8bit 사용 (하위 호환)
+_vlm_4bit_raw = os.environ.get("VLM_USE_4BIT", "")
+_vlm_quant_raw = os.environ.get("VLM_QUANTIZATION", "")
+
+if _vlm_quant_raw:
+    VLM_QUANTIZATION = _vlm_quant_raw.lower()
+elif _vlm_4bit_raw:
+    VLM_QUANTIZATION = "4bit" if _vlm_4bit_raw.lower() == "true" else "8bit"
+else:
+    VLM_QUANTIZATION = "4bit"  # 기본값
+
+print(f"[Config] VLM 양자화: {VLM_QUANTIZATION}")
 
 _vlm_model = None
 _vlm_processor = None
@@ -301,10 +312,10 @@ def get_vlm_model():
     gpu_mem_free = gpu_mem_total - gpu_mem_used
     print(f"[VLM] GPU 메모리: {gpu_mem_free:.1f}GB 사용 가능 / {gpu_mem_total:.1f}GB 전체")
 
-    print(f"[VLM] 모델 최초 로드 중... (4bit={VLM_USE_4BIT})")
+    print(f"[VLM] 모델 최초 로드 중... (quantization={VLM_QUANTIZATION})")
     print(f"[VLM] Base: {VLM_BASE_MODEL}")
 
-    if VLM_USE_4BIT:
+    if VLM_QUANTIZATION == "4bit":
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_quant_type="nf4",
@@ -313,13 +324,24 @@ def get_vlm_model():
         )
         model_kwargs = {
             "quantization_config": bnb_config,
-            "device_map": {"": 0},  # GPU 0에 전체 로드 (CPU offload 금지)
+            "device_map": {"": 0},
+            "trust_remote_code": True,
+        }
+    elif VLM_QUANTIZATION == "8bit":
+        bnb_config = BitsAndBytesConfig(
+            load_in_8bit=True,
+            llm_int8_enable_fp32_cpu_offload=False,
+        )
+        model_kwargs = {
+            "quantization_config": bnb_config,
+            "device_map": {"": 0},
             "trust_remote_code": True,
         }
     else:
+        # none / fp16
         model_kwargs = {
             "torch_dtype": torch.float16,
-            "device_map": {"": 0},  # GPU 0에 전체 로드 (CPU offload 금지)
+            "device_map": {"": 0},
             "trust_remote_code": True,
         }
 
@@ -740,7 +762,7 @@ def merge_adjacent_regions(regions: list, threshold_y: int = 20) -> list:
         x_aligned = x_diff < 50
         prev_incomplete = is_incomplete_sentence(current['ocr_text'])
         curr_text = region['ocr_text'].strip()
-        starts_with_bullet = bool(re.match(r'^[•●▶☐◦○■□※★☆\-]\s*', curr_text))
+        starts_with_bullet = bool(re.match(r'^[•●▶☐◦○■□※★☆◆◇→⇒✓✔▼▲\-]\s*', curr_text))
         starts_with_number = bool(re.match(r'^\d+[\.\)]\s+', curr_text))
         starts_with_section = bool(re.match(r'^[QA]\d+|^\d{2}\s+[가-힣A-Z]', curr_text))
         should_merge = (
@@ -1092,6 +1114,11 @@ Translate:"""
             else:
                 english = trans_result
             final_english = strip_html_tags(english.strip())
+
+            # 만원 금액 후처리: VLM이 "60만원"을 "6 million won"으로 잘못 번역하는 문제 수정
+            original_korean = region.get("ocr_text", "")
+            final_english = validate_korean_currency(original_korean, final_english)
+
             region["english"] = final_english
             log_debug(f"  [Region {region_idx}] '{region['ocr_text'][:30]}...' → '{final_english[:30]}...'")
         else:
@@ -1803,6 +1830,10 @@ Translate:"""
                     log_warning(f"  [Line {line_num}] 프롬프트 유출 감지, 원본 유지")
                     regions[orig_idx]["english"] = region["ocr_text"]
                     continue
+
+                # 만원 금액 후처리
+                original_korean = region.get("ocr_text", "")
+                translation = validate_korean_currency(original_korean, translation)
 
                 if prefix:
                     regions[orig_idx]["english"] = f"{prefix} {translation}"
