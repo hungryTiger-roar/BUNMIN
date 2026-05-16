@@ -246,16 +246,15 @@ VLM 동봉본 만들려면 electron:build 뒤에 `cp -r models/qwen3-vl-4b-instr
 ```
 %LOCALAPPDATA%\Aunion AI\
 ├─ Aunion AI.exe                   # 앱 본체 (Electron)
-├─ resources\backend\              # PyInstaller 백엔드 + 동봉 모델 (재설치 시 덮어쓰기)
+├─ resources\backend\              # PyInstaller 백엔드 + 동봉 자원 (재설치 시 덮어쓰기)
 │   ├─ aunion_backend.exe
 │   ├─ .env
-│   ├─ models\
-│   │   ├─ whisper-large-v3-turbo-ct2-int8\
-│   │   ├─ nllb-200-distilled-600M-ct2\
-│   │   └─ qwen3-vl-4b-instruct\   # VLM ~8GB 동봉
+│   ├─ models\                     # 인스톨러 동봉 (~2GB)
+│   │   ├─ whisper-large-v3-turbo-ct2-int8\   # ASR (~1.5GB)
+│   │   └─ nllb-200-distilled-600M-ct2\       # 실시간 NMT (~600MB)
 │   └─ config\*.csv                # 용어집
 ├─ cache\                          # 사용자별 영구 (재설치로 안 날아감)
-│   ├─ huggingface\hub\models--*\  # HF Hub 다운로드 (모델 누락 시 폴백 다운로드)
+│   ├─ huggingface\hub\models--*\  # 첫 실행 마법사가 받는 VLM (~16GB, symlink→copy 패치로 실제 ~30GB)
 │   └─ eta_learned.json            # 슬라이드 처리 시간 학습 baseline
 ├─ uploads\                        # 강의자 업로드 + 라이브러리
 │   ├─ slides\<id>.pdf
@@ -269,7 +268,7 @@ VLM 동봉본 만들려면 electron:build 뒤에 `cp -r models/qwen3-vl-4b-instr
 └─ window-state.json               # 마지막 창 크기/위치
 ```
 
-**경계**: `resources/backend/` 는 인스톨러가 덮어쓰는 영역(앱 본체 + 동봉 모델), 그 외 모든 폴더(`cache/`, `uploads/`, `transcripts/`, `logs/`)는 사용자 데이터 — 재설치/업그레이드해도 보존. 코드에선 [`app.config.DATA_ROOT`](../../backend/app/config.py) 한 곳에서 결정.
+**경계**: `resources/backend/` 는 인스톨러가 덮어쓰는 영역(앱 본체 + 동봉 모델 Whisper/NLLB), 그 외 모든 폴더(`cache/`, `uploads/`, `transcripts/`, `logs/`)는 사용자 데이터 — 재설치/업그레이드해도 보존. 특히 VLM 은 `cache/huggingface/` 에 들어가므로 재설치 후 재다운로드 회피. 코드에선 [`app.config.DATA_ROOT`](../../backend/app/config.py) 한 곳에서 결정.
 
 ### 기존 설치본 사용자 마이그레이션
 

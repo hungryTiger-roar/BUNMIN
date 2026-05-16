@@ -33,7 +33,7 @@ WizardSmallImageFile=installer-assets\wizard-small.bmp
 WizardImageStretch=no
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName} {#MyAppVersion}
-; VLM(8GB) 포함 ~11GB 동봉 — DiskSpanning=no 로 단일 .exe 유지
+; ASR/NMT/Whisper만 동봉(~3.5GB), VLM(~16GB)은 첫 실행 시 다운로드 → 단일 .exe 유지
 DiskSpanning=no
 ; 설치 종료 후 곧바로 실행 가능하게
 CloseApplications=yes
@@ -47,8 +47,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "바탕화면에 바로가기 만들기"; GroupDescription: "추가 작업:"
 
 [Files]
-; win-unpacked 전체 복사. electron-builder.json extraResources 에서 NLLB/Whisper/VLM 모두
-; 동봉되어 인스톨러 한 번 설치하면 첫 실행 시 추가 다운로드 없이 즉시 동작.
+; win-unpacked 전체 복사. NLLB/Whisper 동봉, VLM(Qwen3-VL-4B ~16GB) 은 미동봉 —
+; 첫 실행 시 설치 마법사에서 사용자 동의 후 HuggingFace 에서 다운로드.
 Source: "setup\win-unpacked\*"; DestDir: "{app}"; \
   Flags: ignoreversion recursesubdirs createallsubdirs
 
@@ -64,11 +64,13 @@ Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}
 
 [Code]
 {
-  VLM(8GB) 포함 모든 AI 모델을 인스톨러에 동봉. 설치 후 첫 실행 시 추가 다운로드 없음.
-  설치 본체 ~11GB + 사용자 데이터 여유 위한 안전 마진 → 15GB 권장.
+  설치본 자체는 ~3.5GB (Whisper/NLLB 동봉, VLM 미동봉).
+  첫 실행 시 슬라이드 번역용 VLM(~16GB) 을 HuggingFace 에서 다운로드.
+  Windows 보안 정책(WinError 448) 우회용 symlink → copy 패치로 cache 가
+  실제로 ~2배(~30GB) 차지. 안전 마진 포함 35GB 권장.
 }
 const
-  RequiredFreeGB = 15;  { 설치 ~11GB + cache/uploads 등 사용자 데이터 여유 }
+  RequiredFreeGB = 35;  { 본체 ~3.5GB + VLM 다운로드 16GB + symlink copy 사본 16GB + 마진 }
 
 var
   DiskInfoPage: TOutputMsgWizardPage;
@@ -86,12 +88,13 @@ procedure InitializeWizard();
 begin
   DiskInfoPage := CreateOutputMsgPage(
     wpWelcome,
-    '디스크 공간 안내',
-    'Aunion AI 는 약 11 GB 의 디스크 공간을 사용합니다.',
-    '이 설치 프로그램은 AI 모델 포함 약 11 GB 를 설치합니다.' + #13#10 +
-    '(슬라이드 번역 VLM ~8GB + 음성인식/실시간번역 ~1.5GB + 앱 본체 ~1.5GB)' + #13#10 + #13#10 +
-    '모든 모델이 동봉되어 있어 설치 후 추가 다운로드 없이 즉시 사용 가능합니다.' + #13#10 + #13#10 +
-    '강의자료 저장 등 사용자 데이터 여유까지 고려해 약 15 GB 이상의 여유 공간을 권장합니다.');
+    'AI 모델 추가 다운로드 안내',
+    '첫 실행 시 인터넷에서 AI 모델이 자동으로 다운로드됩니다.',
+    '이 설치 프로그램은 약 3.5 GB 의 앱 본체를 설치합니다.' + #13#10 +
+    '처음 실행 시 슬라이드 번역용 AI 모델 약 16 GB 를 HuggingFace 에서 추가 다운로드합니다.' + #13#10 + #13#10 +
+    'Windows 안전 모드 호환을 위해 모델은 ~2배 공간을 사용하므로,' + #13#10 +
+    '쾌적한 사용을 위해 사용자 디스크에 약 35 GB 이상의 여유 공간을 확보해 주세요.' + #13#10 + #13#10 +
+    '여유 공간이 부족하면 모델 다운로드가 실패할 수 있습니다 (앱은 정상 설치).');
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -108,7 +111,7 @@ begin
       if MsgBox(
         Format('현재 디스크 여유 공간: %.1f GB' + #13#10 +
                '권장 여유 공간: %d GB' + #13#10 + #13#10 +
-               '여유 공간이 권장치보다 적습니다. 강의자료 저장 시 부족할 수 있습니다.' + #13#10 + #13#10 +
+               '여유 공간이 권장치보다 적습니다. 첫 실행 시 모델 다운로드가 실패할 수 있습니다.' + #13#10 + #13#10 +
                '그래도 설치를 계속하시겠습니까?', [FreeGB, RequiredFreeGB]),
         mbConfirmation, MB_YESNO) = IDNO then
         Result := False;

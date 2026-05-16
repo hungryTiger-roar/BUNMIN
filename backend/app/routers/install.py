@@ -16,21 +16,21 @@ from fastapi import APIRouter, HTTPException
 router = APIRouter(prefix="/api/install", tags=["install"])
 
 
-# 동봉본(정상 설치) — 사용자 데이터(업로드/캐시/자막/로그) 누적용 여유만 필요.
-REQUIRED_GB_BUNDLED = 5.0
-# VLM 미동봉(개발 빌드 / 부분 설치) — HF 다운로드 ~16GB + symlink→copy 패치로 인한 사본 ~16GB.
-REQUIRED_GB_DOWNLOAD = 30.0
+# VLM 이미 캐시된 경우 (재설치 + HF cache 잔존, 드물게 동봉 빌드) — 사용자 데이터 누적분만.
+REQUIRED_GB_VLM_CACHED = 5.0
+# 첫 설치 (정상 케이스) — VLM HF 다운로드 ~16GB + symlink→copy 패치로 사본 ~16GB.
+REQUIRED_GB_VLM_DOWNLOAD = 30.0
 
 
 def _required_gb() -> float:
     """현재 VLM 상태에 따라 적절한 디스크 요구치 결정.
-    동봉 VLM 발견되면 사용자 데이터 분(5GB), 다운로드 필요하면 30GB.
+    캐시 hit(재설치 등) 면 5GB, 첫 설치라 다운로드 필요하면 30GB.
     main 임포트 실패 시(테스트 등) 보수적으로 다운로드 기준."""
     try:
         from app.main import _is_cached, VLM_BASE_MODEL
-        return REQUIRED_GB_BUNDLED if _is_cached(VLM_BASE_MODEL) else REQUIRED_GB_DOWNLOAD
+        return REQUIRED_GB_VLM_CACHED if _is_cached(VLM_BASE_MODEL) else REQUIRED_GB_VLM_DOWNLOAD
     except Exception:
-        return REQUIRED_GB_DOWNLOAD
+        return REQUIRED_GB_VLM_DOWNLOAD
 
 
 def _cache_drive_path() -> str:
