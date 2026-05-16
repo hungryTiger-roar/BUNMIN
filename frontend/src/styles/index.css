@@ -78,6 +78,14 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: 'ELAND Naise';
+  src: url('../assets/fonts/ELAND 나이스OTF M.otf') format('opentype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
 @layer base {
   :root {
     /* ---- Light Mode ---- cool-toned palette harmonizing with the blue-purple gradient */

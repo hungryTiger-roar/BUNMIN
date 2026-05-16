@@ -901,7 +901,8 @@ function Student() {
       {/* 헤더 */}
       <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-primaryContainer bg-surface backdrop-blur-md shadow-sm flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          <h1 className={`text-xl tracking-wide ${lang === 'ko' ? 'font-allimjang font-bold' : 'font-special-gothic'}`}>
+          <img src="/bm-logo-cut.png" alt="" className="w-7 h-7 object-contain" />
+          <h1 className={`text-xl tracking-wide ${lang === 'ko' ? 'font-eland' : 'font-special-gothic'}`}>
             {lang === 'ko' ? '번역의 민족' : 'BUNMIN'}
           </h1>
           {isLectureStarted && !isPaused && (

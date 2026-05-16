@@ -7,7 +7,7 @@ const STORAGE_KEY = 'student_name'
 
 const TEXT = {
   ko: {
-    subtitle: '실시간 AI 강의 번역 시스템',
+    subtitle: 'AI 기반 실시간 강의 번역 시스템',
     prompt: '강의 참여를 위해 이름을 입력해주세요.',
     nameLabel: '이름',
     namePlaceholder: '이름을 입력.',
@@ -104,51 +104,67 @@ export default function Start() {
   }
 
   return (
-    <div className="relative min-h-screen bg-home-gradient [background-size:800%_800%] animate-gradient-shift flex flex-col items-center justify-center px-4">
+    <div className="relative min-h-screen bg-white flex flex-col items-center justify-center px-4">
       <button
         type="button"
         role="switch"
         aria-checked={lang === 'en'}
         aria-label="언어 전환 (한국어 / English)"
         onClick={() => setLang(lang === 'ko' ? 'en' : 'ko')}
-        className="absolute top-6 right-6 flex items-center bg-white/20 backdrop-blur-sm rounded-full p-1 hover:bg-white/30 transition-colors"
+        className="absolute top-6 right-6 flex items-center border border-gray-200 bg-white rounded-full p-1 hover:bg-gray-50 transition-colors"
       >
         <span
           className={`px-3 py-1 text-sm rounded-full transition-colors ${
-            lang === 'ko' ? 'bg-white text-gray-900' : 'text-onPrimary'
+            lang === 'ko' ? 'bg-bunmin text-white' : 'text-gray-600'
           }`}
         >
           한
         </span>
         <span
           className={`px-3 py-1 text-sm rounded-full transition-colors ${
-            lang === 'en' ? 'bg-white text-gray-900' : 'text-onPrimary'
+            lang === 'en' ? 'bg-bunmin text-white' : 'text-gray-600'
           }`}
         >
           EN
         </span>
       </button>
 
-      <div className="text-center mb-16">
-        <h1 className={`text-7xl mb-5 text-white [filter:drop-shadow(0_4px_8px_rgba(0,0,0,0.18))_drop-shadow(0_12px_24px_rgba(0,0,0,0.12))] ${lang === 'ko' ? 'font-allimjang font-bold' : 'font-special-gothic'}`}>
-          {lang === 'ko' ? '번역의 민족' : 'BUNMIN'}
-        </h1>
-        <p className="font-a2z text-white text-lg tracking-wide">
-          {t.subtitle}
-        </p>
+      {/* 타이틀 — 로고 + '번역의'/'BUN'(보라) + '민족'/'MIN'(검정) */}
+      <div className="flex flex-col items-center mb-12">
+        <div className="flex items-center justify-center gap-4 mb-4">
+          <img src="/bm-logo-cut.png" alt="번역의 민족" className="w-20 h-20 object-contain" />
+          <h1 className={`text-7xl leading-none ${lang === 'ko' ? 'font-eland' : 'font-special-gothic'}`}>
+            {lang === 'ko' ? (
+              <>
+                <span className="text-bunmin">번역의</span>
+                <span className="text-gray-900"> 민족</span>
+              </>
+            ) : (
+              <>
+                <span className="text-bunmin">BUN</span>
+                <span className="text-gray-900">MIN</span>
+              </>
+            )}
+          </h1>
+        </div>
+        {/* 보라색 둥근 테두리 안의 소제목 + 돋보기 */}
+        <div className="flex items-center justify-between gap-3 border-2 border-bunmin rounded-full px-5 py-2 w-full max-w-md">
+          <p className="text-bunmin font-semibold text-sm tracking-wide">
+            {t.subtitle}
+          </p>
+          <svg className="w-5 h-5 text-bunmin shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
+          </svg>
+        </div>
       </div>
 
-      <h2 className="font-a2z text-white text-2xl mb-8 leading-snug whitespace-nowrap tracking-wide">
+      <h2 className="font-a2z text-gray-800 text-2xl mb-8 leading-snug whitespace-nowrap tracking-wide">
         {t.prompt}
       </h2>
 
       <div className="w-full max-w-sm">
         <form onSubmit={handleSubmit} className="space-y-5">
           <div>
-            <label className="text-white/80 text-sm mb-1.5 flex items-center gap-1">
-              {t.nameLabel}
-              <span className="text-error">*</span>
-            </label>
             <div className="relative">
               <input
                 type="text"
@@ -158,7 +174,7 @@ export default function Start() {
                   setError('')
                 }}
                 placeholder={t.namePlaceholder}
-                className="w-full bg-white rounded-full px-4 py-2.5 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-onPrimary pr-10"
+                className="w-full bg-white border border-gray-300 rounded-full px-4 py-2.5 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-bunmin focus:border-bunmin pr-10"
               />
               {name && (
                 <button
@@ -176,13 +192,13 @@ export default function Start() {
           {/* 음성 / 자막 언어 미리 설정 — 강의중 화면(Audio | Subtitles) 순서와 동일 */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-white/80 text-sm mb-1.5 block">
+              <label className="text-gray-700 text-sm mb-1.5 block">
                 {t.audioLangLabel}
               </label>
               <select
                 value={audioLang}
                 onChange={(e) => setAudioLang(e.target.value as AudioLang)}
-                className="w-full bg-white rounded-full px-4 py-2.5 text-gray-900 focus:outline-none focus:ring-2 focus:ring-onPrimary appearance-none"
+                className="w-full bg-white border border-gray-300 rounded-full px-4 py-2.5 text-gray-900 focus:outline-none focus:ring-2 focus:ring-bunmin focus:border-bunmin appearance-none"
               >
                 {AUDIO_LANG_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -190,13 +206,13 @@ export default function Start() {
               </select>
             </div>
             <div>
-              <label className="text-white/80 text-sm mb-1.5 block">
+              <label className="text-gray-700 text-sm mb-1.5 block">
                 {t.subtitleLangLabel}
               </label>
               <select
                 value={subtitleLang}
                 onChange={(e) => setSubtitleLang(e.target.value as SubtitleLang)}
-                className="w-full bg-white rounded-full px-4 py-2.5 text-gray-900 focus:outline-none focus:ring-2 focus:ring-onPrimary appearance-none"
+                className="w-full bg-white border border-gray-300 rounded-full px-4 py-2.5 text-gray-900 focus:outline-none focus:ring-2 focus:ring-bunmin focus:border-bunmin appearance-none"
               >
                 {LANG_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -209,21 +225,21 @@ export default function Start() {
               type="checkbox"
               checked={saveInfo}
               onChange={(e) => setSaveInfo(e.target.checked)}
-              className="w-4 h-4 accent-primary"
+              className="w-4 h-4 accent-bunmin"
             />
-            <span className="text-white/80 text-sm">{t.saveInfo}</span>
+            <span className="text-gray-700 text-sm">{t.saveInfo}</span>
           </label>
 
           <button
             type="submit"
-            className="w-full bg-primary hover:opacity-90 text-onPrimary font-medium py-3 rounded-full transition-all shadow-lg shadow-primary/20"
+            className="w-full bg-bunmin hover:opacity-90 text-white font-medium py-3 rounded-full transition-all shadow-lg shadow-bunmin/20"
           >
             {t.joinButton}
           </button>
         </form>
       </div>
 
-      <p className="absolute bottom-6 right-6 text-sm text-white/70">
+      <p className="absolute bottom-6 right-6 text-sm text-gray-500">
         {t.footer}
       </p>
     </div>
