@@ -38,6 +38,11 @@
       "filter": ["**/*"]
     },
     {
+      "from": "models/qwen3-vl-4b-instruct",
+      "to": "backend/models/qwen3-vl-4b-instruct",
+      "filter": ["**/*"]
+    },
+    {
       "from": "config",
       "to": "backend/config",
       "filter": ["**/*.csv"]

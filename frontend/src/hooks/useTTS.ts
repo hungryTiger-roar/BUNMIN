@@ -5,9 +5,10 @@
  * 별도의 tts.worker.ts 없이 메인 스레드에서 직접 사용해야 한다.
  * (Worker 안에서 사용하면 pthread nested-worker 문제로 WASM init 실패)
  *
- * OOM 방지 전략:
- *   - audioLang 변경 시 이전 엔진 참조 해제 → 내부 Worker GC → WASM 메모리 해제
- *   - 새 엔진은 현재 언어 모델 하나만 warm-up → 메모리에 모델 1개만 유지
+ * Engine 라이프사이클:
+ *   - 'en' voice 하나만 지원 (NMT 가 한→영 고정). audioLang 무관 항상 적재.
+ *   - audioLang 토글 시 재로드 없음 → 'original' ↔ 'en' 전환 0ms 응답.
+ *   - 메모리 ~100MB WASM heap, 강의 종료(컴포넌트 unmount) 시만 해제.
  *
  * 재생 정책 — 가속+선점 하이브리드:
  *   새 발화가 도착했을 때 현재 재생 중인 발화의 남은 시간을 보고:
@@ -98,18 +99,10 @@ export type TTSStatus = 'idle' | 'loading' | 'ready' | 'error'
 // 올라가지만 거의 인지 안 됨. AudioBufferSourceNode 는 preservesPitch 미지원이라 감수.
 const TTS_PLAYBACK_RATE = 1.2
 
-// AudioLang → Piper voice ID (https://huggingface.co/rhasspy/piper-voices)
-// 'en' 만 매핑 (NMT 가 한→영 만 지원). 'original' 은 TTS 미사용 (원본 WebRTC 음성 재생).
-const VOICE_MAP: Partial<Record<AudioLang, string>> = {
-  en: 'en_US-lessac-medium',
-}
-
-const FALLBACK_VOICE = VOICE_MAP.en!
-
-// 'original' 은 TTS 안 씀 (caller 가 audioLang === 'en' 일 때만 호출). 매핑 없으면 영어 폴백.
-function resolveVoice(lang: AudioLang): string | null {
-  return VOICE_MAP[lang] ?? FALLBACK_VOICE
-}
+// Piper voice ID (https://huggingface.co/rhasspy/piper-voices) — 영어만 지원 (NMT 가 한→영 만).
+// engine 은 audioLang 무관 항상 'en' voice 로 로드. audioLang 토글은 GainNode 만 변경 (Student.tsx 측).
+// 'original' 모드에서도 engine 유지 → 토글 시 재로드 0ms (이전엔 1~3초 재로드 발생, 토글 직후 첫 영어 발화 누락 가능).
+const TTS_VOICE = 'en_US-lessac-medium'
 
 // FIFO 정책 — 모든 발화를 순서대로 직렬 재생.
 // 강의자 → 학생 sync 보장 위해 가속/선점 제거. 큐가 길어지는 backpressure 처리는
@@ -177,8 +170,9 @@ export function useTTS(enabled = true, audioLang: AudioLang = 'en') {
       try {
         // (2) 엔진 초기화와 병행해 voice 파일을 백그라운드 프리페치 — 의도적으로 await 안 함.
         //     piper 가 곧 fetch 할 때 HTTP 캐시 적중 → 첫 발화까지 latency ↓.
-        const voice = resolveVoice(audioLang)
-        if (voice) prefetchVoice(voice)
+        //     audioLang 무관 항상 'en' 적재 — 'original' 선택 학생이 토글 시 즉시 사용 가능.
+        const voice = TTS_VOICE
+        prefetchVoice(voice)
 
         // (1) WebGPU 지원 환경이면 GPU 가속(iGPU/dGPU) 사용 → CPU 부담 ↓.
         //     미지원 환경 (구형 브라우저 / WebGPU 비활성화) 은 WASM 으로 자동 폴백.
@@ -289,7 +283,9 @@ export function useTTS(enabled = true, audioLang: AudioLang = 'en') {
       }
       // AudioContext 는 세션 내내 유지 (unlockAudio에서 생성, 언어 변경과 무관)
     }
-  }, [enabled, audioLang, updateStatus, recoveryGen])
+  }, [enabled, updateStatus, recoveryGen])
+  // ↑ audioLang 의도적 제외: 'original' ↔ 'en' 토글 시 engine 재로드 방지 (이전엔 ~1~3초 재로드 → 토글 직후 첫 영어 발화 누락 가능).
+  // engine 은 'en' voice 로 한 번만 로드 → 항상 ready. audioLang 은 Student.tsx 의 GainNode 컨트롤에만 사용.
 
   // Heap 모니터링 + 자동 회복 — 30초 간격 체크, 80% 초과 시 엔진 재생성.
   // 안전 조건: 발화 진행 중 / 큐에 작업 / 재생 중인 task 가 있으면 보류 (다음 idle 까지).
@@ -468,10 +464,10 @@ export function useTTS(enabled = true, audioLang: AudioLang = 'en') {
    *  unit player 가 await 로 sequencing 하므로 useTTS 자체 큐 우회. */
   const playSentence = useCallback(async (
     text: string,
-    lang: AudioLang = 'en',
+    _lang: AudioLang = 'en',
   ): Promise<{ audioStartedAt: number; durationMs: number; ended: Promise<void>; ttsMs: number }> => {
-    const voice = resolveVoice(lang)
-    if (!voice) throw new Error('TTS 음성 끄기 상태')
+    // engine 은 항상 'en' voice 로 로드돼 있음. caller (useDelayBufferPlayer) 가 audioLang === 'en' 일 때만 호출하므로 lang 파라미터는 더 이상 의미 없지만 시그니처 유지.
+    const voice = TTS_VOICE
     if (!engineRef.current || statusRef.current !== 'ready') {
       throw new Error(`TTS 미준비 — status: ${statusRef.current}`)
     }

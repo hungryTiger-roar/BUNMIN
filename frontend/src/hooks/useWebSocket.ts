@@ -103,6 +103,7 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
   const setModelMode = useLectureStore((s) => s.setModelMode)
   const setModelsReady = useLectureStore((s) => s.setModelsReady)
   const setToastMessage = useLectureStore((s) => s.setToastMessage)
+  const bumpSlideLibraryRefreshKey = useLectureStore((s) => s.bumpSlideLibraryRefreshKey)
   const studentName = useLectureStore((s) => s.studentName)
 
   const lecturerName = usePreferencesStore((s) => s.lecturerName)
@@ -331,6 +332,25 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
         // App.tsx 의 GlobalToast 가 자동 4초 dismiss.
         if (role === 'lecturer' && data.message) {
           setToastMessage(data.message as string)
+        }
+        break
+
+      case 'slide_status_update':
+        // backend process_slide / process_slide_pdf_layer 완료/실패 시 강의자에게 push.
+        // polling 끊긴 경우에도 즉시 UI 복구 — 현재 선택된 슬라이드면 slideStatus 갱신,
+        // 항상 라이브러리 refresh 트리거해서 라이브러리 안 자료 상태도 갱신.
+        if (role === 'lecturer') {
+          const sid = data.slide_id as string | undefined
+          const newStatus = data.status as string | undefined
+          if (sid && newStatus) {
+            const currentSlideId = useLectureStore.getState().slideId
+            if (currentSlideId === sid) {
+              if (newStatus === 'completed') setSlideStatus('ready')
+              // failed 는 slideStatus enum 에 없어 — 'none' 으로 reset 해서 dropzone 다시 보이게
+              else if (newStatus === 'failed') setSlideStatus('none')
+            }
+            bumpSlideLibraryRefreshKey()
+          }
         }
         break
 

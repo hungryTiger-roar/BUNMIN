@@ -1337,12 +1337,21 @@ async def process_slide(
         # 라이브러리 영속화 — 서버 재시작 후에도 자료 유지
         save_metadata(slide_id)
         print(f"[Slides] {slide_id} 전처리 완료! (번역 포함)")
+        # 강의자에게 완료 신호 push — frontend polling 끊긴 경우에도 즉시 UI 복구
+        from app.routers.ws import manager as _ws_manager
+        await _ws_manager.broadcast_slide_status(slide_id, "completed")
 
     except Exception as e:
         slide_status[slide_id]["status"] = "failed"
         slide_status[slide_id]["stage"] = "failed"
         slide_status[slide_id]["error"] = str(e)
         print(f"[Slides] {slide_id} 처리 실패: {e}")
+        # 강의자에게 실패 신호 push — frontend 가 progress 멈춤 상태에서 빠져나올 수 있게
+        try:
+            from app.routers.ws import manager as _ws_manager
+            await _ws_manager.broadcast_slide_status(slide_id, "failed", error=str(e))
+        except Exception:
+            pass
         # 예외 발생 시 VLM 언로드 — 배치 중이면 process_slide_batch finally 에서 처리하므로 여기선 스킵
         if not _skip_vlm_unload:
             try:
@@ -1764,6 +1773,9 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path, _skip_vlm_unloa
         print(f"  OCR: {len(ocr_pages)}개 페이지, {len(ocr_blocks)}개 블록")
         print(f"  총 번역: {len(translations)}개 블록")
         print("=" * 60)
+        # 강의자에게 완료 신호 push — frontend polling 끊긴 경우에도 즉시 UI 복구
+        from app.routers.ws import manager as _ws_manager
+        await _ws_manager.broadcast_slide_status(slide_id, "completed")
 
     except Exception as e:
         print(f"[Slides] 처리 실패: {e}")
@@ -1772,6 +1784,12 @@ async def process_slide_pdf_layer(slide_id: str, pdf_path: Path, _skip_vlm_unloa
         slide_status[slide_id]["status"] = "failed"
         slide_status[slide_id]["stage"] = "failed"
         slide_status[slide_id]["error"] = str(e)
+        # 강의자에게 실패 신호 push
+        try:
+            from app.routers.ws import manager as _ws_manager
+            await _ws_manager.broadcast_slide_status(slide_id, "failed", error=str(e))
+        except Exception:
+            pass
         # 배치 중이면 process_slide_batch finally 에서 언로드 처리
         if not _skip_vlm_unload:
             try:

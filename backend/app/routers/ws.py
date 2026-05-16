@@ -409,6 +409,20 @@ class ConnectionManager:
         except Exception as e:
             print(f"[WS] toast broadcast 실패: {e}")
 
+    async def broadcast_slide_status(self, slide_id: str, status: str, error: str | None = None):
+        """슬라이드 처리 상태 변경을 강의자에게 즉시 push (polling 보조).
+        status: 'completed' / 'failed'. completed 시 frontend 가 slideStatus='ready' 로 갱신 + 라이브러리 refresh.
+        실패해도 swallow — broadcast 실패가 처리 흐름을 막지 않게."""
+        if self.lecturer is None:
+            return
+        payload = {"type": "slide_status_update", "slide_id": slide_id, "status": status}
+        if error is not None:
+            payload["error"] = error
+        try:
+            await self.lecturer.send_json(payload)
+        except Exception as e:
+            print(f"[WS] slide_status_update broadcast 실패: {e}")
+
     async def broadcast_student_count(self):
         """현재 접속 중인 수강자 수를 모든 수강자에게 전송"""
         await self.broadcast_to_students({

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import SlideLibrary from './SlideLibrary'
 import UploadDropzone from './UploadDropzone'
+import { useLectureStore } from '@/stores/lectureStore'
 
 /**
  * 강의자료 영역 — 좌우 2분할 컨테이너
@@ -10,14 +11,16 @@ import UploadDropzone from './UploadDropzone'
  * `md` 미만 화면에서는 1단(세로) 배치로 폴백.
  */
 export default function SlideUpload() {
-  // 새 업로드 완료 시 라이브러리를 새로고침하기 위한 트리거
+  // 새 업로드 완료 시 라이브러리를 새로고침하기 위한 트리거 (local).
+  // backend WS slide_status_update push 시에도 store.slideLibraryRefreshKey 가 bump 되므로 둘을 합쳐서 전달.
   const [refreshKey, setRefreshKey] = useState(0)
+  const storeRefreshKey = useLectureStore((s) => s.slideLibraryRefreshKey)
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
       {/* 좌측: 라이브러리 */}
       <div className="md:border-r md:border-primaryContainer md:pr-4">
-        <SlideLibrary refreshKey={refreshKey} />
+        <SlideLibrary refreshKey={refreshKey + storeRefreshKey} />
       </div>
       {/* 우측: 새 업로드 (상시 노출) */}
       <div className="md:pl-0 flex flex-col">
