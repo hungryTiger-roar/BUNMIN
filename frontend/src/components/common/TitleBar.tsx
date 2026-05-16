@@ -46,8 +46,8 @@ export function TitleBar() {
     >
       {/* 좌측 — 앱 이름 / 브랜드 라벨 */}
       <div className="flex items-center gap-2 pl-2 text-[11px] tracking-wide opacity-80">
-        <img src="/bm-applogo.png" alt="" className="w-5 h-5 object-contain" />
-        <span>번역의 민족</span>
+        <img src="/bm-logo-cut.png" alt="" className="w-5 h-5 object-contain" />
+        <span className="font-eland">번역의 민족</span>
       </div>
 
       {/* 우측 — 윈도우 컨트롤 */}

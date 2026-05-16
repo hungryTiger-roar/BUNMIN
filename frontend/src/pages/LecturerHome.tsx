@@ -46,13 +46,13 @@ export default function LecturerHome() {
   }
 
   return (
-    <div className="relative min-h-screen bg-home-gradient [background-size:800%_800%] animate-gradient-shift flex flex-col items-center justify-center px-4">
+    <div className="relative min-h-screen bg-white flex flex-col items-center justify-center px-4">
       {/* 우측 상단 개인설정 버튼 */}
       <button
         type="button"
         onClick={() => navigate('/lecturer/settings')}
         aria-label="개인설정"
-        className="absolute top-6 right-6 flex items-center gap-2 px-4 py-2 bg-white/20 backdrop-blur-sm rounded-full text-white text-sm hover:bg-white/30 transition-colors"
+        className="absolute top-6 right-6 flex items-center gap-2 px-4 py-2 border border-gray-200 bg-white rounded-full text-gray-700 text-sm hover:bg-gray-50 transition-colors"
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -61,27 +61,33 @@ export default function LecturerHome() {
         개인설정
       </button>
 
-      {/* 타이틀 */}
-      <div className="text-center mb-16">
-        <h1 className="text-7xl font-allimjang font-bold text-white mb-5 [filter:drop-shadow(0_4px_8px_rgba(0,0,0,0.18))_drop-shadow(0_12px_24px_rgba(0,0,0,0.12))]">
-          번역의 민족
-        </h1>
-        <p className="font-a2z text-white text-lg tracking-wide">
-          실시간 AI 강의 번역 시스템
-        </p>
+      {/* 타이틀 — 로고 + '번역의'(보라) '민족'(검정) */}
+      <div className="flex flex-col items-center mb-12">
+        <div className="flex items-center justify-center gap-4 mb-4">
+          <img src="/bm-logo-cut.png" alt="번역의 민족" className="w-20 h-20 object-contain" />
+          <h1 className="text-7xl font-eland leading-none">
+            <span className="text-bunmin">번역의</span>
+            <span className="text-gray-900"> 민족</span>
+          </h1>
+        </div>
+        {/* 보라색 둥근 테두리 안의 소제목 + 돋보기 */}
+        <div className="flex items-center justify-between gap-3 border-2 border-bunmin rounded-full px-5 py-2 w-full max-w-md">
+          <p className="text-bunmin font-semibold text-sm tracking-wide">
+            AI 기반 실시간 강의 번역 시스템
+          </p>
+          <svg className="w-5 h-5 text-bunmin shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
+          </svg>
+        </div>
       </div>
 
-      <h2 className="font-a2z text-white text-2xl mb-8 leading-snug whitespace-nowrap tracking-wide">
+      <h2 className="font-a2z text-gray-800 text-2xl mb-8 leading-snug whitespace-nowrap tracking-wide">
         강의자 이름을 입력해주세요.
       </h2>
 
       <div className="w-full max-w-sm">
         <form onSubmit={handleStart} className="space-y-5">
           <div>
-            <label className="text-white/80 text-sm mb-1.5 flex items-center gap-1">
-              이름
-              <span className="text-error">*</span>
-            </label>
             <div className="relative">
               <input
                 type="text"
@@ -92,7 +98,7 @@ export default function LecturerHome() {
                 }}
                 placeholder="이름을 입력."
                 maxLength={40}
-                className="w-full bg-white rounded-full px-4 py-2.5 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-onPrimary pr-10"
+                className="w-full bg-white border border-gray-300 rounded-full px-4 py-2.5 text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-bunmin focus:border-bunmin pr-10"
               />
               {name && (
                 <button
@@ -112,21 +118,21 @@ export default function LecturerHome() {
               type="checkbox"
               checked={saveInfo}
               onChange={(e) => setSaveInfo(e.target.checked)}
-              className="w-4 h-4 accent-primary"
+              className="w-4 h-4 accent-bunmin"
             />
-            <span className="text-white/80 text-sm">다음에도 이름 사용하기</span>
+            <span className="text-gray-700 text-sm">다음에도 이름 사용하기</span>
           </label>
 
           <button
             type="submit"
-            className="w-full bg-primary hover:opacity-90 text-onPrimary font-medium py-3 rounded-full transition-all shadow-lg shadow-primary/20"
+            className="w-full bg-bunmin hover:opacity-90 text-white font-medium py-3 rounded-full transition-all shadow-lg shadow-bunmin/20"
           >
             강의 준비
           </button>
         </form>
       </div>
 
-      <p className="absolute bottom-6 right-6 text-sm text-white/70">
+      <p className="absolute bottom-6 right-6 text-sm text-gray-500">
         Aunion AI X 번역의 민족
       </p>
     </div>

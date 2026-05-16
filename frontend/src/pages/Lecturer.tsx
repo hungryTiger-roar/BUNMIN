@@ -1069,7 +1069,7 @@ function Lecturer() {
       {/* 헤더 */}
       <header className="flex items-center justify-between gap-3 px-4 py-3 bg-surface border-b border-primaryContainer flex-shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          <h1 className={`text-xl font-allimjang font-bold tracking-wide ${
+          <h1 className={`text-xl font-eland tracking-wide ${
             theme === 'gradient'
               ? 'text-white'
               : 'bg-gradient-to-r from-gradientBlue to-gradientPurple bg-clip-text text-transparent'

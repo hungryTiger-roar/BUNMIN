@@ -52,13 +52,17 @@ export default {
         pink80: "#EFB8C8",
         purple40: "#6650a4",
         purpleGrey40: "#625b71",
-        pink40: "#7D5260"
+        pink40: "#7D5260",
+
+        // 첫 페이지 브랜드 보라 — '번역의' 텍스트, '강의 참여' 버튼, 검색창 테두리 공통
+        bunmin: "#624de3"
       },
       fontFamily: {
         sans: ['"paybooc"', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', 'sans-serif'],
         allimjang: ['"Hakgyoansim Allimjang"', 'sans-serif'],
         'special-gothic': ['"Special Gothic Expanded One"', 'sans-serif'],
         'a2z': ['"A2z"', 'sans-serif'],
+        'eland': ['"ELAND Naise"', '"Hakgyoansim Allimjang"', 'sans-serif'],
       },
       fontSize: {
         // Type.kt의 Typography 역할
