@@ -18,7 +18,7 @@ import CursorSpotlight from '@/components/lecturer/CursorSpotlight'
 import DrawingToolbar from '@/components/lecturer/DrawingToolbar'
 import { DrawingCanvas, type DrawingTool, type DrawingCanvasHandle } from '@/components/common/DrawingCanvas'
 import ScreenPickerModal from '@/components/lecturer/ScreenPickerModal'
-import { WS_PIPELINE_URL, API_BASE, getSlideLibrary } from '@/lib/api'
+import { WS_PIPELINE_URL, API_BASE, getSlideLibrary, getCurrentMode } from '@/lib/api'
 import { getLanIp } from '@/lib/network'
 import SlideLibrarySearchModal from '@/components/lecturer/SlideLibrarySearchModal'
 import type { SlideLibraryItem } from '@/types/slide'
@@ -36,15 +36,14 @@ const STYLE_LABEL: Record<SubtitleStyle, string> = {
   background: '배경',
 }
 
-type LecturerLang = 'off' | 'ko' | 'en' | 'de' | 'es' | 'ru'
+// 강사 측 자막 언어 — NMT 가 한→영 만 지원하므로 실제 작동하는 값만.
+// 'off' = 자막 끄기, 'ko' = 한국어 원본, 'en' = 영어 번역.
+type LecturerLang = 'off' | 'ko' | 'en'
 
 const LANG_OPTIONS: { value: LecturerLang; label: string }[] = [
   { value: 'off', label: '끄기 (Off)' },
   { value: 'ko', label: '한국어 (Korean)' },
   { value: 'en', label: '영어 (English)' },
-  { value: 'de', label: '독일어 (Deutsch)' },
-  { value: 'es', label: '스페인어 (Español)' },
-  { value: 'ru', label: '러시아어 (Русский)' },
 ]
 
 const SPOTLIGHT_PRESETS = [
@@ -164,6 +163,10 @@ function Lecturer() {
   const slidePages = useLectureStore((s) => s.slidePages)
   const subtitles = useLectureStore((s) => s.subtitles)
   const modelMode = useLectureStore((s) => s.modelMode)
+  const modelsReady = useLectureStore((s) => s.modelsReady)
+  const setModelMode = useLectureStore((s) => s.setModelMode)
+  const setModelsReady = useLectureStore((s) => s.setModelsReady)
+  const setToastMessage = useLectureStore((s) => s.setToastMessage)
   const chatMessages = useLectureStore((s) => s.chatMessages)
   const participants = useLectureStore((s) => s.participants)
   const studentCount = useLectureStore((s) => s.studentCount)
@@ -609,7 +612,8 @@ function Lecturer() {
 
   const startLecture = () => {
     if (presentationMode === 'slide' && slideStatus !== 'ready') {
-      alert('강의자료를 먼저 선택하세요.')
+      // alert 대체 (Electron UX) — App.tsx 의 GlobalToast 가 자동 dismiss
+      setToastMessage('강의자료를 먼저 선택하세요.')
       return
     }
     // 모델 전환 중이면 보류 — 전환 완료 시 useEffect가 자동으로 강의 시작 트리거
@@ -631,6 +635,32 @@ function Lecturer() {
       send({ type: 'lecture_start', slide_id: slideId, page: currentPage, mode: presentationMode })
     }
   }, [pendingStart, modelMode, slideId, currentPage, presentationMode, send, setLectureStarted, setPaused])
+
+  // 옵션 D: 모델 상태 polling backup — backend mode_change WebSocket push 가 누락되거나
+  // 페이지 진입 직후 (push 받기 전) 정확한 상태가 필요. 5초 간격이면 UX 충분.
+  // push 가 즉시 갱신 → polling 은 안전망 역할만.
+  useEffect(() => {
+    let cancelled = false
+    const fetchMode = async () => {
+      try {
+        const res = await getCurrentMode()
+        if (cancelled) return
+        setModelMode((res.mode as 'idle' | 'realtime' | 'slide' | 'switching') || 'idle')
+        const hasAsr = res.models_loaded?.includes('asr') ?? false
+        const hasNmt = res.models_loaded?.includes('nmt_asr') ?? false
+        setModelsReady(hasAsr && hasNmt)
+      } catch {
+        // 네트워크 오류 — 다음 tick 재시도
+      }
+    }
+    fetchMode()  // 즉시 1회
+    const id = window.setInterval(fetchMode, 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [setModelMode, setModelsReady])
+
 
   const togglePause = () => {
     const newPaused = !isPaused
@@ -708,7 +738,14 @@ function Lecturer() {
 
   // 강의 자료 선택은 필수 — 화면공유만을 위해 강의 시작하는 시나리오는 허용하지 않음.
   // (선택 없이 시작하면 store에 남아있던 이전 자료가 학생 화면에 잘못 노출됨)
-  const canStartLecture = isConnected && slideStatus === 'ready'
+  // 옵션 D: 강의 시작 가능 조건 = 연결 + 자료 ready + 실시간 모델 준비 완료 (modelsReady).
+  // modelMode === 'slide' 이면 슬라이드 처리 중 → ASR/NMT 언로드된 상태 → 시작 불가.
+  // 'switching' (재적재 중) 도 시작 불가. backend 의 lecture_start_rejected 가드는 race 안전망.
+  const canStartLecture = isConnected
+    && slideStatus === 'ready'
+    && modelsReady
+    && modelMode !== 'slide'
+    && modelMode !== 'switching'
 
   const participantTotal =
     (participants.lecturer?.connected ? 1 : 0) + participants.students.length
@@ -1259,7 +1296,21 @@ function Lecturer() {
                       />
                     </div>
                     <div className="w-full max-w-3xl">
-                      <SlideUpload />
+                      {/* 옵션 C/D 가드: 강의 진행 중 + 다른 슬라이드 처리 중(=mode 가 slide/switching) 업로드 금지.
+                          backend slides upload 핸들러가 409 거부도 하지만 frontend 가 시각적으로 선제 차단. */}
+                      {isLectureStarted ? (
+                        <div className="w-full p-6 bg-primaryContainer/30 border border-primaryContainer rounded-lg text-center text-sm text-onSurface/70">
+                          강의 진행 중에는 강의자료를 업로드할 수 없습니다.<br />
+                          강의를 종료한 뒤 다시 시도해주세요.
+                        </div>
+                      ) : (modelMode === 'slide' || modelMode === 'switching') ? (
+                        <div className="w-full p-6 bg-primaryContainer/30 border border-primaryContainer rounded-lg text-center text-sm text-onSurface/70">
+                          다른 강의자료를 처리 중입니다.<br />
+                          완료 후 다시 시도해주세요.
+                        </div>
+                      ) : (
+                        <SlideUpload />
+                      )}
                     </div>
                   </div>
                   {slideInnerOverlays}

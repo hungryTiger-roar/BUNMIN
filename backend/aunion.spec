@@ -2,7 +2,7 @@
 # PyInstaller 빌드 설정
 # 실행: pyinstaller aunion.spec
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 # 숨겨진 임포트 (PyInstaller가 자동 감지 못하는 것들)
 hiddenimports = [
@@ -57,7 +57,7 @@ hiddenimports = [
     # NMT-ASR - facebook/nllb-200-distilled-600M (CTranslate2 CT2 우선, HF 폴백)
     'sentencepiece',
     'PIL',
-    # Slide OCR + VLM (Surya OCR + Qwen2.5-VL 번역)
+    # Slide OCR + VLM (Surya OCR + Qwen3-VL-4B 번역)
     'bitsandbytes',
     # 프로젝트 루트의 슬라이드 번역 모듈 (run.py가 sys.path에 root 추가하면 import됨)
     'translate_slide_v3',
@@ -79,6 +79,11 @@ datas += collect_data_files('transformers')
 datas += collect_data_files('faster_whisper')
 # Surya — tokenizer · processor 메타데이터 동봉. (실제 OCR 모델 weight 는 첫 호출 시 HF 캐시에 다운로드)
 datas += collect_data_files('surya')
+# transformers/audio_utils.py 가 import 시점에 importlib.metadata.version("torchcodec") 호출.
+# venv 에 torchcodec 설치돼 있어 PyInstaller 가 find_spec 통과시키지만 .dist-info 메타는 누락 →
+# PackageNotFoundError 로 surya import 전체 fail. 우리는 torchcodec 자체는 안 쓰지만 (오디오는
+# soundfile/librosa 경로), transitive metadata 만 동봉해 if 분기를 정상 통과시킴.
+datas += copy_metadata('torchcodec')
 
 # 앱 디렉토리 포함
 datas += [

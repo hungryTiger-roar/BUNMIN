@@ -106,6 +106,15 @@ async def _cleanup_cancelled(slide_id: str) -> None:
 _hash_to_slide_id: dict[str, str] = {}
 
 
+def is_any_slide_processing() -> bool:
+    """진행 중(pending/processing) 상태의 슬라이드가 있는지.
+    옵션 C 양방향 가드용: ws.py 의 강의 시작 핸들러가 이 helper 로 슬라이드 처리 중 거부."""
+    return any(
+        s.get("status") in ("pending", "processing")
+        for s in slide_status.values()
+    )
+
+
 class SlideStatus(BaseModel):
     slide_id: str
     status: str  # pending, processing, completed, failed
@@ -515,6 +524,12 @@ async def upload_slide(
     백그라운드에서 OCR + 번역 전처리 수행
     client_token: 응답 전 abort 케이스에서 프론트가 보낸 보류 토큰. 매칭되면 즉시 폐기.
     """
+    # 옵션 C 가드: 강의 진행 중에는 슬라이드 처리 거부.
+    # 이유: process_slide 가 enter_slide_mode_safe 로 ASR/NMT 를 언로드 → 진행 중인 실시간 번역 끊김.
+    from app.routers.ws import manager as _ws_manager
+    if _ws_manager.is_lecture_started:
+        raise HTTPException(409, "강의 진행 중에는 슬라이드를 업로드할 수 없습니다. 강의 종료 후 다시 시도해주세요.")
+
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(400, "PDF 파일만 업로드 가능합니다")
 
@@ -590,6 +605,11 @@ async def upload_slide_batch(
     각 파일은 독립적인 slide_id 를 가지며 기존 /slides/status/{id} 로 폴링 가능.
     client_token: 응답 전 abort 케이스에서 배치 전체를 취소하는 보류 토큰.
     """
+    # 옵션 C 가드: 강의 진행 중에는 업로드 거부 (실시간 번역 끊김 방지).
+    from app.routers.ws import manager as _ws_manager
+    if _ws_manager.is_lecture_started:
+        raise HTTPException(409, "강의 진행 중에는 슬라이드를 업로드할 수 없습니다. 강의 종료 후 다시 시도해주세요.")
+
     if not files:
         raise HTTPException(400, "파일이 없습니다")
 
@@ -1098,14 +1118,40 @@ async def delete_slides_batch(payload: BatchDeleteRequest):
     return BatchDeleteResponse(deleted=deleted, failed=failed)
 
 
-async def process_slide(slide_id: str, pdf_path: Path, _skip_vlm_unload: bool = False):
+async def process_slide(
+    slide_id: str,
+    pdf_path: Path,
+    _skip_vlm_unload: bool = False,
+    _skip_mode_switch: bool = False,
+):
     """
     슬라이드 전처리 (백그라운드)
     PDF 텍스트 레이어가 있으면 → PDF 레이어 방식 (고품질)
     없으면 → 기존 OCR/VLM 방식
     _skip_vlm_unload: 배치 처리 시 마지막 파일이 아니면 True — VLM을 언로드하지 않고 다음 파일에서 재사용
+    _skip_mode_switch: 배치 처리 중이면 True — 모드 전환은 process_slide_batch finally 가 담당
     """
+    # try 밖에서 None 초기화 — try 안 라인이 raise 해도 finally 의 _awake_ctx.__exit__ NameError 방지.
+    _awake_ctx = None
     try:
+        # VLM 적재 공간 확보 — 실시간 모델(ASR/NMT) 언로드.
+        # 옵션 B: 슬라이드 처리 시간만 VLM 단독 적재 → 6GB 카드도 8bit + max_memory 안전.
+        if not _skip_mode_switch:
+            from app.routers.mode import enter_slide_mode_safe
+            await enter_slide_mode_safe()
+
+        # VLM 첫 사용 안내 — 미적재 상태면 다운(~8GB) 또는 적재(~30초) 시간 안내.
+        # batch 안에서는 첫 슬라이드에서만 (배치 finally 가 끝까지 적재 유지).
+        try:
+            from app.services.slide_translation.image_pipeline import is_vlm_loaded
+            if not is_vlm_loaded():
+                from app.routers.ws import manager as _ws_manager
+                await _ws_manager.broadcast_toast(
+                    "AI 모델 준비 중입니다 — 최초 다운로드 ~5~30분, 이후 재사용 시 ~30초"
+                )
+        except Exception as e:
+            print(f"[Slides] VLM 안내 토스트 실패 (무시): {e}")
+
         # 장시간 작업 중 절전모드 방지
         _awake_ctx = keep_awake()
         _awake_ctx.__enter__()
@@ -1305,11 +1351,17 @@ async def process_slide(slide_id: str, pdf_path: Path, _skip_vlm_unload: bool = 
             except Exception:
                 pass
     finally:
-        # 절전모드 방지 해제
-        try:
-            _awake_ctx.__exit__(None, None, None)
-        except Exception:
-            pass
+        # 절전모드 방지 해제 (None 가드 — try 시작 직후 raise 케이스 대응)
+        if _awake_ctx is not None:
+            try:
+                _awake_ctx.__exit__(None, None, None)
+            except Exception:
+                pass
+        # 옵션 B: 슬라이드 처리 종료 — VLM 언로드 + ASR/NMT 재적재 (단건일 때만).
+        # 배치 안에서 호출된 경우엔 process_slide_batch finally 가 일괄 처리.
+        if not _skip_mode_switch:
+            from app.routers.mode import enter_realtime_mode_safe
+            await enter_realtime_mode_safe()
 
 
 def pdf_to_images(pdf_path: Path) -> list[bytes]:
@@ -1739,17 +1791,22 @@ async def process_slide_batch(items: list[tuple[str, Path]]):
     """
     배치 슬라이드 처리 — 파일들을 순차 처리하되 VLM은 전체 배치에서 한 번만 로드/언로드.
     items: [(slide_id, pdf_path), ...]
+    옵션 B: 배치 전체 동안 실시간 모델(ASR/NMT) 언로드 → 배치 끝나면 재적재.
     """
+    from app.routers.mode import enter_slide_mode_safe, enter_realtime_mode_safe
+
+    await enter_slide_mode_safe()
     try:
         for i, (slide_id, pdf_path) in enumerate(items):
             is_last = (i == len(items) - 1)
-            await process_slide(slide_id, pdf_path, _skip_vlm_unload=not is_last)
+            await process_slide(
+                slide_id, pdf_path,
+                _skip_vlm_unload=not is_last,
+                _skip_mode_switch=True,  # batch 가 일괄 처리
+            )
     finally:
-        # 중간 예외/전체 취소 시에도 VLM 언로드 보장 (이미 언로드됐으면 no-op)
-        try:
-            from app.services.slide_translation.image_pipeline import unload_vlm_model
-            await asyncio.to_thread(unload_vlm_model)
-        except Exception:
-            pass
+        # VLM 언로드 + ASR/NMT 재적재 (enter_realtime_mode_safe 안의 _unload_vlm 가 처리).
+        # 중간 예외/전체 취소 시에도 보장. 실패해도 raise 안 함 (background task 보호).
+        await enter_realtime_mode_safe()
 
 

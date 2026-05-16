@@ -17,7 +17,7 @@
  * 비유: "적응형 유튜브 라이브" — lag 이 네트워크/처리 상황 따라 출렁이되 모든 트랙이 함께 출렁임.
  */
 import { useCallback, useEffect, useRef } from 'react'
-import type { TranslationLang } from '@/stores/preferencesStore'
+import type { AudioLang } from '@/stores/preferencesStore'
 
 /** 학생측 player 인터페이스 — useWebSocket 가 incoming event 를 라우팅하는 표면. */
 export interface UnitPlayer {
@@ -45,10 +45,10 @@ export interface UnitPlayer {
 interface Options {
   playSentence: (
     text: string,
-    lang: TranslationLang,
+    lang: AudioLang,
   ) => Promise<{ audioStartedAt: number; durationMs: number; ended: Promise<void>; ttsMs: number }>
   isAudioUnlocked: () => boolean
-  getAudioLang: () => TranslationLang
+  getAudioLang: () => AudioLang
   /** 초기 / 기준 lag (ms). 미설정 시 2000 (= DELAY_MIN_MS). 실제 currentDelay 는 처리시간 따라 가변. */
   delayMs?: number
 }
@@ -223,7 +223,20 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
       }
       audioQueueRef.current.push(async () => {
         try {
+          // 큐 처리 시작 시점 audioLang 재확인 — schedule 시점 ~ 큐 진입 사이 토글된 케이스 차단.
+          // 219라인의 gate 가 schedule 직전 1차, 여기가 2차 — 큐가 길어 처리 늦어진 사이 토글 가능.
+          if (optionsRef.current.getAudioLang() !== 'en') {
+            try { params.commitSubtitle() } catch (e) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', e) }
+            return
+          }
           const result = await opts.playSentence(params.text, 'en')
+          // generate(~2~3초) 완료 직후 3차 재확인 — generate 진행 중 토글 시 stale 영어 출력 차단.
+          // 이전엔 result 가 무조건 source.start 됐고 ko/off 로 토글한 사용자에게 영어 음성 1줄 새는 버그.
+          // 단, generate 후 50ms 안에 토글되면 source.start(ctx.currentTime+50ms) 가 이미 schedule 됨 — 잡지 못함 (window 매우 짧음).
+          if (optionsRef.current.getAudioLang() !== 'en') {
+            try { params.commitSubtitle() } catch (e) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', e) }
+            return
+          }
           // 실측 TTS 합성 시간으로 EWMA 갱신 — 다음 발화들의 필요딜레이 추정이 더 타이트해짐.
           if (Number.isFinite(result.ttsMs) && result.ttsMs >= 0) {
             ttsLatencyEwmaRef.current = ttsLatencyEwmaRef.current * (1 - TTS_EWMA_ALPHA) + result.ttsMs * TTS_EWMA_ALPHA

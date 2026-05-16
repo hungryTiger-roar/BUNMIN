@@ -5,7 +5,7 @@
 PDF 텍스트 레이어 기반 한국어 → 영어 번역 시스템입니다.
 이미지 기반 방식보다 품질이 높고 벡터 텍스트를 유지합니다.
 
-**번역 모델**: Qwen2.5-VL-3B-Instruct (4bit 양자화)
+**번역 모델**: Qwen3-VL-4B-Instruct (4bit 양자화)
 **용어집**: config/term_corrections.csv (537개 용어)
 
 ## 파이프라인 흐름도
@@ -72,7 +72,7 @@ PDF 텍스트 레이어 기반 한국어 → 영어 번역 시스템입니다.
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  Step 3: VLM 번역 (Qwen2.5-VL)                                   │
+│  Step 3: VLM 번역 (Qwen3-VL-4B)                                  │
 │  - _translate_texts() → _translate_batch()                       │
 │  - image_pipeline.py: translate_text_vlm(prompt)                 │
 │  - 페이지별 배치 처리                                             │
@@ -168,7 +168,7 @@ backend/app/services/slide_translation/
 
 ### 모델 정보
 
-- **모델**: Qwen2.5-VL-3B-Instruct
+- **모델**: Qwen3-VL-4B-Instruct
 - **양자화**: 4bit (bitsandbytes)
 - **VRAM**: ~4GB
 
@@ -303,7 +303,7 @@ Translate the following Korean text to English:
 |------|----------|------|
 | VLM 로드 | ~10초 | 최초 1회 (4bit) |
 | 휴리스틱 분석 (페이지당) | ~5초 | 규칙 기반 |
-| VLM 번역 (블록당) | ~2-3초 | Qwen2.5-VL |
+| VLM 번역 (블록당) | ~2-3초 | Qwen3-VL-4B |
 | PDF 교체 | <1초 | PyMuPDF |
 
 ## 향후 개선 방향

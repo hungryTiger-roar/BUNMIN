@@ -399,6 +399,16 @@ class ConnectionManager:
             except Exception:
                 self.disconnect_lecturer()
 
+    async def broadcast_toast(self, message: str):
+        """글로벌 토스트 메시지를 강의자에게 push (frontend GlobalToast 표시).
+        VLM 다운/적재 시간 안내 같은 사용자 인지용. 실패해도 swallow."""
+        if self.lecturer is None:
+            return
+        try:
+            await self.lecturer.send_json({"type": "toast", "message": message})
+        except Exception as e:
+            print(f"[WS] toast broadcast 실패: {e}")
+
     async def broadcast_student_count(self):
         """현재 접속 중인 수강자 수를 모든 수강자에게 전송"""
         await self.broadcast_to_students({
@@ -727,6 +737,29 @@ async def handle_lecturer(websocket: WebSocket, pong_event: asyncio.Event | None
                 })
 
             elif msg_type == "lecture_start":
+                # 옵션 C 가드: 슬라이드 처리 중에는 강의 시작 거부 (양방향 가드).
+                # 슬라이드 처리는 VLM 적재 → 강의 시작 시 ASR/NMT 적재 시도 → GPU 충돌.
+                from app.routers.slides import is_any_slide_processing
+                if is_any_slide_processing():
+                    await websocket.send_json({
+                        "type": "lecture_start_rejected",
+                        "reason": "slide_processing",
+                        "message": "강의 자료 번역이 진행 중입니다. 완료 후 강의를 시작해주세요.",
+                    })
+                    print("[WS] 강의 시작 거부 — 슬라이드 처리 중")
+                    continue
+                # 신규 가드: ASR/NMT 미적재 시 거부 — backend 부팅 후 ~10초 race window 차단.
+                # frontend modelsReady=false 와 polling 가드가 1차이지만, .exe 시작 직후 첫 polling
+                # 도착 전 강의 시작 시 ASR/NMT None → process_audio silent return → 첫 발화 손실.
+                # 백엔드에서 명시 거부해 학생들에게 첫 인사 누락되는 사고 차단.
+                if _asr_service is None or _nmt_service is None:
+                    await websocket.send_json({
+                        "type": "lecture_start_rejected",
+                        "reason": "models_not_ready",
+                        "message": "AI 모델 준비 중입니다. 5~10초 후 다시 시도해주세요.",
+                    })
+                    print("[WS] 강의 시작 거부 — ASR/NMT 미적재")
+                    continue
                 # 이전 강의 stale 세션 finalize — 강사 WS 가 비정상 종료된 후 lecture_end
                 # 못 보낸 채로 재연결 / 새 강의 시작 시 jsonl 만 남고 final json 안 만들어짐.
                 # 여기서 명시적으로 정리.

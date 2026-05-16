@@ -3,7 +3,8 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import {
   usePreferencesStore,
-  type TranslationLang,
+  type AudioLang,
+  type SubtitleLang,
   type SubtitleStyle,
   type AspectRatio,
 } from '@/stores/preferencesStore'
@@ -16,22 +17,19 @@ import { StudentCursorOverlay, useCursorOverlay } from '@/components/student/Stu
 import { DrawingCanvas, type DrawingCanvasHandle } from '@/components/common/DrawingCanvas'
 import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
 
-const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
+// 자막 옵션 — NMT 가 한→영 만 지원하므로 실제 작동하는 값만 노출.
+// 'off' = 자막 끄기, 'ko' = 한국어 원본, 'en' = 영어 번역.
+const LANG_OPTIONS: { value: SubtitleLang; label: string }[] = [
   { value: 'off', label: 'Off' },
   { value: 'ko', label: '한국어 (Korean)' },
   { value: 'en', label: '영어 (English)' },
-  { value: 'de', label: '독일어 (Deutsch)' },
-  { value: 'es', label: '스페인어 (Español)' },
-  { value: 'ru', label: '러시아어 (Русский)' },
 ]
 
-const AUDIO_LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
-  { value: 'off', label: 'Off' },
+// 오디오 옵션 — 한국어 원본 (WebRTC) / 영어 TTS 둘만.
+// 'off' 는 사운드 슬라이더 0 으로 대체 (UI 중복 + 토글 후 과거 발화 음성 손실 혼란 제거).
+const AUDIO_LANG_OPTIONS: { value: AudioLang; label: string }[] = [
   { value: 'original', label: '원본 (Original)' },
   { value: 'en', label: '영어 (English)' },
-  { value: 'de', label: '독일어 (Deutsch)' },
-  { value: 'es', label: '스페인어 (Español)' },
-  { value: 'ru', label: '러시아어 (Русский)' },
 ]
 const SUBTITLE_LANG_OPTIONS = LANG_OPTIONS
 
@@ -227,7 +225,7 @@ function Student() {
   useEffect(() => { playSentenceRef.current = playSentence }, [playSentence])
 
   const unitPlayer = useDelayBufferPlayer({
-    playSentence: (text: string, lang: TranslationLang) =>
+    playSentence: (text: string, lang: AudioLang) =>
       playSentenceRef.current(text, lang),
     isAudioUnlocked: () => isAudioUnlockedRef.current,
     getAudioLang: () => audioLangRef.current,
@@ -874,8 +872,9 @@ function Student() {
               <h2 className="text-lg font-semibold text-onSurface">Save Lecture Subtitles</h2>
               <button
                 type="button"
-                onClick={() => { setShowTranscriptModal(false); navigate('/student/start') }}
+                onClick={() => setShowTranscriptModal(false)}
                 className="w-7 h-7 rounded-full flex items-center justify-center text-onSurface/60 hover:bg-black/10 transition-colors"
+                title="닫기 — 헤더의 다운로드 버튼으로 언제든 다시 열 수 있음"
               >✕</button>
             </div>
             <p className="text-sm text-onSurface/70">Download the subtitles recognized during the lecture.</p>
@@ -1745,11 +1744,11 @@ function Student() {
   )
 }
 
-interface LangColumnProps {
+interface LangColumnProps<T extends string> {
   title: string
-  value: TranslationLang
-  onChange: (v: TranslationLang) => void
-  options: { value: TranslationLang; label: string }[]
+  value: T
+  onChange: (v: T) => void
+  options: { value: T; label: string }[]
 }
 
 function linkifyText(text: string) {
@@ -1773,7 +1772,7 @@ function linkifyText(text: string) {
   return parts.length === 0 ? text : parts
 }
 
-function LangColumn({ title, value, onChange, options }: LangColumnProps) {
+function LangColumn<T extends string>({ title, value, onChange, options }: LangColumnProps<T>) {
   return (
     <div>
       <h3 className="text-base font-semibold mb-4 pl-6 h-12 leading-snug">{title}</h3>

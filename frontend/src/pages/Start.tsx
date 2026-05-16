@@ -1,12 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLectureStore } from '../stores/lectureStore'
-import { usePreferencesStore, type TranslationLang } from '../stores/preferencesStore'
+import { usePreferencesStore, type AudioLang, type SubtitleLang } from '../stores/preferencesStore'
 
 const STORAGE_KEY = 'student_name'
-
-// TTS(Piper)로 실제 음성을 낼 수 있는 언어
-const TTS_SUPPORTED: TranslationLang[] = ['en', 'de', 'es', 'ru']
 
 const TEXT = {
   ko: {
@@ -20,7 +17,6 @@ const TEXT = {
     footer: 'Aunion AI X 번역의 민족',
     subtitleLangLabel: '자막 언어',
     audioLangLabel: '음성 언어',
-    ttsFallbackNotice: '선택한 언어는 음성 지원이 준비 중입니다. 음성은 영어로 출력됩니다.',
   },
   en: {
     subtitle: 'Real-time AI Lecture Translation',
@@ -33,24 +29,20 @@ const TEXT = {
     footer: 'Aunion AI X Bunmin',
     subtitleLangLabel: 'Subtitle language',
     audioLangLabel: 'Audio language',
-    ttsFallbackNotice: 'Voice for this language is coming soon. Audio will be played in English.',
   },
 } as const
 
-// 자막 옵션
-const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
+// 자막 옵션 — NMT 가 한→영 만 지원하므로 실제 작동하는 값만 노출.
+// 'off' 는 Start 화면에선 굳이 노출 안 함 (Student 페이지에서 토글 가능).
+const LANG_OPTIONS: { value: SubtitleLang; label: string }[] = [
   { value: 'ko', label: '한국어 (Korean)' },
   { value: 'en', label: '영어 (English)' },
-  { value: 'de', label: '독일어 (Deutsch)' },
-  { value: 'es', label: '스페인어 (Español)' },
-  { value: 'ru', label: '러시아어 (Русский)' },
 ]
 
-// 음성 옵션 — 강의실에서 한국어는 직접 들리므로 제외.
-// 'original' 은 강의자 원본 목소리 (WebRTC), 그 외는 TTS 음성.
-const AUDIO_LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
+// 음성 옵션 — 한국어 원본 (WebRTC) / 영어 TTS 둘만.
+const AUDIO_LANG_OPTIONS: { value: AudioLang; label: string }[] = [
   { value: 'original', label: '원본 (Original)' },
-  ...LANG_OPTIONS.filter((o) => o.value !== 'ko'),
+  { value: 'en', label: '영어 (English)' },
 ]
 
 export default function Start() {
@@ -70,8 +62,7 @@ export default function Start() {
   const [error, setError] = useState('')
 
   const t = TEXT[lang]
-  // 'original' 은 강의자 원본 음성을 직접 재생 (TTS 미사용) → 폴백 안내 대상 아님.
-  const audioNeedsFallback = audioLang !== 'original' && !TTS_SUPPORTED.includes(audioLang)
+  // AudioLang = 'original' | 'en' 두 값만 → 영어 폴백 안내 불필요 (모든 옵션이 즉시 작동).
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY)
@@ -190,7 +181,7 @@ export default function Start() {
               </label>
               <select
                 value={audioLang}
-                onChange={(e) => setAudioLang(e.target.value as TranslationLang)}
+                onChange={(e) => setAudioLang(e.target.value as AudioLang)}
                 className="w-full bg-white rounded-full px-4 py-2.5 text-gray-900 focus:outline-none focus:ring-2 focus:ring-onPrimary appearance-none"
               >
                 {AUDIO_LANG_OPTIONS.map((opt) => (
@@ -204,7 +195,7 @@ export default function Start() {
               </label>
               <select
                 value={subtitleLang}
-                onChange={(e) => setSubtitleLang(e.target.value as TranslationLang)}
+                onChange={(e) => setSubtitleLang(e.target.value as SubtitleLang)}
                 className="w-full bg-white rounded-full px-4 py-2.5 text-gray-900 focus:outline-none focus:ring-2 focus:ring-onPrimary appearance-none"
               >
                 {LANG_OPTIONS.map((opt) => (
@@ -213,12 +204,6 @@ export default function Start() {
               </select>
             </div>
           </div>
-          {audioNeedsFallback && (
-            <p className="text-xs text-white/80 -mt-2">
-              ⚠️ {t.ttsFallbackNotice}
-            </p>
-          )}
-
           <label className="flex items-center gap-2 cursor-pointer select-none">
             <input
               type="checkbox"

@@ -30,7 +30,7 @@
 │   (입력)     │    │  (텍스트추출) │    │  (한→영번역) │    │  (오버레이)  │
 └─────────────┘    └─────────────┘    └─────────────┘    └─────────────┘
                          │                   │                   │
-                    Surya OCR           Qwen2.5-VL-7B       OpenCV
+                    Surya OCR           Qwen3-VL-4B         OpenCV
                     (Transformer)                           Inpainting
 ```
 
@@ -483,10 +483,9 @@ function MaterialViewToggle({ className = '' }) {
 
 ```bash
 # VLM 설정
-VLM_BASE_MODEL=models/qwen2.5-vl-7b-instruct
+VLM_BASE_MODEL=Qwen/Qwen3-VL-4B-Instruct
 VLM_DEVICE=cuda
-VLM_MAX_GPU_MEMORY=4GB
-VLM_USE_4BIT=true
+# VLM_USE_4BIT / VLM_MAX_GPU_MEMORY 는 VRAM 자동 감지 — env 미설정이 기본 (override 불필요).
 
 # OCR 설정
 OCR_MODEL=surya

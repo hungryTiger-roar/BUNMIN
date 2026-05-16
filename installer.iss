@@ -44,10 +44,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "바탕화면에 바로가기 만들기"; GroupDescription: "추가 작업:"
 
 [Files]
-; win-unpacked 전체 복사 — 단 VLM Base 17GB는 제외 (첫 실행 시 HF에서 다운로드)
+; win-unpacked 전체 복사. VLM Base(~8GB) 는 electron-builder.json extraResources 에서
+; 애초에 제외돼 있어 win-unpacked 안에 없음 → 별도 Excludes 불필요. (이전엔 Qwen2.5-VL-7B
+; 옛 경로를 명시했었지만 실제 사용은 Qwen3-VL-4B 이고 동봉 안 됨 → 라인 제거.)
 Source: "setup\win-unpacked\*"; DestDir: "{app}"; \
-  Flags: ignoreversion recursesubdirs createallsubdirs; \
-  Excludes: "resources\backend\models\qwen2.5-vl-7b-instruct\*"
+  Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -145,36 +146,61 @@ begin
 end;
 
 {
-  메인 uninstall 끝난 후 사용자 데이터(%LOCALAPPDATA%\Aunion AI\) 삭제 여부 묻기.
-    - 내용: HF 모델 캐시(VLM ~14GB+), 다운받은 모델, error_log, 설정
-    - 기본 권장 = "아니오" (재설치 시 14GB 재다운로드 회피)
-    - silent uninstall (/VERYSILENT 등) 일 때는 안전하게 데이터 유지 (프롬프트 X, 삭제 X)
+  메인 uninstall 끝난 후 사용자 데이터 삭제 여부 묻기.
+
+  앱이 만드는 사용자 데이터는 2 군데에 흩어져 있음:
+    1) %LOCALAPPDATA%\Aunion AI\
+       - HF 모델 캐시 (VLM ~8GB, config.py:36-40 의 CACHE_DIR / "huggingface")
+       - 다운받은 모델, error_log.txt, window-state.json, .last-run-version
+    2) %APPDATA%\Aunion AI\  (Electron app.getPath('userData') 기본 경로)
+       - IndexedDB (학생 piper TTS voice 30MB+, 직접 다운받은 자산)
+       - LocalStorage (학생 이름, 자막 언어 선택, 자막 스타일)
+       - Service Worker / HTTP cache / Cookies
+
+  silent uninstall (/VERYSILENT 등) → 안전하게 데이터 유지 (프롬프트 X, 삭제 X).
+  기본 권장 = "아니오" — 재설치 시 8GB 모델 재다운로드 회피 + 학생 설정 보존.
 }
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
-  UserDataDir: String;
+  LocalDir: String;
+  RoamingDir: String;
   Response: Integer;
+  AnyExists: Boolean;
+  Failures: String;
 begin
   if CurUninstallStep <> usPostUninstall then Exit;
   if UninstallSilent then Exit;
 
-  UserDataDir := ExpandConstant('{localappdata}\Aunion AI');
-  if not DirExists(UserDataDir) then Exit;
+  LocalDir := ExpandConstant('{localappdata}\Aunion AI');
+  RoamingDir := ExpandConstant('{userappdata}\Aunion AI');
+
+  AnyExists := DirExists(LocalDir) or DirExists(RoamingDir);
+  if not AnyExists then Exit;
 
   Response := MsgBox(
     '사용자 데이터를 함께 삭제하시겠습니까?' + #13#10 + #13#10 +
-    '위치: ' + UserDataDir + #13#10 +
-    '내용: 다운받은 AI 모델 캐시(~14GB+), 로그, 설정' + #13#10 + #13#10 +
-    '[예] 함께 삭제 — 디스크 공간 회복' + #13#10 +
-    '[아니오] 데이터 유지 — 재설치 시 모델 재다운로드 안 받음 (권장)',
+    '삭제 대상:' + #13#10 +
+    '  - ' + LocalDir + #13#10 +
+    '    (AI 모델 캐시 ~8GB+, 로그, 창 상태)' + #13#10 +
+    '  - ' + RoamingDir + #13#10 +
+    '    (학생 TTS voice ~30MB, 학생 이름·자막 설정, 쿠키)' + #13#10 + #13#10 +
+    '[예] 함께 삭제 — 디스크 공간 회복 + 완전 초기화' + #13#10 +
+    '[아니오] 데이터 유지 — 재설치 시 모델·설정 그대로 (권장)',
     mbConfirmation, MB_YESNO);
 
-  if Response = IDYES then
-  begin
-    if not DelTree(UserDataDir, True, True, True) then
-      MsgBox(
-        '일부 파일 삭제에 실패했습니다 (앱이 아직 살아있거나 권한 문제).' + #13#10 + #13#10 +
-        '수동 삭제 경로: ' + UserDataDir,
-        mbInformation, MB_OK);
-  end;
+  if Response <> IDYES then Exit;
+
+  Failures := '';
+  if DirExists(LocalDir) then
+    if not DelTree(LocalDir, True, True, True) then
+      Failures := Failures + '  - ' + LocalDir + #13#10;
+  if DirExists(RoamingDir) then
+    if not DelTree(RoamingDir, True, True, True) then
+      Failures := Failures + '  - ' + RoamingDir + #13#10;
+
+  if Failures <> '' then
+    MsgBox(
+      '일부 파일 삭제에 실패했습니다 (앱이 아직 살아있거나 권한 문제).' + #13#10 +
+      '수동 삭제 경로:' + #13#10 + Failures,
+      mbInformation, MB_OK);
 end;

@@ -9,7 +9,7 @@
 GPU 메모리 효율을 위해 Stage 기반 배치 처리 구조를 사용합니다.
 VLM과 Surya OCR을 동시에 로드하지 않고, Stage별로 순차 처리합니다.
 
-**번역 모델**: Qwen2.5-VL-3B-Instruct (4bit 양자화, ~4GB VRAM)
+**번역 모델**: Qwen3-VL-4B-Instruct (4bit 양자화, ~4GB VRAM)
 **OCR 모델**: Surya (~4GB VRAM)
 
 **핵심 설계: extract → translate → apply 분리**
@@ -52,7 +52,7 @@ PDF Layer와 OCR이 각각 독립적으로 번역
                               │
 ┌─────────────────────────────────────────────────────────────┐
 │  [Stage 3] 공통 번역 (Translate)                             │
-│  ├─ VLM 로드 (Qwen2.5-VL 4bit, 1회)                         │
+│  ├─ VLM 로드 (Qwen3-VL-4B 4bit, 1회)                        │
 │  ├─ translate_blocks(all_blocks, target_lang="en")          │
 │  │   ├─ PDF Layer 블록 번역                                 │
 │  │   └─ OCR 블록 번역                                       │
@@ -209,7 +209,7 @@ uploads/cache/{slide_id}/
 ### VLM 관리 (image_pipeline.py)
 
 ```python
-get_vlm_model()            # 싱글톤 로드 (Qwen2.5-VL 4bit)
+get_vlm_model()            # 싱글톤 로드 (Qwen3-VL-4B 4bit)
 is_vlm_loaded()            # 로드 상태 확인
 unload_vlm_model()         # 메모리 해제
 translate_text_vlm(prompt) # VLM 번역 호출

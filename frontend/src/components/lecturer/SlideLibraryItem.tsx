@@ -31,6 +31,7 @@ export default function SlideLibraryItem({
   const setSlideFilename = useLectureStore((s) => s.setSlideFilename)
   const setModelMode = useLectureStore((s) => s.setModelMode)
   const setCurrentPage = useLectureStore((s) => s.setCurrentPage)
+  const setToastMessage = useLectureStore((s) => s.setToastMessage)
   const slideStatus = useLectureStore((s) => s.slideStatus)
 
   useEffect(() => {
@@ -106,7 +107,7 @@ export default function SlideLibraryItem({
       setEditing(false)
     } catch (err) {
       console.error('[SlideLibrary] 이름 변경 실패:', err)
-      alert(err instanceof Error ? err.message : '이름 변경 실패')
+      setToastMessage(err instanceof Error ? err.message : '이름 변경 실패')
     } finally {
       setSavingName(false)
     }

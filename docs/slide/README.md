@@ -50,7 +50,7 @@ PDF Layer와 OCR이 각각 독립적으로 번역
 ```
 Surya OCR (~4GB) - extract 단계에서 사용
     ↓ 언로드
-VLM (Qwen2.5-VL, 4bit ~4GB) - translate 단계에서 사용
+VLM (Qwen3-VL-4B, 4bit ~4GB) - translate 단계에서 사용
     ↓ 언로드
 Overlay (CPU only) - apply 단계
 ```
@@ -134,9 +134,9 @@ class TextBlock:
     confidence: Optional[float]  # 진단용 (스킵 기준 아님)
 ```
 
-### VLM 모델 (Qwen2.5-VL)
+### VLM 모델 (Qwen3-VL-4B)
 
-**Qwen2.5-VL-3B-Instruct** 사용, 4bit 양자화:
+**Qwen3-VL-4B-Instruct** 사용, 4bit 양자화:
 - `get_vlm_model()`: 모델 로드 (싱글톤)
 - `unload_vlm_model()`: 메모리 해제
 - `translate_text_vlm(prompt)`: VLM 기반 번역
@@ -167,7 +167,7 @@ Stage 2: Extract (텍스트 추출)
         ↓ 언로드
 
 Stage 3: Translate (공통 번역)
-    VLM (Qwen2.5-VL, 4bit ~4GB)
+    VLM (Qwen3-VL-4B, 4bit ~4GB)
         - PDF Layer 블록 번역
         - OCR 블록 번역
         - 용어집 공유, 문서 맥락 공유
@@ -190,7 +190,7 @@ Stage 4: Apply (번역 적용)
 |------|------|------|
 | ASR (Whisper) | 실시간 음성인식 | ~1GB |
 | NMT 600M | 실시간 번역 | ~600MB |
-| **VLM (Qwen2.5-VL-3B)** | **슬라이드 번역 (품질 우선)** | **~3GB (4bit)** |
+| **VLM (Qwen3-VL-4B)** | **슬라이드 번역 (품질 우선)** | **~3GB (4bit)** |
 | Surya OCR | 텍스트 인식 | ~2GB |
 
 **총 예상 용량: ~6.6GB**

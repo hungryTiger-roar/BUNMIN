@@ -277,7 +277,7 @@ export TERM_CORRECTIONS_FILE=/path/to/term_corrections.csv
 
 **증상:**
 ```
-OSError: Can't load tokenizer for 'Qwen/Qwen2.5-VL-3B-Instruct'
+OSError: Can't load tokenizer for 'Qwen/Qwen3-VL-4B-Instruct'
 ```
 
 **해결:**
@@ -287,7 +287,7 @@ huggingface-cli login
 
 # 또는 수동 다운로드
 git lfs install
-git clone https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct models/Qwen2.5-VL-3B-Instruct
+git clone https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct models/Qwen3-VL-4B-Instruct
 ```
 
 ---

@@ -26,7 +26,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { PiperWebEngine, OnnxWebRuntime, OnnxWebGPURuntime, PhonemizeWebRuntime, HuggingFaceVoiceProvider } from 'piper-tts-web'
 import * as ortWebGPU from 'onnxruntime-web/webgpu'
-import type { TranslationLang } from '@/stores/preferencesStore'
+import type { AudioLang } from '@/stores/preferencesStore'
 import { IndexedDBFetchProvider } from './idbFetchProvider'
 
 // piper-tts-web v1.1.2 의 .d.ts 에 OnnxWebGPURuntime / destroy() / HuggingFaceVoiceProvider
@@ -98,20 +98,16 @@ export type TTSStatus = 'idle' | 'loading' | 'ready' | 'error'
 // 올라가지만 거의 인지 안 됨. AudioBufferSourceNode 는 preservesPitch 미지원이라 감수.
 const TTS_PLAYBACK_RATE = 1.2
 
-// TranslationLang → Piper voice ID (https://huggingface.co/rhasspy/piper-voices)
-// ko, both 등 미지원 언어는 영어로 fallback. off만 명시적 끄기.
-const VOICE_MAP: Partial<Record<TranslationLang, string>> = {
+// AudioLang → Piper voice ID (https://huggingface.co/rhasspy/piper-voices)
+// 'en' 만 매핑 (NMT 가 한→영 만 지원). 'original' 은 TTS 미사용 (원본 WebRTC 음성 재생).
+const VOICE_MAP: Partial<Record<AudioLang, string>> = {
   en: 'en_US-lessac-medium',
-  de: 'de_DE-thorsten-medium',
-  es: 'es_MX-ald-medium',
-  ru: 'ru_RU-irina-medium',
 }
 
 const FALLBACK_VOICE = VOICE_MAP.en!
 
-// off는 명시적 끄기 → null 반환. 그 외 미지원 언어는 영어로 fallback.
-function resolveVoice(lang: TranslationLang): string | null {
-  if (lang === 'off') return null
+// 'original' 은 TTS 안 씀 (caller 가 audioLang === 'en' 일 때만 호출). 매핑 없으면 영어 폴백.
+function resolveVoice(lang: AudioLang): string | null {
   return VOICE_MAP[lang] ?? FALLBACK_VOICE
 }
 
@@ -132,7 +128,7 @@ type CurrentTask = {
   endTime: number                 // ctx.currentTime 기준 재생 종료 예정 시각
 }
 
-export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
+export function useTTS(enabled = true, audioLang: AudioLang = 'en') {
   const engineRef        = useRef<PiperWebEngine | null>(null)
   const audioCtxRef      = useRef<AudioContext | null>(null)
   const gainRef          = useRef<GainNode | null>(null)
@@ -472,7 +468,7 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
    *  unit player 가 await 로 sequencing 하므로 useTTS 자체 큐 우회. */
   const playSentence = useCallback(async (
     text: string,
-    lang: TranslationLang = 'en',
+    lang: AudioLang = 'en',
   ): Promise<{ audioStartedAt: number; durationMs: number; ended: Promise<void>; ttsMs: number }> => {
     const voice = resolveVoice(lang)
     if (!voice) throw new Error('TTS 음성 끄기 상태')

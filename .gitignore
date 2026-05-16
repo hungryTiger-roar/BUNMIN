@@ -99,8 +99,9 @@ backend/app/services/models/
 datasets/
 backend/app/services/slide_translation/glossaries/*.json
 
-# 임시 파일 (커밋 메시지 작성용 등)
+# 임시 파일 (커밋 메시지 작성용 등 + 로컬 진단용 .ps1)
 *.tmp
+.tmp_*.ps1
 
 # 백업 파일 (아이콘/로고 교체 시 남기는 .bak 등)
 *.bak

@@ -64,6 +64,7 @@ export default function SlideLibrarySearchModal({ items, onClose, onDeleted, cla
   const setSlideFilename = useLectureStore((s) => s.setSlideFilename)
   const setModelMode = useLectureStore((s) => s.setModelMode)
   const setCurrentPage = useLectureStore((s) => s.setCurrentPage)
+  const setToastMessage = useLectureStore((s) => s.setToastMessage)
 
   // 모달 오픈 시 검색창 자동 포커스
   useEffect(() => {
@@ -149,7 +150,7 @@ export default function SlideLibrarySearchModal({ items, onClose, onDeleted, cla
       setShowDeleteConfirm(false)
     } catch (err) {
       console.error('[SlideLibrarySearch] 강의자료 삭제 실패:', err)
-      alert(err instanceof Error ? err.message : '강의자료 삭제 실패')
+      setToastMessage(err instanceof Error ? err.message : '강의자료 삭제 실패')
     } finally {
       setDeleting(false)
     }
@@ -175,7 +176,7 @@ export default function SlideLibrarySearchModal({ items, onClose, onDeleted, cla
       onClose()
     } catch (err) {
       console.error('[SlideLibrarySearch] 강의자료 로드 실패:', err)
-      alert(err instanceof Error ? err.message : '강의자료 로드 실패')
+      setToastMessage(err instanceof Error ? err.message : '강의자료 로드 실패')
     } finally {
       setLoading(false)
     }
