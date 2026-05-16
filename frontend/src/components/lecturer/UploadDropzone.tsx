@@ -250,20 +250,7 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
         className="hidden"
       />
 
-      {slideStatus === 'none' ? (
-        <div
-          onClick={handleClick}
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-          className="border-2 border-dashed border-primaryContainer rounded-lg p-6 text-center cursor-pointer hover:border-primary hover:bg-primaryContainer/40 transition-colors"
-        >
-          <svg className="w-10 h-10 mx-auto text-onSurface/30 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-          </svg>
-          <p className="text-sm text-onSurface/70">PDF 파일을 드래그하거나 클릭하세요</p>
-          <p className="text-xs text-onSurface/50 mt-1">여러 파일 동시 선택 가능 · 업로드 즉시 번역이 시작됩니다</p>
-        </div>
-      ) : slideStatus === 'uploading' || slideStatus === 'processing' ? (
+      {slideStatus === 'uploading' || slideStatus === 'processing' ? (
         <div className="py-4 px-2">
           <div className="flex items-center gap-2 mb-1">
             <svg className="animate-spin w-5 h-5 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24">
@@ -318,7 +305,22 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
             업로드 중단
           </button>
         </div>
-      ) : null}
+      ) : (
+        // uploading/processing 외의 모든 상태(none/ready/failed)에서 드롭존 노출.
+        // → 처리 완료 후 자연스럽게 다시 활성화. 업로드 중일 때만 progress UI 가 차지.
+        <div
+          onClick={handleClick}
+          onDrop={handleDrop}
+          onDragOver={handleDragOver}
+          className="border-2 border-dashed border-primaryContainer rounded-lg p-6 text-center cursor-pointer hover:border-primary hover:bg-primaryContainer/40 transition-colors"
+        >
+          <svg className="w-10 h-10 mx-auto text-onSurface/30 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+          </svg>
+          <p className="text-sm text-onSurface/70">PDF 파일을 드래그하거나 클릭하세요</p>
+          <p className="text-xs text-onSurface/50 mt-1">여러 파일 동시 선택 가능 · 업로드 즉시 번역이 시작됩니다</p>
+        </div>
+      )}
 
       {error && (
         <p className="text-sm text-error mt-2 text-center">{error}</p>

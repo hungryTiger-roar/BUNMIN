@@ -1296,17 +1296,13 @@ function Lecturer() {
                       />
                     </div>
                     <div className="w-full max-w-3xl">
-                      {/* 옵션 C/D 가드: 강의 진행 중 + 다른 슬라이드 처리 중(=mode 가 slide/switching) 업로드 금지.
-                          backend slides upload 핸들러가 409 거부도 하지만 frontend 가 시각적으로 선제 차단. */}
+                      {/* 강의 진행 중이면 업로드 안내 카드, 그 외엔 항상 SlideUpload 노출.
+                          슬라이드 처리 중에도 업로드 허용 — SlideUpload 자체에 취소 버튼 있어 사용자가 직접 중단 가능,
+                          backend 가 batch / sequential queue 로 처리. 강의 시작 가드는 canStartLecture 의 modelsReady·modelMode 체크로 충분. */}
                       {isLectureStarted ? (
                         <div className="w-full p-6 bg-primaryContainer/30 border border-primaryContainer rounded-lg text-center text-sm text-onSurface/70">
                           강의 진행 중에는 강의자료를 업로드할 수 없습니다.<br />
                           강의를 종료한 뒤 다시 시도해주세요.
-                        </div>
-                      ) : (modelMode === 'slide' || modelMode === 'switching') ? (
-                        <div className="w-full p-6 bg-primaryContainer/30 border border-primaryContainer rounded-lg text-center text-sm text-onSurface/70">
-                          다른 강의자료를 처리 중입니다.<br />
-                          완료 후 다시 시도해주세요.
                         </div>
                       ) : (
                         <SlideUpload />
