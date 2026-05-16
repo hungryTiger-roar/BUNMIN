@@ -1,11 +1,12 @@
 """
-설치 마법사용 API — VLM 첫 다운로드를 사용자 액션으로 트리거.
+설치 마법사용 API — 사용자 데이터(업로드/캐시/자막) 누적용 디스크 여유 확인.
 
-흐름:
-  1. 백엔드 시작 시 VLM 미캐시 + 슬라이드 전용 모드면 status="wait_user_action"으로 대기
-  2. 프론트가 마법사 표시 → /api/install/disk-check 로 디스크 여유 확인
-  3. 사용자가 "다운로드 시작" 클릭 → POST /api/install/start-download
-  4. _start_download_event 발화 → 백엔드 다운로드 진행
+현재 흐름:
+  VLM 포함 모든 AI 모델은 인스톨러에 동봉(electron-builder.json extraResources) →
+  설치 직후 추가 다운로드 없이 사용 가능. `wait_user_action` 경로는 모델이 어떤 이유로
+  누락된 경우(개발 빌드, 부분 설치 등)에만 트리거되는 안전망.
+
+  Install.tsx 가 mount 시점에 /disk-check 를 호출해 부족하면 UI 에 경고 표시.
 """
 import os
 import shutil
@@ -15,9 +16,21 @@ from fastapi import APIRouter, HTTPException
 router = APIRouter(prefix="/api/install", tags=["install"])
 
 
-# VLM HF 다운로드(~14GB) + symlink → copy 패치로 인한 snapshots/ 사본(~14GB)
-# + 안전 마진(~2GB) = ~30GB 권장.
-REQUIRED_GB = 30.0
+# 동봉본(정상 설치) — 사용자 데이터(업로드/캐시/자막/로그) 누적용 여유만 필요.
+REQUIRED_GB_BUNDLED = 5.0
+# VLM 미동봉(개발 빌드 / 부분 설치) — HF 다운로드 ~16GB + symlink→copy 패치로 인한 사본 ~16GB.
+REQUIRED_GB_DOWNLOAD = 30.0
+
+
+def _required_gb() -> float:
+    """현재 VLM 상태에 따라 적절한 디스크 요구치 결정.
+    동봉 VLM 발견되면 사용자 데이터 분(5GB), 다운로드 필요하면 30GB.
+    main 임포트 실패 시(테스트 등) 보수적으로 다운로드 기준."""
+    try:
+        from app.main import _is_cached, VLM_BASE_MODEL
+        return REQUIRED_GB_BUNDLED if _is_cached(VLM_BASE_MODEL) else REQUIRED_GB_DOWNLOAD
+    except Exception:
+        return REQUIRED_GB_DOWNLOAD
 
 
 def _cache_drive_path() -> str:
@@ -28,7 +41,7 @@ def _cache_drive_path() -> str:
 
 @router.get("/disk-check")
 async def disk_check():
-    """VLM 다운로드용 디스크 여유 확인.
+    """디스크 여유 확인. VLM 동봉 여부에 따라 요구치 동적 결정.
     `%LOCALAPPDATA%` 가 있는 드라이브의 free space 를 GB 단위로 반환.
     """
     target = _cache_drive_path()
@@ -37,13 +50,14 @@ async def disk_check():
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"디스크 정보 조회 실패: {e}")
 
+    required = _required_gb()
     free_gb = usage.free / (1024 ** 3)
     return {
-        "ok": free_gb >= REQUIRED_GB,
+        "ok": free_gb >= required,
         "free_gb": round(free_gb, 2),
-        "required_gb": REQUIRED_GB,
+        "required_gb": required,
         "drive": os.path.splitdrive(target)[0] or target,
-        "shortfall_gb": round(max(0.0, REQUIRED_GB - free_gb), 2),
+        "shortfall_gb": round(max(0.0, required - free_gb), 2),
     }
 
 
@@ -79,14 +93,15 @@ async def start_download():
                 "message": f"디스크 정보 조회 실패: {e}",
             },
         )
-    if free_gb < REQUIRED_GB:
+    required = _required_gb()
+    if free_gb < required:
         raise HTTPException(
             status_code=400,
             detail={
                 "code": "insufficient_disk",
-                "message": f"디스크 여유 부족: {free_gb:.1f}GB / 필요 {REQUIRED_GB:.0f}GB",
+                "message": f"디스크 여유 부족: {free_gb:.1f}GB / 필요 {required:.0f}GB",
                 "free_gb": round(free_gb, 2),
-                "required_gb": REQUIRED_GB,
+                "required_gb": required,
             },
         )
 

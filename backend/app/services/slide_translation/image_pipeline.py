@@ -71,6 +71,8 @@ from .term_corrections import get_terms_in_text, correct_ocr_text, build_ocr_cor
 from .models import TextBlock
 
 import sys as _sys_init
+# _BASE_DIR: 설치본 루트 (frozen: <install>/resources/backend/, dev: <repo>/).
+# 동봉된 .env, config.yaml, models/ 위치 해석에 사용. 사용자 데이터는 DATA_ROOT 사용.
 _BASE_DIR = Path(_sys_init.executable).parent if getattr(_sys_init, 'frozen', False) else Path(__file__).parent.parent.parent.parent.parent
 
 # .env 로드
@@ -78,10 +80,18 @@ _env_path = _BASE_DIR / ".env"
 print(f"[Config] .env 경로: {_env_path} (존재: {_env_path.exists()})")
 load_dotenv(_env_path)
 
+# DATA_ROOT (logs, slide cache 등 사용자 데이터 저장 루트) 임포트.
+# 독립 실행/테스트 환경에선 _BASE_DIR 폴백.
+try:
+    from app.config import DATA_ROOT as _DATA_ROOT
+except ImportError:
+    _DATA_ROOT = _BASE_DIR
+
 # ============================================================
 # 파일 로깅 설정
 # ============================================================
-LOG_DIR = _BASE_DIR / "logs"
+# install dir 재설치로 덮어써져도 로그 보존되도록 DATA_ROOT 기준.
+LOG_DIR = _DATA_ROOT / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # 로그 파일명: image_pipeline_YYYYMMDD.log
@@ -1420,8 +1430,16 @@ VLM_CHUNK_SIZE = int(os.environ.get("VLM_CHUNK_SIZE", "2"))
 # 중간 결과 캐시 (재시작 지원)
 # ============================================================
 def get_cache_dir(slide_id: str) -> Path:
-    """슬라이드별 캐시 디렉토리"""
-    cache_dir = Path(os.environ.get("CACHE_DIR", "uploads/cache")) / slide_id
+    """슬라이드별 중간 결과 캐시 디렉토리 (OCR/번역 재시작 지원).
+    기본 위치는 DATA_ROOT/uploads/cache/ — install dir 재설치로 덮어써져도 보존.
+    env CACHE_DIR 로 override 가능 (절대경로 권장 — 상대경로면 spawn CWD 기준이라 불안정).
+    """
+    override = os.environ.get("CACHE_DIR")
+    if override:
+        base = Path(override)
+    else:
+        base = _DATA_ROOT / "uploads" / "cache"
+    cache_dir = base / slide_id
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 

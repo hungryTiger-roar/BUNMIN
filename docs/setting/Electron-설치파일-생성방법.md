@@ -235,31 +235,53 @@ VLM 동봉본 만들려면 electron:build 뒤에 `cp -r models/qwen3-vl-4b-instr
 |---|---|---|
 | [electron-builder.json](../../electron-builder.json) `requestedExecutionLevel` | `asInvoker` | 앱 실행 시 부모 프로세스(탐색기)와 같은 권한 — UAC 없음 |
 | [installer.iss](../../installer.iss) `PrivilegesRequired` | `lowest` | Inno Setup 마법사 자체가 admin 안 요구 |
-| [installer.iss](../../installer.iss) `DefaultDirName` | `{autopf}\Aunion AI` | `PrivilegesRequired=lowest`이면 `{autopf}` 가 `%LOCALAPPDATA%\Programs\` 로 자동 풀림 |
+| [installer.iss](../../installer.iss) `DefaultDirName` | `{localappdata}\Aunion AI` | 앱 본체와 사용자 데이터를 한 루트(`%LOCALAPPDATA%\Aunion AI`)에 모음 — 일반 사용자가 폴더 하나만 보면 됨 |
 
 추가:
 - `[Icons]`: `{autodesktop}` 사용 → 본인 바탕화면(`%USERPROFILE%\Desktop\`)에만 단축키 (다른 사용자 영향 X)
 - `[Run]`: `runascurrentuser` 플래그 제거 (admin 매니페스트 없으니 권한 우회 불필요)
 
-### 설치 위치
+### 설치 위치 (`%LOCALAPPDATA%\Aunion AI\`)
 
 ```
-%LOCALAPPDATA%\Programs\Aunion AI\          # 앱 본체 (Aunion AI.exe 등)
-%LOCALAPPDATA%\Aunion AI\                   # 사용자 데이터 (로그, HF 캐시, 모델)
-└─ cache\huggingface\hub\models--*\         # HF Hub 다운로드
-└─ models\qwen3-vl-4b-instruct\           # 사전 다운로드된 VLM (선택)
-└─ error_log.txt                            # 백엔드 로그
+%LOCALAPPDATA%\Aunion AI\
+├─ Aunion AI.exe                   # 앱 본체 (Electron)
+├─ resources\backend\              # PyInstaller 백엔드 + 동봉 모델 (재설치 시 덮어쓰기)
+│   ├─ aunion_backend.exe
+│   ├─ .env
+│   ├─ models\
+│   │   ├─ whisper-large-v3-turbo-ct2-int8\
+│   │   ├─ nllb-200-distilled-600M-ct2\
+│   │   └─ qwen3-vl-4b-instruct\   # VLM ~8GB 동봉
+│   └─ config\*.csv                # 용어집
+├─ cache\                          # 사용자별 영구 (재설치로 안 날아감)
+│   ├─ huggingface\hub\models--*\  # HF Hub 다운로드 (모델 누락 시 폴백 다운로드)
+│   └─ eta_learned.json            # 슬라이드 처리 시간 학습 baseline
+├─ uploads\                        # 강의자 업로드 + 라이브러리
+│   ├─ slides\<id>.pdf
+│   ├─ library\<id>.meta.json
+│   ├─ images\<id>\
+│   ├─ translated\<id>\
+│   └─ cache\<id>\                 # OCR/번역 중간 결과 (재시작 지원)
+├─ transcripts\                    # 강의 자막 (json/srt/txt)
+├─ logs\                           # 슬라이드 번역 디버그 로그
+├─ error_log.txt                   # 백엔드/Electron 통합 에러 로그
+└─ window-state.json               # 마지막 창 크기/위치
 ```
 
-### 기존 admin 설치본 사용자 마이그레이션
+**경계**: `resources/backend/` 는 인스톨러가 덮어쓰는 영역(앱 본체 + 동봉 모델), 그 외 모든 폴더(`cache/`, `uploads/`, `transcripts/`, `logs/`)는 사용자 데이터 — 재설치/업그레이드해도 보존. 코드에선 [`app.config.DATA_ROOT`](../../backend/app/config.py) 한 곳에서 결정.
 
-이전 버전(admin manifest, `C:\Program Files\Aunion AI`)을 깐 사용자가 새 per-user 빌드로 올라갈 때:
+### 기존 설치본 사용자 마이그레이션
 
-1. **Inno Setup이 기존 HKLM admin 설치를 못 알아봄** (HKCU만 보므로) → 그냥 깔면 두 곳에 이중 설치
-2. 따라서 **기존 설치를 먼저 제거**해야 함:
-   - 설정 → 앱 → 설치된 앱 → "Aunion AI" 제거 (UAC 한 번 — 마지막)
-   - `C:\Program Files\Aunion AI\` 폴더 잔여 시 수동 삭제
-3. **HF cache 정리 권장**: admin 프로세스로 받은 cache 안에 symlink이 박혀 있어 새 per-user(asInvoker) 프로세스가 traverse 거부 → WinError 448. `%LOCALAPPDATA%\Aunion AI\cache\` 통째로 삭제 후 새 설치본 첫 실행 시 재다운로드.
+이전 버전을 깐 사용자가 새 빌드로 올라갈 때:
+
+| 이전 위치 | 처리 |
+|---|---|
+| `C:\Program Files\Aunion AI\` (admin manifest 시절) | 제어판에서 제거 (UAC 1회) + 폴더 잔여 삭제 |
+| `%LOCALAPPDATA%\Programs\Aunion AI\` (직전 per-user 빌드) | 제어판에서 제거 (UAC 없음) + 폴더 잔여 삭제 |
+| `%LOCALAPPDATA%\Aunion AI\resources\backend\uploads\` (직전 빌드의 데이터 누적 위치) | 새 빌드는 `%LOCALAPPDATA%\Aunion AI\uploads\` 사용 — 옛 자료가 필요하면 한 단계 위로 옮겨야 함 |
+
+**HF cache 정리 권장**: admin 프로세스로 받은 cache 안에 symlink 이 박혀 있으면 새 per-user(asInvoker) 프로세스가 traverse 거부 → WinError 448. `%LOCALAPPDATA%\Aunion AI\cache\huggingface\` 통째로 삭제 후 새 설치본 첫 실행 시 재다운로드 (또는 동봉본 사용).
 
 ### HF Hub symlink → copy 대체 ([backend/run.py](../../backend/run.py))
 

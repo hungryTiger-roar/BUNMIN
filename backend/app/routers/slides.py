@@ -22,8 +22,10 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app.utils.keep_awake import keep_awake
+from app.config import DATA_ROOT, CACHE_DIR
 
-# translate_slide_v3 모듈 경로 추가
+# translate_slide_v3 모듈 경로 추가 — 저장소 루트의 모듈 (frozen: PyInstaller 가 별도 처리,
+# dev: <repo>/translate_slide_v3.py) import 용. 데이터 저장 경로와 무관.
 _REPO_DIR = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(_REPO_DIR))
 
@@ -38,20 +40,19 @@ def set_ocr_service(service):
     _ocr_service = service
 
 
-# 슬라이드 저장 경로
-UPLOAD_DIR = _REPO_DIR / "uploads" / "slides"
+# 슬라이드/이미지/라이브러리 저장 경로 — DATA_ROOT 기준 (frozen: %LOCALAPPDATA%\Aunion AI\,
+# dev: <repo>/). install dir(resources/backend/) 이 재설치로 덮어써져도 사용자 자료 보존.
+UPLOAD_DIR = DATA_ROOT / "uploads" / "slides"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-# 이미지 저장 경로 (원본)
-IMAGES_DIR = _REPO_DIR / "uploads" / "images"
+IMAGES_DIR = DATA_ROOT / "uploads" / "images"
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
-# 번역된 이미지 저장 경로
-TRANSLATED_DIR = _REPO_DIR / "uploads" / "translated"
+TRANSLATED_DIR = DATA_ROOT / "uploads" / "translated"
 TRANSLATED_DIR.mkdir(parents=True, exist_ok=True)
 
 # 라이브러리 메타데이터 저장 경로 — PDF 디렉토리와 분리해서 깔끔하게 관리
-LIBRARY_DIR = _REPO_DIR / "uploads" / "library"
+LIBRARY_DIR = DATA_ROOT / "uploads" / "library"
 LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
 
 # 처리 상태 저장 (메모리, 실제 서비스에서는 Redis 사용 권장)
@@ -135,19 +136,8 @@ _BUNDLING_BASELINE = 3.0  # PDF 묶기 짧은 고정값
 
 # ─── 학습 baseline 영속화 ─────────────────────────────────────────
 # 이전 세션의 페이지 평균을 디스크에 저장 → 다음 세션 첫 페이지 추정 정확도 ↑
-# dev:  backend/cache/eta_learned.json
-# 운영: %LOCALAPPDATA%\Aunion AI\cache\eta_learned.json (Programs 폴더는 쓰기 불가)
-# sys.frozen 는 PyInstaller 번들에서만 True → 운영 .exe 판별의 신뢰 가능한 신호.
-# 운영판은 resources/backend/cache/ 가 Program Files 안이라 쓰기 불가 → %LOCALAPPDATA%\Aunion AI\ 로.
-# dev 는 프로젝트 안 backend/cache/ 사용.
-_LOCALAPPDATA = os.environ.get("LOCALAPPDATA")
-if getattr(sys, "frozen", False):
-    # 운영 (Electron 패키지된 PyInstaller 백엔드)
-    _base = _LOCALAPPDATA or str(Path.home())
-    _ETA_CACHE_PATH = Path(_base) / "Aunion AI" / "cache" / "eta_learned.json"
-else:
-    # dev
-    _ETA_CACHE_PATH = Path(__file__).resolve().parent.parent.parent / "cache" / "eta_learned.json"
+# 위치는 config.CACHE_DIR 사용 (frozen: %LOCALAPPDATA%\Aunion AI\cache\, dev: backend/cache/).
+_ETA_CACHE_PATH = CACHE_DIR / "eta_learned.json"
 
 # 합리적 범위 — 이상치(GPU 일시 stuck, 첫 모델 로드 후 페이지 등) 저장 차단
 _SANITY_RANGE = {
