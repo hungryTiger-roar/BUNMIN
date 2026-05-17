@@ -12,7 +12,7 @@
 | Frontend | React + TypeScript + Vite |
 | Backend | FastAPI + uvicorn |
 | 실시간 통신 | WebSocket |
-| AI (백엔드) | ASR, NMT, Qwen2.5-VL (슬라이드 번역), Surya OCR |
+| AI (백엔드) | ASR (Whisper turbo CT2), NMT (NLLB-200), Qwen3-VL-4B (슬라이드 번역), Surya OCR |
 | TTS (클라이언트) | piper-tts-web — 수강자 브라우저 내 CPU ONNX WASM |
 | 데스크탑 (선택) | Electron |
 
@@ -34,9 +34,9 @@
 npm run setup
 ```
 
-conda 환경 생성(Python 3.11), Python 패키지 설치, AI 모델 다운로드(~17.5GB)까지 자동으로 처리됩니다.
+conda 환경 생성(Python 3.11), Python 패키지 설치, AI 모델 다운로드(~10GB — Whisper-turbo 800MB + NLLB-200 600MB + Qwen3-VL-4B 8GB + Surya OCR 500MB)까지 자동으로 처리됩니다.
 
-> **설치 시간**: 약 20~40분 (AI 모델 다운로드 포함)  
+> **설치 시간**: 약 15~30분 (AI 모델 다운로드 포함, 회선 따라 다름)  
 > **GPU 없는 환경**: 자동으로 CPU 모드로 진행됩니다. 실시간 ASR 성능이 저하될 수 있습니다.
 
 ### .env 설정
@@ -75,17 +75,14 @@ npm run dev
 npm run electron:dev
 ```
 
-### Electron 빌드 (배포용 exe)
+### Electron 빌드 (배포용 setup.exe)
 
 ```bash
-# 백엔드 먼저 빌드
-cd backend && pyinstaller aunion.spec && cd ..
-
-# Electron 패키징
-npm run electron:build
+# 통합 빌드 — backend PyInstaller + frontend Vite + electron-builder + Inno Setup
+npm run build:installer
 ```
 
-결과물: `setup/` 폴더에 NSIS 인스톨러 생성
+결과물: `setup/Aunion-AI-Setup-<version>.exe` (Inno Setup 인스톨러). 본체 ~3.5GB, 첫 실행 시 VLM(Qwen3-VL-4B ~8GB) 자동 다운로드 마법사가 뜸. 자세한 빌드 절차는 [Electron-설치파일-생성방법](docs/setting/Electron-설치파일-생성방법.md) 참고.
 
 ---
 

@@ -118,12 +118,56 @@ export function useAudioCapture({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
       })
 
+      // stream 진단 — getUserMedia 가 성공해도 Windows OS 권한 차단 시 track.muted=true 인
+      // silent stream 을 반환하는 케이스가 있다. catch 로는 안 잡힘 → 별도 가드 필요.
+      const audioTracks = stream.getAudioTracks()
+      console.log('[AudioCapture] getUserMedia 성공:', {
+        trackCount: audioTracks.length,
+        trackLabel: audioTracks[0]?.label,
+        trackMuted: audioTracks[0]?.muted,
+        trackReadyState: audioTracks[0]?.readyState,
+        trackEnabled: audioTracks[0]?.enabled,
+      })
+
+      const track = audioTracks[0]
+      if (!track) {
+        setError('마이크 오디오 트랙을 얻지 못했습니다. 마이크가 연결돼 있는지 확인해 주세요.')
+        stream.getTracks().forEach((t) => t.stop())
+        return false
+      }
+
+      // Windows OS 권한 차단 시 stream 은 받지만 track.muted=true 인 silent stream 으로 옴.
+      // getUserMedia 가 에러를 던지지 않으므로 코드 측에선 정상으로 보이지만 frame 은 전부 0 → 평균 레벨 0, chunk 송출 0.
+      // 명확한 메시지로 사용자에게 안내.
+      if (track.muted) {
+        setError(
+          'Windows 마이크 권한이 차단된 것 같습니다. ' +
+          '설정 → 개인 정보 및 보안 → 마이크 → "데스크톱 앱이 마이크에 액세스하도록 허용" 을 켜 주세요.'
+        )
+        stream.getTracks().forEach((t) => t.stop())
+        return false
+      }
+
+      // 강의 도중 권한 변경 / 디바이스 제거 / OS 가 silent stream 으로 전환 모두 감지.
+      track.onmute = () => console.warn('[AudioCapture] 마이크 track muted — OS 권한 차단 또는 silent stream 전환')
+      track.onunmute = () => console.log('[AudioCapture] 마이크 track unmuted — 정상 데이터 흐름 복귀')
+      track.onended = () => console.warn('[AudioCapture] 마이크 track ended — 디바이스 제거 또는 OS 종료')
+
+      // AudioContext 를 vad-web 호출 전에 먼저 생성해 우리가 owner — 라이브러리에 명시 주입.
+      // 미주입 시 라이브러리가 default AudioContext 를 자체 캐싱/close 하면서 강의 종료 → 재시작 사이클에
+      // stale state 가 남아 다음 세션에서 VAD 가 frame 을 못 받는 회귀 발생. audioContext 옵션을 넘기면
+      // ownsAudioContext=false 가 되어 destroy 시 라이브러리는 우리 context 를 close 하지 않음 → lifecycle 100% 우리 통제.
+      const audioContext = new AudioContext({ sampleRate: 16000 })
+      audioContextRef.current = audioContext
+
       // vad-bundle.min.js 는 index.html 에서 defer 로 로드되므로 (초기 렌더 차단 방지)
       // 마이크 시작이 아주 빠르면 아직 window.vad 가 없을 수 있다 — 짧게 폴링 대기.
       const vadGlobal = await waitForGlobal(() => window.vad, 5000)
       if (!vadGlobal) {
         setError('음성 인식 모듈 로드에 실패했습니다. 페이지를 새로고침해 주세요.')
         stream.getTracks().forEach((t) => t.stop())
+        await audioContext.close().catch(() => {})
+        audioContextRef.current = null
         return false
       }
       const { MicVAD } = vadGlobal
@@ -167,6 +211,7 @@ export function useAudioCapture({
       }
       const vad = await MicVAD.new({
         stream,
+        audioContext,
         baseAssetPath: '/',
         onnxWASMBasePath: '/',
         ortConfig: (ort: any) => {
@@ -218,10 +263,7 @@ export function useAudioCapture({
       streamRef.current = stream
       setMicStream(stream)
 
-      // Web Audio API 설정
-      const audioContext = new AudioContext({ sampleRate: 16000 })
-      audioContextRef.current = audioContext
-
+      // Web Audio API 설정 — audioContext 는 위에서 이미 생성 (vad-web 에 주입한 그 context 공유)
       const source = audioContext.createMediaStreamSource(stream)
 
       // 입력 게인 제어 — 사용자가 조절하는 볼륨이 analyser + ASR 양쪽에 모두 반영됨
@@ -327,6 +369,23 @@ registerProcessor('aunion-stream-processor', StreamProcessor)
   }, [])
 
   const stopCapture = useCallback(() => {
+    // 정리 순서: 만든 역순. vad 가 자체 source/worklet 정리할 시간을 먼저 주고,
+    // 그 다음에 우리 노드 disconnect → context close → stream stop 순으로 진행해야
+    // 강의 종료 → 즉시 새 강의 시작 사이클에서 stale state 가 안 남음.
+
+    // ① VAD destroy 먼저 — pause가 아닌 destroy로 완전 정리. ownsAudioContext=false 라
+    //    라이브러리는 우리 audioContext 를 close 하지 않으므로 그 사이 우리 cleanup 진행해도 안전.
+    vadRef.current?.destroy()
+    vadRef.current = null
+    isSpeakingRef.current = false
+
+    // ② max-duration watchdog 정리 — leftover timer 가 destroy 후 발동 방지.
+    if (maxDurationTimerRef.current !== null) {
+      window.clearTimeout(maxDurationTimerRef.current)
+      maxDurationTimerRef.current = null
+    }
+
+    // ③ 우리 Web Audio 노드 disconnect
     if (workletNodeRef.current) {
       workletNodeRef.current.disconnect()
       workletNodeRef.current.port.onmessage = null
@@ -340,35 +399,28 @@ registerProcessor('aunion-stream-processor', StreamProcessor)
       analyserRef.current.disconnect()
       analyserRef.current = null
     }
-
     if (gainNodeRef.current) {
       gainNodeRef.current.disconnect()
       gainNodeRef.current = null
     }
 
+    // ④ AudioContext close — 우리가 owner
     if (audioContextRef.current) {
-      audioContextRef.current.close()
+      audioContextRef.current.close().catch(() => {})
       audioContextRef.current = null
     }
 
+    // ⑤ MediaStream tracks 정지 — 가장 마지막 (vad/노드 가 이미 release 한 후)
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop())
       streamRef.current = null
     }
 
     stopKeepAlive()
-    // max-duration watchdog 정리 — leftover timer 가 destroy 후 발동 방지.
-    if (maxDurationTimerRef.current !== null) {
-      window.clearTimeout(maxDurationTimerRef.current)
-      maxDurationTimerRef.current = null
-    }
     // worklet 누적 / preroll 버퍼 비움 — 다음 캡처 세션에 leftover 영향 없음.
     prerollRef.current = []
     chunkAccumRef.current = []
-    // pause가 아닌 destroy로 완전 정리 — 발화 중에도 즉시 마이크 OFF 보장
-    vadRef.current?.destroy()
-    vadRef.current = null
-    isSpeakingRef.current = false
+
     setIsCapturing(false)
     setMicStream(null)
     console.log('[AudioCapture] 캡처 중지')

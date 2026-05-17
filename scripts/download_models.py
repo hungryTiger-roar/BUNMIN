@@ -289,23 +289,31 @@ def convert_asr_ct2(model: dict, step: str) -> bool:
 
 
 def main():
+    # SKIP_VLM_DOWNLOAD=true 면 VLM 건너뜀.
+    # 근거: electron-builder.json extraResources 에 VLM 미포함 (setup.exe 안 들어감).
+    #       빌드 PC 에 VLM 받아둘 필요 없음 — 사용자 PC 첫 슬라이드 처리 시 자동 다운.
+    skip_vlm = os.environ.get("SKIP_VLM_DOWNLOAD", "").lower() == "true"
+
     print("=" * 60)
     print("Aunion AI 모델 다운로드")
     print("=" * 60)
     print("\n다운로드할 모델:")
-    print(f"  1. {VLM_BASE['description']} ({VLM_BASE['size']})")
+    if not skip_vlm:
+        print(f"  1. {VLM_BASE['description']} ({VLM_BASE['size']})")
     print(f"  2. {ASR_MODEL['description']} ({ASR_MODEL['size']})")
     print(f"  3. {NMT_MODEL['description']} ({NMT_MODEL['size']})")
     print(f"  4. {SURYA_OCR['description']} ({SURYA_OCR['size']})")
-    print(f"\n총 예상 용량: ~10GB (최초 1회만 다운로드)")
+    print(f"\n총 예상 용량: {'~2GB (VLM 제외)' if skip_vlm else '~10GB'} (최초 1회만 다운로드)")
 
     results = []
 
-    # 1. VLM Base 모델 (로컬 디렉토리 — HF 캐시 심볼릭 이슈 회피)
-    results.append(("VLM Base", download_to_local(VLM_BASE, "1/5")))
-
-    # 1-b. VLM 프로세서 파일 (AutoProcessor가 필요로 하는 추가 파일)
-    results.append(("VLM Processor", download_vlm_processor(VLM_BASE, "1-b/5")))
+    if skip_vlm:
+        print("\n[SKIP] VLM 다운로드 건너뜀 — 사용자 PC 첫 슬라이드 처리 시 HF 에서 자동 다운로드.")
+    else:
+        # 1. VLM Base 모델 (로컬 디렉토리 — HF 캐시 심볼릭 이슈 회피)
+        results.append(("VLM Base", download_to_local(VLM_BASE, "1/5")))
+        # 1-b. VLM 프로세서 파일 (AutoProcessor가 필요로 하는 추가 파일)
+        results.append(("VLM Processor", download_vlm_processor(VLM_BASE, "1-b/5")))
 
     # 2. ASR 모델 (CTranslate2 int8 변환)
     results.append(("ASR", convert_asr_ct2(ASR_MODEL, "2/5")))
@@ -336,9 +344,10 @@ def main():
         print("일부 모델 다운로드 실패. 위 오류를 확인하세요.")
     print("=" * 60)
 
-    # 핵심 모델(VLM Base, ASR, NMT) 실패 시 setup이 멈추도록 종료 코드 1
+    # 핵심 모델 실패 시 setup이 멈추도록 종료 코드 1
     # → silent fail로 첫 추론에서 16GB를 다시 받는 사고 방지
-    critical = {"VLM Base", "VLM Processor", "ASR", "NMT"}
+    # SKIP_VLM_DOWNLOAD=true 면 VLM 은 critical 에서 빠짐 (사용자 PC 에서 받음).
+    critical = {"ASR", "NMT"} if skip_vlm else {"VLM Base", "VLM Processor", "ASR", "NMT"}
     failed_critical = [name for name, ok in results if not ok and name in critical]
     if failed_critical:
         print(f"\n[중단] 핵심 모델 실패: {', '.join(failed_critical)}")

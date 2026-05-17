@@ -60,7 +60,7 @@ Page N: (반복)
                             ▼
 ┌──────────────────────────────────────────────────────────┐
 │  [Stage 4] VLM 번역 배치                                  │
-│  ├─ VLM 모델 로드 (1회, Qwen2.5-VL 4bit)                  │
+│  ├─ VLM 모델 로드 (1회, Qwen3-VL-4B 4bit)                 │
 │  ├─ 한글 포함 페이지만 필터링                             │
 │  ├─ 용어집 (term_corrections.csv) 프롬프트에 포함         │
 │  ├─ 모든 번역 대상 페이지 처리                            │
@@ -127,7 +127,7 @@ uploads/cache/{slide_id}/
 
 ### VLM 관리
 ```python
-get_vlm_model()           # 싱글톤 로드 (Qwen2.5-VL 4bit)
+get_vlm_model()           # 싱글톤 로드 (Qwen3-VL-4B 4bit)
 is_vlm_loaded()           # 로드 상태 확인
 unload_vlm_model()        # 메모리 해제
 translate_text_vlm(prompt) # VLM 번역 호출

@@ -3,7 +3,8 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useLectureStore } from '@/stores/lectureStore'
 import {
   usePreferencesStore,
-  type TranslationLang,
+  type AudioLang,
+  type SubtitleLang,
   type SubtitleStyle,
   type AspectRatio,
 } from '@/stores/preferencesStore'
@@ -16,22 +17,19 @@ import { StudentCursorOverlay, useCursorOverlay } from '@/components/student/Stu
 import { DrawingCanvas, type DrawingCanvasHandle } from '@/components/common/DrawingCanvas'
 import { WS_PIPELINE_URL, API_BASE } from '@/lib/api'
 
-const LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
+// 자막 옵션 — NMT 가 한→영 만 지원하므로 실제 작동하는 값만 노출.
+// 'off' = 자막 끄기, 'ko' = 한국어 원본, 'en' = 영어 번역.
+const LANG_OPTIONS: { value: SubtitleLang; label: string }[] = [
   { value: 'off', label: 'Off' },
   { value: 'ko', label: '한국어 (Korean)' },
   { value: 'en', label: '영어 (English)' },
-  { value: 'de', label: '독일어 (Deutsch)' },
-  { value: 'es', label: '스페인어 (Español)' },
-  { value: 'ru', label: '러시아어 (Русский)' },
 ]
 
-const AUDIO_LANG_OPTIONS: { value: TranslationLang; label: string }[] = [
-  { value: 'off', label: 'Off' },
+// 오디오 옵션 — 한국어 원본 (WebRTC) / 영어 TTS 둘만.
+// 'off' 는 사운드 슬라이더 0 으로 대체 (UI 중복 + 토글 후 과거 발화 음성 손실 혼란 제거).
+const AUDIO_LANG_OPTIONS: { value: AudioLang; label: string }[] = [
   { value: 'original', label: '원본 (Original)' },
   { value: 'en', label: '영어 (English)' },
-  { value: 'de', label: '독일어 (Deutsch)' },
-  { value: 'es', label: '스페인어 (Español)' },
-  { value: 'ru', label: '러시아어 (Русский)' },
 ]
 const SUBTITLE_LANG_OPTIONS = LANG_OPTIONS
 
@@ -47,6 +45,11 @@ const ASPECT_OPTIONS: { value: AspectRatio; label: string; className: string }[]
   { value: '4/3', label: '4:3', className: 'aspect-[4/3]' },
   { value: '5/3', label: '5:3', className: 'aspect-[5/3]' },
 ]
+
+// 원본 음성 DelayNode 의 buffer max (sec) — useDelayBufferPlayer 의 DELAY_MAX_MS(20s) + 5s 헤드룸.
+// currentDelay 가 부하/긴 발화로 적응 상한까지 올라가도 폴링 effect 가 clamp 없이 따라감.
+// hook 의 DELAY_MAX_MS 변경 시 이 값도 같이 조정 필요 (현재 hook 내부 상수라 import 안 함).
+const ORIGINAL_AUDIO_DELAY_MAX_SEC = 25
 
 interface MaterialItem {
   slide_id: string
@@ -168,7 +171,8 @@ function Student() {
   const pendingAudioStreamRef = useRef<MediaStream | null>(null)
 
   // delayMs 는 useDelayBufferPlayer 와 동일한 값 사용 — 강사 박자 정합성.
-  const delayMs = Number(import.meta.env.VITE_SYNC_DELAY_MS) || 15000
+  // fallback 2000 = DELAY_MIN_MS — env 미설정 시에도 적응형 하한과 일치하게 시작.
+  const delayMs = Number(import.meta.env.VITE_SYNC_DELAY_MS) || 2000
 
   const unlockAudio = useCallback(async () => {
     const ok = await unlockTTS()
@@ -180,8 +184,7 @@ function Student() {
     if (!audioContextRef.current) {
       try {
         const ctx = new AudioContext()
-        // maxDelayTime 은 delayMs + 5s buffer (실행 중 동적 조정 여지).
-        const delayNode = ctx.createDelay((delayMs / 1000) + 5)
+        const delayNode = ctx.createDelay(ORIGINAL_AUDIO_DELAY_MAX_SEC)
         delayNode.delayTime.value = delayMs / 1000
         const gainNode = ctx.createGain()
         gainNode.gain.value = 0  // 초기 0 — sync effect 가 즉시 올림
@@ -222,7 +225,7 @@ function Student() {
   useEffect(() => { playSentenceRef.current = playSentence }, [playSentence])
 
   const unitPlayer = useDelayBufferPlayer({
-    playSentence: (text: string, lang: TranslationLang) =>
+    playSentence: (text: string, lang: AudioLang) =>
       playSentenceRef.current(text, lang),
     isAudioUnlocked: () => isAudioUnlockedRef.current,
     getAudioLang: () => audioLangRef.current,
@@ -232,6 +235,32 @@ function Student() {
   useEffect(() => {
     console.log(`[SyncMode] delay-buffer (delay=${delayMs}ms)`)
   }, [delayMs])
+
+  // unitPlayer 는 매 렌더 새 객체 — ref 캐시로 polling effect 재마운트 차단.
+  const unitPlayerRef = useRef(unitPlayer)
+  useEffect(() => { unitPlayerRef.current = unitPlayer }, [unitPlayer])
+
+  // 원본 음성 DelayNode 를 useDelayBufferPlayer 의 currentDelay 에 동기화.
+  // hook docstring 이 명시한 "Student.tsx 가 getCurrentDelay 폴링" 의 빠진 구현부 —
+  // 미구현 시 처리시간 > 고정 delayMs 인 발화에서 원본만 먼저 들리는 desync 발생.
+  // DelayNode max 는 (delayMs/1000)+5 라 env 작을 때 그 한도까지만 따라감 (clamp).
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const ctx = audioContextRef.current
+      const node = delayNodeRef.current
+      if (!ctx || !node) return
+      const targetSec = unitPlayerRef.current.getCurrentDelay() / 1000
+      if (!Number.isFinite(targetSec)) return
+      const clamped = Math.min(targetSec, ORIGINAL_AUDIO_DELAY_MAX_SEC)
+      const current = node.delayTime.value
+      if (Math.abs(clamped - current) < 0.1) return
+      const now = ctx.currentTime
+      node.delayTime.cancelScheduledValues(now)
+      node.delayTime.setValueAtTime(current, now)
+      node.delayTime.linearRampToValueAtTime(clamped, now + 0.2)
+    }, 250)
+    return () => window.clearInterval(id)
+  }, [])
 
   // ref 기반 커서 오버레이 (React 상태 없이 DOM 직접 조작)
   // slideRef를 전달해서 컨테이너 크기 기준으로 px 변환
@@ -251,14 +280,44 @@ function Student() {
   const sendRef = useRef<((data: object) => void) | null>(null)
 
   const handleWebRtcOffer = useCallback(async (sdp: RTCSessionDescriptionInit) => {
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close()
+    // 진단: 받은 offer 의 m=audio 방향
+    const offerAudioDir = (sdp.sdp ?? '').match(/m=audio[\s\S]*?(?=m=|$)/)?.[0]?.match(/a=(sendrecv|sendonly|recvonly|inactive)/)?.[1] ?? '?'
+    console.log(`[SDP] offer 수신 audio direction=${offerAudioDir}`)
+
+    // 재협상 offer 지원 — 기존 PC 가 있고 stable 이면 그 위에서 setRemoteDescription.
+    // 강사가 micStream 늦게 잡힌 뒤 트랙 attach 하면 SDP 재협상이 필요한데, 그때 PC 를
+    // 닫고 새로 만들면 ontrack/MediaStream/DelayNode 파이프라인이 끊겨서 의미 없음.
+    const existingPc = peerConnectionRef.current
+    if (existingPc && (existingPc.signalingState === 'stable' || existingPc.signalingState === 'have-local-offer')) {
+      try {
+        await existingPc.setRemoteDescription(sdp)
+        const answer = await existingPc.createAnswer()
+        await existingPc.setLocalDescription(answer)
+        const ansDir = (existingPc.localDescription?.sdp ?? '').match(/m=audio[\s\S]*?(?=m=|$)/)?.[0]?.match(/a=(sendrecv|sendonly|recvonly|inactive)/)?.[1] ?? '?'
+        console.log(`[SDP] 재협상 answer 전송 audio direction=${ansDir}`)
+        sendRef.current?.({ type: 'webrtc_answer', sdp: existingPc.localDescription })
+        console.log('[Student] 재협상 answer 전송 (기존 PC 유지)')
+        return
+      } catch (err) {
+        console.error('[Student] 재협상 실패, PC 재생성으로 폴백:', err)
+        existingPc.close()
+        peerConnectionRef.current = null
+      }
+    } else if (existingPc) {
+      // signaling state 가 비정상 — 안전하게 재생성
+      existingPc.close()
       peerConnectionRef.current = null
     }
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     })
     peerConnectionRef.current = pc
+    pc.onconnectionstatechange = () => {
+      console.log(`[PC] connectionState=${pc.connectionState}`)
+    }
+    pc.oniceconnectionstatechange = () => {
+      console.log(`[PC] iceConnectionState=${pc.iceConnectionState}`)
+    }
     pc.ontrack = (e) => {
       if (e.track.kind === 'video') {
         const stream = e.streams[0]
@@ -267,6 +326,12 @@ function Student() {
           screenVideoRef.current.srcObject = stream
         }
       } else if (e.track.kind === 'audio') {
+        // 진단: 트랙 muted 상태와 이후 변화 추적. WebRTC 트랙은 RTP 가 안 흐를 때
+        // muted=true 가 됨. "트랙 받았는데 무음" 시나리오에서 결정적 단서.
+        console.log(`[Track] audio 도착: id=${e.track.id} muted=${e.track.muted} readyState=${e.track.readyState}`)
+        e.track.onunmute = () => console.log(`[Track] audio onunmute → RTP 흐름 시작 (id=${e.track.id})`)
+        e.track.onmute = () => console.log(`[Track] audio onmute → RTP 끊김 (id=${e.track.id})`)
+        e.track.onended = () => console.log(`[Track] audio onended (id=${e.track.id})`)
         const audioStream = new MediaStream([e.track])
         // <audio> 엘리먼트: 트랙 keepalive 용 srcObject 만 유지, 출력은 항상 muted.
         // 실제 재생은 Web Audio API (DelayNode → GainNode) 라인 — 자막/그림과 같은
@@ -675,8 +740,8 @@ function Student() {
 
         await ctx.resume()
 
-        // 새 DelayNode — 이전 buffer (suspend 시점에 freeze 된 stale 샘플) 폐기
-        const newDelayNode = ctx.createDelay((delayMs / 1000) + 5)
+        // 새 DelayNode — 이전 buffer (suspend 시점에 freeze 된 stale 샘플) 폐기.
+        const newDelayNode = ctx.createDelay(ORIGINAL_AUDIO_DELAY_MAX_SEC)
         newDelayNode.delayTime.value = delayMs / 1000
         newDelayNode.connect(gain)
         delayNodeRef.current = newDelayNode
@@ -740,7 +805,11 @@ function Student() {
     const gain = gainNodeRef.current
     const ctx = audioContextRef.current
     if (gain && ctx) {
-      const target = (audioLang === 'original' && !isMuted) ? (volume / 100) : 0
+      // 일시정지 중엔 원본 음성 강제 mute — TTS 는 unitPlayer 가 lifecycle 로 gate 하지만
+      // 원본 오디오는 별도 Web Audio 라인이라 여기서 직접 처리.
+      const target = (audioLang === 'original' && !isMuted && !isPaused) ? (volume / 100) : 0
+      // 진단 로그: audioLang/volume/muted/paused 변화 시 GainNode 목표값 출력.
+      console.log(`[OriginalAudio] gain effect audioLang=${audioLang} muted=${isMuted} paused=${isPaused} volume=${volume} target=${target}`)
       // 10ms 선형 ramp — 사람의 짧은 gap 감지 임계(~5-10ms) 아래라 "즉시" 로 느껴지면서
       // sample boundary 클릭/팝 차단. (이전 setTargetAtTime(0.05) 는 ~250ms 까지 끌어
       // 토글 시 부드럽지만 살짝 느린 감 있었음.)
@@ -749,7 +818,26 @@ function Student() {
       gain.gain.setValueAtTime(gain.gain.value, now)
       gain.gain.linearRampToValueAtTime(target, now + 0.01)
     }
-  }, [audioLang, volume, isMuted, isAudioUnlocked])
+  }, [audioLang, volume, isMuted, isPaused, isAudioUnlocked])
+
+  // 진단: 5초마다 WebRTC inbound audio stats 출력 — RTP 가 실제로 흐르는지 확인.
+  // "트랙은 받았는데 소리 무음" 시나리오에서 packetsReceived 가 0 이면 강사측 송신 문제,
+  // 0보다 크면 학생측 재생 단계 문제 (GainNode/AudioContext 등).
+  useEffect(() => {
+    const id = window.setInterval(async () => {
+      const pc = peerConnectionRef.current
+      if (!pc) return
+      try {
+        const stats = await pc.getStats()
+        stats.forEach((report) => {
+          if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+            console.log(`[Stats] inbound audio: packets=${report.packetsReceived} bytes=${report.bytesReceived} jitter=${report.jitter?.toFixed?.(3) ?? '?'}`)
+          }
+        })
+      } catch { /* getStats 실패 — 무시 */ }
+    }, 5000)
+    return () => window.clearInterval(id)
+  }, [])
 
   useEffect(() => {
     chatScrollRef.current?.scrollTo({
@@ -843,8 +931,9 @@ function Student() {
               <h2 className="text-lg font-semibold text-onSurface">Save Lecture Subtitles</h2>
               <button
                 type="button"
-                onClick={() => { setShowTranscriptModal(false); navigate('/student/start') }}
+                onClick={() => setShowTranscriptModal(false)}
                 className="w-7 h-7 rounded-full flex items-center justify-center text-onSurface/60 hover:bg-black/10 transition-colors"
+                title="닫기 — 헤더의 다운로드 버튼으로 언제든 다시 열 수 있음"
               >✕</button>
             </div>
             <p className="text-sm text-onSurface/70">Download the subtitles recognized during the lecture.</p>
@@ -950,6 +1039,22 @@ function Student() {
             </svg>
             <span>{displayParticipantCount}</span>
           </button>
+
+          {/* 자막 다운로드 — 강의 종료 후에만 노출 (sessionId 있고 isLectureStarted=false).
+              강의 진행 중엔 의미 없고 헤더만 어수선해지므로 숨김. 종료 시 자동으로 뜨는
+              모달을 실수로 닫아도 이 버튼으로 언제든 다시 오픈. */}
+          {sessionId && !isLectureStarted && (
+            <button
+              onClick={() => setShowTranscriptModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm bg-primaryContainer/60 hover:bg-primaryContainer text-onSurface transition-colors"
+              title="자막 다운로드"
+              aria-label="자막 다운로드"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+            </button>
+          )}
 
           {studentName && (
             <div className="flex items-center gap-1.5 px-3 py-1.5 bg-primaryContainer/60 rounded-lg text-sm text-onSurface">
@@ -1699,11 +1804,11 @@ function Student() {
   )
 }
 
-interface LangColumnProps {
+interface LangColumnProps<T extends string> {
   title: string
-  value: TranslationLang
-  onChange: (v: TranslationLang) => void
-  options: { value: TranslationLang; label: string }[]
+  value: T
+  onChange: (v: T) => void
+  options: { value: T; label: string }[]
 }
 
 function linkifyText(text: string) {
@@ -1727,7 +1832,7 @@ function linkifyText(text: string) {
   return parts.length === 0 ? text : parts
 }
 
-function LangColumn({ title, value, onChange, options }: LangColumnProps) {
+function LangColumn<T extends string>({ title, value, onChange, options }: LangColumnProps<T>) {
   return (
     <div>
       <h3 className="text-base font-semibold mb-4 pl-6 h-12 leading-snug">{title}</h3>

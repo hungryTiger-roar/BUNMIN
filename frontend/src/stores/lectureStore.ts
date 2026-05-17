@@ -47,6 +47,22 @@ interface LectureState {
   modelMode: ModelMode
   setModelMode: (mode: ModelMode) => void
 
+  // 옵션 D: ASR + NMT 둘 다 적재되어 강의 시작 가능한 상태인지 (backend mode_change push + polling 으로 갱신).
+  // 강의 시작 버튼 / SlideUpload 의 선제 가드 — modelsReady 가 false 면 버튼 비활성.
+  modelsReady: boolean
+  setModelsReady: (ready: boolean) => void
+
+  // 글로벌 토스트 메시지 (alert 대체) — Electron 환경에서 native blocking dialog 피하기 위한 inline 표시.
+  // App.tsx 의 토스트 컴포넌트가 이 상태를 읽어 자동 dismiss. 사용처: 강의 시작 거부, 슬라이드 삭제 실패 등.
+  toastMessage: string | null
+  setToastMessage: (msg: string | null) => void
+
+  // 슬라이드 라이브러리 강제 새로고침 트리거 — backend slide_status_update WS push 받았을 때 bump.
+  // SlideUpload → SlideLibrary 의 refreshKey 와 합쳐서 라이브러리가 fetch 다시 실행하게 함.
+  // polling 끊긴 케이스에서 즉시 UI 복구 보장.
+  slideLibraryRefreshKey: number
+  bumpSlideLibraryRefreshKey: () => void
+
   // 수강자 이름
   studentName: string
   setStudentName: (name: string) => void
@@ -132,6 +148,11 @@ interface LectureState {
 
 const initialState = {
   modelMode: 'idle' as ModelMode,
+  modelsReady: false,  // 옵션 D: 초기엔 false — backend 가 ASR/NMT 적재 완료해 mode_change push 또는 5초 polling 으로 true 전송할 때까지 강의 시작 차단.
+                       // 이전엔 true 였으나 .exe 시작 직후 race window 에서 강의 시작 → 첫 발화 손실 발견 → false 안전.
+                       // backend 응답 정상이면 5초 polling 1회 안에 true 로 set 됨. backend 영구 다운이면 차단 유지 (정확한 동작).
+  toastMessage: null as string | null,
+  slideLibraryRefreshKey: 0,
   studentName: '',
   studentCount: 0,
   isConnected: false,
@@ -162,6 +183,9 @@ export const useLectureStore = create<LectureState>((set, get) => ({
 
   // AI 모델 모드 상태
   setModelMode: (mode) => set({ modelMode: mode }),
+  setModelsReady: (ready) => set({ modelsReady: ready }),
+  setToastMessage: (msg) => set({ toastMessage: msg }),
+  bumpSlideLibraryRefreshKey: () => set((s) => ({ slideLibraryRefreshKey: s.slideLibraryRefreshKey + 1 })),
 
   // 수강자 이름
   setStudentName: (name) => set({ studentName: name }),

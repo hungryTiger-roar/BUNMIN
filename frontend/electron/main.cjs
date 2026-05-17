@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer, session, Tray, Menu, nativeImage, screen } = require('electron')
+const { app, BrowserWindow, ipcMain, desktopCapturer, session, Tray, Menu, nativeImage, screen, dialog, shell } = require('electron')
 const { spawn } = require('child_process')
 const path = require('path')
 const http = require('http')
@@ -54,6 +54,58 @@ function getLanIp() {
     }
   }
   return '127.0.0.1'
+}
+
+// ─── 버전 변경 시 앱-측 캐시만 정리 ────────────────────────────────
+// userData 안에 마지막 실행 버전을 기록 → app.getVersion() 과 다르면 (신규 설치 또는 업그레이드)
+// "앱이 만든 임시 데이터" 만 청소. 학생 본인이 입력/다운로드한 자산은 보존:
+//   ✅ 청소: HTTP cache (구버전 JS/CSS 잔재), Service Workers, Cache Storage, DNS, Auth
+//   ❌ 보존: LocalStorage (student_name, audioLang/subtitleLang prefs, 자막 스타일)
+//           IndexedDB (piper TTS voice 30MB — 학생이 시간 들여 받은 자산)
+//           Cookies (현재 미사용)
+async function clearCachesOnVersionChange() {
+  const userDataDir = app.getPath('userData')
+  const versionFile = path.join(userDataDir, '.last-run-version')
+  const currentVersion = app.getVersion()
+
+  let lastVersion = null
+  try {
+    if (fs.existsSync(versionFile)) {
+      lastVersion = fs.readFileSync(versionFile, 'utf8').trim()
+    }
+  } catch (e) {
+    devLog(`last-run-version 읽기 실패 (캐시 정리 진행): ${e.message}`)
+  }
+
+  if (lastVersion === currentVersion) {
+    devLog(`동일 버전 (${currentVersion}) — 캐시 정리 스킵`)
+    return
+  }
+
+  devLog(`버전 변경 감지 (${lastVersion ?? '<신규 설치>'} → ${currentVersion}) — 앱-측 캐시만 정리 (사용자 데이터 보존)`)
+  appendLog(`[${new Date().toISOString()}] 버전 변경 감지 (${lastVersion ?? '<신규 설치>'} → ${currentVersion}) — 앱-측 캐시 정리 시작`)
+
+  try {
+    await session.defaultSession.clearCache()
+    // 사용자 자산 (LocalStorage / IndexedDB / Cookies) 은 의도적으로 제외.
+    await session.defaultSession.clearStorageData({
+      storages: ['serviceworkers', 'cachestorage', 'shadercache'],
+    })
+    try { await session.defaultSession.clearHostResolverCache() } catch { /* 일부 Electron 버전엔 없음 */ }
+    try { await session.defaultSession.clearAuthCache() } catch { /* 일부 버전엔 인자 필수 */ }
+    devLog('앱-측 캐시 정리 완료 (HTTP cache + SW + CacheStorage + ShaderCache + DNS + Auth) — 사용자 데이터 보존')
+    appendLog(`[${new Date().toISOString()}] 앱-측 캐시 정리 완료 — 학생 이름·언어 설정·TTS voice 보존`)
+  } catch (e) {
+    devLog(`캐시 정리 실패 (앱은 계속 진행): ${e.message}`)
+    appendLog(`[${new Date().toISOString()}] 캐시 정리 실패: ${e.message}`)
+  }
+
+  try {
+    fs.mkdirSync(userDataDir, { recursive: true })
+    fs.writeFileSync(versionFile, currentVersion, 'utf8')
+  } catch (e) {
+    devLog(`last-run-version 저장 실패 (다음 실행도 재정리): ${e.message}`)
+  }
 }
 
 let mainWindow = null
@@ -248,7 +300,11 @@ function startTurnServer() {
     appendLog(`[TURN] 0.0.0.0:47878 listening, externalIps=${lanIp}`)
     devLog(`TURN 서버 시작: 0.0.0.0:47878 (externalIps=${lanIp})`)
   } catch (err) {
-    appendLog(`[TURN] 시작 실패: ${err && err.message ? err.message : err}`)
+    const msg = err && err.message ? err.message : String(err)
+    appendLog(`[TURN] 시작 실패: ${msg}`)
+    // renderer 로 경고 흘려 사용자에게 노출 — P2P 차단 환경(SSAFY 등)에서 학생 무음
+    // 시 원인 추적이 어려워서 추가. 정상 환경에선 catch 자체가 안 들어옴.
+    sendLog(`[경고] TURN 서버 시작 실패 — P2P 차단된 환경이면 학생 음성이 들리지 않을 수 있습니다 (${msg})`)
     console.error('[TURN] 시작 실패:', err)
     // TURN 실패해도 앱은 계속 — P2P 가능 환경에선 동작 가능, 아니면 ICE failed 로그
   }
@@ -497,6 +553,11 @@ function createWindow() {
     return _allowedPermissions.has(permission)
   })
 
+  // 진입 URL 은 항상 /install. Install 페이지가 backend /health 폴링해서
+  //   - wait_user_action / loading / downloading → 마법사 UI 표시
+  //   - ready/ok 면서 다운로드 흐름 안 거쳤으면 (캐시 hit) → 즉시 navigate('/lecturer/home')
+  //   - ready/ok 면서 다운로드 거쳤으면 → '확인' 누르고 /lecturer/home
+  // 한 곳에서 분기 → main.cjs 가 backend status 미리 안 봐도 됨 (race / 추가 RTT 회피).
   if (isDev) {
     const url = `http://127.0.0.1:${FRONTEND_PORT}/#/install`
     devLog(`loadURL: ${url}`)
@@ -563,8 +624,9 @@ function createWindow() {
     devLog(`renderer crashed: ${JSON.stringify(details)}`)
   })
 
-  // DevTools 단축키 — Ctrl+Shift+I, F12. 운영판에서도 마이크/WS 에러 추적 가능하게.
-  // 메뉴바는 setApplicationMenu(null) 로 숨긴 상태 유지.
+  // 메뉴바는 setApplicationMenu(null) 로 숨겨서 단축키로만 접근:
+  //   - Ctrl+Shift+I, F12 — DevTools (운영판에서도 마이크/WS 에러 추적)
+  //   - Ctrl+Shift+S — 백엔드 진단 다이얼로그 (_lastState + PID + 포트 + 로그)
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.type !== 'keyDown') return
     const isDevToolsCombo =
@@ -572,6 +634,11 @@ function createWindow() {
       input.key === 'F12'
     if (isDevToolsCombo) {
       mainWindow.webContents.toggleDevTools()
+      event.preventDefault()
+      return
+    }
+    if (input.control && input.shift && input.key.toLowerCase() === 's') {
+      showBackendStatusDialog()
       event.preventDefault()
     }
   })
@@ -599,6 +666,76 @@ function createWindow() {
   })
 }
 
+// ─── 백엔드 진단 다이얼로그 (Ctrl+Shift+S) ──────────────────────────
+// 사용자가 "동작 안 한다" 할 때 첫 손에 잡히는 진단 화면. _lastState 에 쌓인
+// progress/ready/models 그대로 + 백엔드 프로세스 살아있는지, 포트 정보, 로그
+// 파일 경로까지 한 다이얼로그에 모음. "로그 폴더 열기" 로 LOCALAPPDATA\Aunion AI
+// 바로 탐색기에서 열어 error_log.txt 확인 가능.
+function showBackendStatusDialog() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const backendAlive = !!(backendProcess && backendProcess.exitCode === null && !backendProcess.killed)
+  const pid = backendProcess?.pid ?? 'N/A'
+  const readyLabel =
+    _lastState.ready === true ? 'ready (OK)'
+    : _lastState.ready === false ? 'error'
+    : 'loading'
+  const modelsText = _lastState.models
+    ? Object.entries(_lastState.models)
+        .map(([k, v]) => `  - ${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`)
+        .join('\n')
+    : '  (아직 수신 없음)'
+  const detail = [
+    `[상태]      ${readyLabel}`,
+    `[진행률]    ${_lastState.progress}%`,
+    `[백엔드]    pid=${pid}  alive=${backendAlive}  isDev=${isDev}`,
+    `[API]       http://127.0.0.1:${BACKEND_PORT}`,
+    `[Health]    http://127.0.0.1:${isDev ? BACKEND_PORT : HEALTH_PORT}/${isDev ? 'health' : ''}`,
+    `[WS]        ws://127.0.0.1:${BACKEND_PORT}/ws/pipeline`,
+    `[TURN]      turn:<lan>:47878`,
+    `[로그]      ${LOG_FILE}`,
+    ``,
+    `[모델]`,
+    modelsText,
+  ].join('\n')
+  dialog
+    .showMessageBox(mainWindow, {
+      type: 'info',
+      title: 'Aunion AI — 백엔드 상태',
+      message: '백엔드 진단 정보',
+      detail,
+      buttons: ['닫기', '로그 폴더 열기', 'Health 새로고침'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    })
+    .then((res) => {
+      if (res.response === 1) {
+        shell.openPath(_logDir).catch(() => {})
+      } else if (res.response === 2) {
+        // 한 번만 강제 health 폴링 — 결과는 _lastState 갱신 후 사용자가 다시 단축키.
+        const url = isDev
+          ? `http://127.0.0.1:${BACKEND_PORT}/health`
+          : `http://127.0.0.1:${HEALTH_PORT}/`
+        const req = http.get(url, (r) => {
+          let body = ''
+          r.on('data', (c) => { body += c })
+          r.on('end', () => {
+            try {
+              const j = JSON.parse(body)
+              if (typeof j.progress === 'number') sendProgress(j.progress)
+              if (j.models) sendModelStatus(j.models)
+              if (j.status === 'ok' || j.status === 'ready') _lastState.ready = true
+              else if (j.status === 'error') _lastState.ready = false
+            } catch {}
+          })
+        })
+        req.on('error', () => {})
+        req.setTimeout(3000, () => req.destroy())
+      }
+    })
+    .catch(() => {})
+}
+
 // ─── 트레이 아이콘 + 컨텍스트 메뉴 ────────────────────────────────────
 function createTray() {
   const iconPath = path.join(__dirname, 'assets', 'bm-applogo.png')
@@ -619,6 +756,7 @@ function createTray() {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: '열기', click: showWindow },
+      { label: '백엔드 상태 (Ctrl+Shift+S)', click: showBackendStatusDialog },
       { type: 'separator' },
       {
         label: '종료',
@@ -646,10 +784,12 @@ app.on('second-instance', (_event, commandLine) => {
   }
 })
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   devLog('app.whenReady → createWindow + createTray + startBackend + startTurnServer')
   // 기본 Electron 메뉴바 제거 (File/Edit/View/Window/Help). 모든 BrowserWindow 에 적용.
   Menu.setApplicationMenu(null)
+  // 버전 변경 시 앱-측 캐시 정리 — createWindow 전에 (loadURL 후 정리하면 새 로딩이 stale 캐시 참조 가능).
+  await clearCachesOnVersionChange()
   createWindow()
   createTray()
   startBackend()

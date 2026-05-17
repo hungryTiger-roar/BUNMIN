@@ -14,12 +14,13 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
+from app.config import DATA_ROOT
+
 router = APIRouter(prefix="/transcripts", tags=["Transcripts"])
 
-_REPO_DIR = Path(__file__).parent.parent.parent.parent
-
-# 자막 저장 경로
-TRANSCRIPTS_DIR = _REPO_DIR / "uploads" / "transcripts"
+# 자막 저장 경로 — DATA_ROOT 기준 (frozen: %LOCALAPPDATA%\Aunion AI\, dev: <repo>/).
+# install dir 재설치로 덮어써져도 자막 보존.
+TRANSCRIPTS_DIR = DATA_ROOT / "uploads" / "transcripts"
 TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # 활성 세션 상태 (메모리)

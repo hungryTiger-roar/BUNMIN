@@ -30,6 +30,13 @@ else:
 # 기존 코드 호환용 별칭
 APP_DATA_DIR = USER_DATA_DIR if _FROZEN else INSTALL_DIR
 
+# 사용자 데이터(uploads/transcripts/logs/slide cache) 저장 루트.
+#   - frozen: %LOCALAPPDATA%\Aunion AI\ → 재설치/업데이트로 install dir(resources/backend/) 덮어써도
+#             강의자 자료/자막/로그 보존. install dir 자체가 LOCALAPPDATA 안이지만 win-unpacked 가
+#             설치 시 그 안의 resources/ 만 갈아끼우므로, 한 단계 위 USER_DATA_DIR 은 안전.
+#   - dev: <repo>/ → uploads/, logs/ 등이 gitignored 폴더로 누적 (기존 패턴 유지).
+DATA_ROOT = USER_DATA_DIR if _FROZEN else PROJECT_ROOT
+
 # 캐시 위치:
 #   - frozen: 사용자 데이터 디렉토리 (사용자별 격리)
 #   - dev: 프로젝트 내 backend/cache (download_models.py와 동일 위치 — 기존 캐시 재사용)

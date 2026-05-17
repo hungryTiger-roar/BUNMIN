@@ -53,8 +53,13 @@ logger = logging.getLogger(__name__)
 # ============================================================
 # 파일 로깅 설정 (디버깅용)
 # ============================================================
-_BASE_DIR = Path(__file__).parent.parent.parent.parent.parent
-LOG_DIR = _BASE_DIR / "logs"
+# DATA_ROOT 기준 (frozen: %LOCALAPPDATA%\Aunion AI\logs, dev: <repo>/logs).
+# install dir 재설치로 덮어써져도 로그 보존.
+try:
+    from app.config import DATA_ROOT as _DATA_ROOT
+except ImportError:
+    _DATA_ROOT = Path(__file__).parent.parent.parent.parent.parent
+LOG_DIR = _DATA_ROOT / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 _log_date = datetime.now().strftime("%Y%m%d")

@@ -5,9 +5,10 @@
  * 별도의 tts.worker.ts 없이 메인 스레드에서 직접 사용해야 한다.
  * (Worker 안에서 사용하면 pthread nested-worker 문제로 WASM init 실패)
  *
- * OOM 방지 전략:
- *   - audioLang 변경 시 이전 엔진 참조 해제 → 내부 Worker GC → WASM 메모리 해제
- *   - 새 엔진은 현재 언어 모델 하나만 warm-up → 메모리에 모델 1개만 유지
+ * Engine 라이프사이클:
+ *   - 'en' voice 하나만 지원 (NMT 가 한→영 고정). audioLang 무관 항상 적재.
+ *   - audioLang 토글 시 재로드 없음 → 'original' ↔ 'en' 전환 0ms 응답.
+ *   - 메모리 ~100MB WASM heap, 강의 종료(컴포넌트 unmount) 시만 해제.
  *
  * 재생 정책 — 가속+선점 하이브리드:
  *   새 발화가 도착했을 때 현재 재생 중인 발화의 남은 시간을 보고:
@@ -26,7 +27,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { PiperWebEngine, OnnxWebRuntime, OnnxWebGPURuntime, PhonemizeWebRuntime, HuggingFaceVoiceProvider } from 'piper-tts-web'
 import * as ortWebGPU from 'onnxruntime-web/webgpu'
-import type { TranslationLang } from '@/stores/preferencesStore'
+import type { AudioLang } from '@/stores/preferencesStore'
 import { IndexedDBFetchProvider } from './idbFetchProvider'
 
 // piper-tts-web v1.1.2 의 .d.ts 에 OnnxWebGPURuntime / destroy() / HuggingFaceVoiceProvider
@@ -98,22 +99,10 @@ export type TTSStatus = 'idle' | 'loading' | 'ready' | 'error'
 // 올라가지만 거의 인지 안 됨. AudioBufferSourceNode 는 preservesPitch 미지원이라 감수.
 const TTS_PLAYBACK_RATE = 1.2
 
-// TranslationLang → Piper voice ID (https://huggingface.co/rhasspy/piper-voices)
-// ko, both 등 미지원 언어는 영어로 fallback. off만 명시적 끄기.
-const VOICE_MAP: Partial<Record<TranslationLang, string>> = {
-  en: 'en_US-lessac-medium',
-  de: 'de_DE-thorsten-medium',
-  es: 'es_MX-ald-medium',
-  ru: 'ru_RU-irina-medium',
-}
-
-const FALLBACK_VOICE = VOICE_MAP.en!
-
-// off는 명시적 끄기 → null 반환. 그 외 미지원 언어는 영어로 fallback.
-function resolveVoice(lang: TranslationLang): string | null {
-  if (lang === 'off') return null
-  return VOICE_MAP[lang] ?? FALLBACK_VOICE
-}
+// Piper voice ID (https://huggingface.co/rhasspy/piper-voices) — 영어만 지원 (NMT 가 한→영 만).
+// engine 은 audioLang 무관 항상 'en' voice 로 로드. audioLang 토글은 GainNode 만 변경 (Student.tsx 측).
+// 'original' 모드에서도 engine 유지 → 토글 시 재로드 0ms (이전엔 1~3초 재로드 발생, 토글 직후 첫 영어 발화 누락 가능).
+const TTS_VOICE = 'en_US-lessac-medium'
 
 // FIFO 정책 — 모든 발화를 순서대로 직렬 재생.
 // 강의자 → 학생 sync 보장 위해 가속/선점 제거. 큐가 길어지는 backpressure 처리는
@@ -132,7 +121,7 @@ type CurrentTask = {
   endTime: number                 // ctx.currentTime 기준 재생 종료 예정 시각
 }
 
-export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
+export function useTTS(enabled = true, audioLang: AudioLang = 'en') {
   const engineRef        = useRef<PiperWebEngine | null>(null)
   const audioCtxRef      = useRef<AudioContext | null>(null)
   const gainRef          = useRef<GainNode | null>(null)
@@ -181,8 +170,9 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
       try {
         // (2) 엔진 초기화와 병행해 voice 파일을 백그라운드 프리페치 — 의도적으로 await 안 함.
         //     piper 가 곧 fetch 할 때 HTTP 캐시 적중 → 첫 발화까지 latency ↓.
-        const voice = resolveVoice(audioLang)
-        if (voice) prefetchVoice(voice)
+        //     audioLang 무관 항상 'en' 적재 — 'original' 선택 학생이 토글 시 즉시 사용 가능.
+        const voice = TTS_VOICE
+        prefetchVoice(voice)
 
         // (1) WebGPU 지원 환경이면 GPU 가속(iGPU/dGPU) 사용 → CPU 부담 ↓.
         //     미지원 환경 (구형 브라우저 / WebGPU 비활성화) 은 WASM 으로 자동 폴백.
@@ -213,7 +203,7 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
           `[TTS] ONNX 백엔드: ${useWebGPU ? 'WebGPU (high-performance)' : `WASM (${navigator.hardwareConcurrency} threads, COI=${self.crossOriginIsolated})`}`
         )
 
-        // IndexedDB 영구 캐시 — HTTP 캐시 evict (모바일 Safari 7일+ / 사용자 cache clear)
+        // IndexedDB 영구 캐시 — HTTP 캐시 evict (storage pressure / 사용자 cache clear)
         // 후에도 voice 모델 살아남음. 처음엔 HF 에서 fetch 하지만 이후 영구 hit.
         // engine.destroy() 시 voiceProvider.destroy() 까지 자동 호출 → blob URL revoke.
         const voiceProvider = new HuggingFaceVoiceProvider({
@@ -293,7 +283,9 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
       }
       // AudioContext 는 세션 내내 유지 (unlockAudio에서 생성, 언어 변경과 무관)
     }
-  }, [enabled, audioLang, updateStatus, recoveryGen])
+  }, [enabled, updateStatus, recoveryGen])
+  // ↑ audioLang 의도적 제외: 'original' ↔ 'en' 토글 시 engine 재로드 방지 (이전엔 ~1~3초 재로드 → 토글 직후 첫 영어 발화 누락 가능).
+  // engine 은 'en' voice 로 한 번만 로드 → 항상 ready. audioLang 은 Student.tsx 의 GainNode 컨트롤에만 사용.
 
   // Heap 모니터링 + 자동 회복 — 30초 간격 체크, 80% 초과 시 엔진 재생성.
   // 안전 조건: 발화 진행 중 / 큐에 작업 / 재생 중인 task 가 있으면 보류 (다음 idle 까지).
@@ -348,10 +340,10 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
     return () => clearInterval(interval)
   }, [enabled])
 
-  // AudioContext suspend 자동 복구 — iOS Safari / 모바일 백그라운드 진입 시 ctx 가 강제
-  // suspend 됨. 학생이 화면 다시 켜도 자동 resume 안 되어 음성 영원히 안 들리는 현상.
+  // AudioContext suspend 자동 복구 — 탭 백그라운드 / 장시간 미사용 시 브라우저가 ctx 를
+  // 강제 suspend. 학생이 탭 복귀해도 자동 resume 안 되어 음성 영원히 안 들리는 현상.
   // visibilitychange / pageshow / focus 모두 hook (브라우저별 발화 이벤트 다름).
-  // ctx.resume() 은 이미 unlock 후엔 user-gesture 없이 호출 가능 (다만 일부 iOS 버전
+  // ctx.resume() 은 이미 unlock 후엔 user-gesture 없이 호출 가능 (다만 일부 브라우저
   // 에선 거부될 수 있어 try-catch silent fail — 다음 사용자 인터랙션에서 자동 재시도).
   useEffect(() => {
     if (!enabled) return
@@ -417,7 +409,10 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
     if (!audioCtxRef.current) {
       audioCtxRef.current = new AudioContext()
       gainRef.current = audioCtxRef.current.createGain()
-      gainRef.current.gain.value = gainValueRef.current
+      // gain 0 으로 시작 — Student.tsx 의 setTTSVolume effect 가 audioLang 보고 ramp 로 올림.
+      // 디폴트 gainValueRef(0.7) 로 시작하면 audioLang='original' 진입 시 useEffect 선언 순서 race
+      // (autoEnter unlock 이 mute effect 보다 먼저 fire) 로 첫 발화가 잠깐 들릴 가능성 차단.
+      gainRef.current.gain.value = 0
       gainRef.current.connect(audioCtxRef.current.destination)
     }
     if (audioCtxRef.current.state === 'suspended') {
@@ -469,10 +464,10 @@ export function useTTS(enabled = true, audioLang: TranslationLang = 'en') {
    *  unit player 가 await 로 sequencing 하므로 useTTS 자체 큐 우회. */
   const playSentence = useCallback(async (
     text: string,
-    lang: TranslationLang = 'en',
+    _lang: AudioLang = 'en',
   ): Promise<{ audioStartedAt: number; durationMs: number; ended: Promise<void>; ttsMs: number }> => {
-    const voice = resolveVoice(lang)
-    if (!voice) throw new Error('TTS 음성 끄기 상태')
+    // engine 은 항상 'en' voice 로 로드돼 있음. caller (useDelayBufferPlayer) 가 audioLang === 'en' 일 때만 호출하므로 lang 파라미터는 더 이상 의미 없지만 시그니처 유지.
+    const voice = TTS_VOICE
     if (!engineRef.current || statusRef.current !== 'ready') {
       throw new Error(`TTS 미준비 — status: ${statusRef.current}`)
     }

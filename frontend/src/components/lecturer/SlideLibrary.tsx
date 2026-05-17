@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { getSlideLibrary, deleteSlidesBatch } from '@/lib/api'
+import { useLectureStore } from '@/stores/lectureStore'
 import type { SlideLibraryItem as Item } from '@/types/slide'
 import SlideLibraryItem from './SlideLibraryItem'
 import DeleteConfirmModal from './DeleteConfirmModal'
@@ -14,6 +15,7 @@ interface Props {
 const VISIBLE_MAX_HEIGHT = 208
 
 export default function SlideLibrary({ refreshKey = 0 }: Props) {
+  const setToastMessage = useLectureStore((s) => s.setToastMessage)
   const [items, setItems] = useState<Item[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -25,24 +27,40 @@ export default function SlideLibrary({ refreshKey = 0 }: Props) {
 
   useEffect(() => {
     let cancelled = false
+    let pollTimer: number | null = null
+    let firstLoad = true
     const load = async () => {
-      setLoading(true)
-      setError(null)
+      if (firstLoad) {
+        setLoading(true)
+        setError(null)
+      }
       try {
         const data = await getSlideLibrary('recent')
-        if (!cancelled) setItems(data.items)
+        if (cancelled) return
+        setItems(data.items)
+        if (firstLoad) setError(null)
+        // 처리 중(pending/processing) 슬라이드 있으면 5초 후 재조회.
+        // → 페이지 새로고침으로 UploadDropzone polling 끊긴 경우에도 라이브러리가 status 자동 갱신.
+        const hasInProgress = data.items.some((it) => it.status === 'pending' || it.status === 'processing')
+        if (hasInProgress) {
+          pollTimer = window.setTimeout(load, 5000)
+        }
       } catch (err) {
-        if (!cancelled) {
+        if (!cancelled && firstLoad) {
           console.error('[SlideLibrary] 조회 실패:', err)
           setError('라이브러리를 불러오지 못했습니다')
         }
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled && firstLoad) {
+          setLoading(false)
+          firstLoad = false
+        }
       }
     }
     load()
     return () => {
       cancelled = true
+      if (pollTimer !== null) window.clearTimeout(pollTimer)
     }
   }, [refreshKey])
 
@@ -87,11 +105,11 @@ export default function SlideLibrary({ refreshKey = 0 }: Props) {
       setItems((prev) => prev.filter((item) => !deletedSet.has(item.slide_id)))
       if (res.failed.length > 0) {
         const reasons = res.failed.map((f) => `- ${f.slide_id}: ${f.reason}`).join('\n')
-        alert(`일부 항목 삭제 실패:\n${reasons}`)
+        setToastMessage(`일부 항목 삭제 실패:\n${reasons}`)
       }
     } catch (err) {
       console.error('[SlideLibrary] 일괄 삭제 실패:', err)
-      alert('삭제 중 오류가 발생했습니다')
+      setToastMessage('삭제 중 오류가 발생했습니다')
     } finally {
       setDeleting(false)
       setShowDeleteModal(false)

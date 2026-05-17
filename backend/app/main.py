@@ -22,11 +22,11 @@ mimetypes.add_type('application/javascript', '.mjs')
 mimetypes.add_type('application/wasm', '.wasm')
 
 from app.config import ModelConfig, PROJECT_ROOT, resolve_model_dir
-from app.routers import ws, slides, transcripts, network, mode, install, settings
+from app.routers import ws, slides, transcripts, network, mode, install
 from app.utils.firewall import ensure_firewall_rule
 from app.utils.network import SERVER_PORT, get_lan_ip
 
-# VLM Base 모델: env 미설정이면 로컬 동봉본(qwen2.5-vl-7b-instruct) 우선,
+# VLM Base 모델: env 미설정이면 로컬 동봉본(qwen3-vl-4b-instruct) 우선,
 # 없으면 HF repo_id로 fallback. 사용자가 env로 명시하면 그 값 그대로.
 from pathlib import Path as _Path
 
@@ -34,8 +34,8 @@ def _vlm_default() -> str:
     """env 미지정 시 사용할 기본값. 로컬 디렉토리(USER_DATA → INSTALL → PROJECT_ROOT)가
     있으면 그 경로, 없으면 HF repo_id 로 fallback 해 다운로드 트리거.
     Electron 배포 환경에서 사용자별 모델 디렉토리를 우선 사용하기 위함."""
-    found = resolve_model_dir("qwen2.5-vl-7b-instruct")
-    return str(found) if found is not None else "Qwen/Qwen2.5-VL-7B-Instruct"
+    found = resolve_model_dir("qwen3-vl-4b-instruct")
+    return str(found) if found is not None else "Qwen/Qwen3-VL-4B-Instruct"
 
 
 def _resolve_vlm(value: str) -> str:
@@ -57,7 +57,7 @@ def _resolve_vlm(value: str) -> str:
     # (그렇지 않으면 _download_one이 "로컬 경로에 없습니다" 에러로 막힘)
     if value.startswith(("models/", "models\\", "./", "../", ".\\", "..\\")):
         return _vlm_default()
-    # repo_id 형식 (예: "Qwen/Qwen2.5-VL-7B-Instruct") — 그대로
+    # repo_id 형식 (예: "Qwen/Qwen3-VL-4B-Instruct") — 그대로
     return value
 
 
@@ -352,7 +352,7 @@ def _download_one(model_key: str, repo_id: str):
         raise RuntimeError(
             f"{model_key.upper()} 모델이 지정된 로컬 경로에 없습니다: {repo_id}\n"
             f"  해결: 'npm run setup' 재실행 또는 .env의 {model_key.upper()}_MODEL을\n"
-            f"        HuggingFace repo_id로 변경 (예: Qwen/Qwen2.5-VL-7B-Instruct)."
+            f"        HuggingFace repo_id로 변경 (예: Qwen/Qwen3-VL-4B-Instruct)."
         )
     from huggingface_hub import snapshot_download
     _thread_model_key.key = model_key
@@ -414,9 +414,9 @@ def _load_models_sync():
     to_download = [(key, repo) for key, repo in model_repos if not _is_cached(repo)]
 
     # ── 첫 실행 사용자 액션 대기 ──────────────────────────────────────
-    # VLM 미캐시 + 슬라이드 전용 모드 = 신규 사용자 첫 실행 → 다운로드 마법사 UI 표시 후
-    # "다운로드 시작" 클릭까지 대기. 사용자 동의 없이 16GB 자동 다운로드 안 함.
-    if skip_models and any(k == "vlm" for k, _ in to_download):
+    # VLM 미캐시 = 신규 사용자 첫 실행 → 다운로드 마법사 UI 표시 후 "다운로드 시작" 클릭까지 대기.
+    # 사용자 동의 없이 8GB 자동 다운로드 안 함. (skip_models 모드 무관 — 풀모드 .exe 도 동일)
+    if any(k == "vlm" for k, _ in to_download):
         _model_status["status"] = "wait_user_action"
         _model_status["message"] = "사용자 다운로드 시작 클릭 대기 중"
         _emit_status()
@@ -727,13 +727,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# 학생 브라우저(=Electron renderer)에서 SharedArrayBuffer 활성화 →
+# onnxruntime-web WASM 이 멀티스레드로 동작 → piper-tts 합성 지연 단축.
+# 미설정 시 crossOriginIsolated=false 라 ort 가 numThreads=1 로 강제됨 (useTTS.ts 경고).
+# credentialless: HuggingFace 등 cross-origin 자원도 CORP 헤더 없이 fetch 가능.
+@app.middleware("http")
+async def add_cross_origin_isolation_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    response.headers["Cross-Origin-Embedder-Policy"] = "credentialless"
+    return response
+
+
 app.include_router(ws.router)
 app.include_router(slides.router)
 app.include_router(transcripts.router)
 app.include_router(network.router)
 app.include_router(mode.router)
 app.include_router(install.router)
-app.include_router(settings.router)
 
 
 @app.api_route("/health", methods=["GET", "HEAD"], tags=["Health"])

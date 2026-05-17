@@ -99,8 +99,12 @@ backend/app/services/models/
 datasets/
 backend/app/services/slide_translation/glossaries/*.json
 
-# 임시 파일 (커밋 메시지 작성용 등)
+# 임시 파일 (커밋 메시지 작성용 등 + 로컬 진단용 .ps1)
 *.tmp
+.tmp_*.ps1
+# 프로젝트 루트에 떨어진 진단 .ps1 (kill_*, check_*, verify_*, wipe_* 등 로컬 셸 도우미)
+# scripts/ 하위는 정식 빌드 스크립트라 제외 안 함
+/*.ps1
 
 # 백업 파일 (아이콘/로고 교체 시 남기는 .bak 등)
 *.bak

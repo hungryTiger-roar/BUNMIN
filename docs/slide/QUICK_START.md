@@ -31,7 +31,7 @@ npm run setup
 
 또는 수동 다운로드:
 ```bash
-# VLM 모델 (Qwen2.5-VL-3B-Instruct)
+# VLM 모델 (Qwen3-VL-4B-Instruct)
 # 자동으로 HuggingFace에서 다운로드됨 (~3GB)
 
 # Surya OCR

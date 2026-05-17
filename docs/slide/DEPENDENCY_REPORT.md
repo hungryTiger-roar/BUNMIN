@@ -6,8 +6,8 @@
 
 | 파이프라인 | 메인 파일 | 용도 | 번역 모델 |
 |-----------|----------|------|----------|
-| **PDF Layer** | `pdf_pipeline.py` | PDF 텍스트 레이어 직접 수정 | VLM (Qwen2.5-VL) |
-| **Image OCR** | `image_pipeline.py` | 이미지 OCR + 오버레이 | VLM (Qwen2.5-VL) |
+| **PDF Layer** | `pdf_pipeline.py` | PDF 텍스트 레이어 직접 수정 | VLM (Qwen3-VL-4B) |
+| **Image OCR** | `image_pipeline.py` | 이미지 OCR + 오버레이 | VLM (Qwen3-VL-4B) |
 
 ---
 
@@ -38,7 +38,7 @@ config/
 slides.py (router)
 └── image_pipeline.py
     ├── batch_ocr_surya()      # Surya OCR 배치 실행 → 언로드
-    ├── batch_translate_vlm()  # VLM 번역 배치 실행 (Qwen2.5-VL)
+    ├── batch_translate_vlm()  # VLM 번역 배치 실행 (Qwen3-VL-4B)
     │   └── translate_text_vlm()  # VLM 모델 호출
     │   └── term_corrections.py   # 용어집 프롬프트 포함
     └── batch_overlay()        # 이미지에 텍스트 오버레이 (CPU)
@@ -180,7 +180,7 @@ VLM 번역 → 언로드 → Surya OCR → 언로드 → VLM 번역 → 언로�
   ~4GB              ~4GB              ~4GB
 ```
 
-- **VLM**: Qwen2.5-VL-3B-Instruct (4bit 양자화)
+- **VLM**: Qwen3-VL-4B-Instruct (4bit 양자화)
 - **Surya**: Detection + Recognition Predictor
 
 **핵심 원칙:**

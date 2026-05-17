@@ -71,6 +71,8 @@ from .term_corrections import get_terms_in_text, correct_ocr_text, build_ocr_cor
 from .models import TextBlock
 
 import sys as _sys_init
+# _BASE_DIR: 설치본 루트 (frozen: <install>/resources/backend/, dev: <repo>/).
+# 동봉된 .env, config.yaml, models/ 위치 해석에 사용. 사용자 데이터는 DATA_ROOT 사용.
 _BASE_DIR = Path(_sys_init.executable).parent if getattr(_sys_init, 'frozen', False) else Path(__file__).parent.parent.parent.parent.parent
 
 # .env 로드
@@ -78,10 +80,18 @@ _env_path = _BASE_DIR / ".env"
 print(f"[Config] .env 경로: {_env_path} (존재: {_env_path.exists()})")
 load_dotenv(_env_path)
 
+# DATA_ROOT (logs, slide cache 등 사용자 데이터 저장 루트) 임포트.
+# 독립 실행/테스트 환경에선 _BASE_DIR 폴백.
+try:
+    from app.config import DATA_ROOT as _DATA_ROOT
+except ImportError:
+    _DATA_ROOT = _BASE_DIR
+
 # ============================================================
 # 파일 로깅 설정
 # ============================================================
-LOG_DIR = _BASE_DIR / "logs"
+# install dir 재설치로 덮어써져도 로그 보존되도록 DATA_ROOT 기준.
+LOG_DIR = _DATA_ROOT / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # 로그 파일명: image_pipeline_YYYYMMDD.log
@@ -276,6 +286,37 @@ def _resolve_vlm(value: str) -> str:
 VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL") or _vlm_default())
 VLM_DEVICE = os.environ.get("VLM_DEVICE", "cuda")
 
+
+def _auto_detect_vram_settings() -> tuple[str, str]:
+    """VRAM 기반 자동 양자화 + max_memory 결정 (env 미명시 시 사용).
+
+    Threshold 근거 (nvidia-smi total_memory 기준):
+      < 7.5 GB → 4bit  (6GB 카드: GTX 1660, RTX 2060/3050/3060 Mobile 6GB 등)
+                 weight ~2.5GB + 활성화 ~1.5GB ≈ 4~4.5GB → Electron + OCR 함께도 안전
+      7.5 ~ 12 GB → 8bit, max_memory = total - 2GB (활성화 + Electron + Surya OCR 여유)
+                 8GB 카드: RTX 3060/3070/4060 등
+      ≥ 12 GB → 8bit, max_memory = total - 3GB (여유 더)
+                 RTX 3060 12GB, RTX 4070/3080/4080/4090 등
+    """
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return "4bit", "4GiB"
+        total_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        if total_gb < 7.5:
+            return "4bit", "4GiB"  # 4bit 분기에서는 max_memory 사실상 무의미
+        elif total_gb < 12:
+            return "8bit", f"{int(total_gb - 2)}GiB"
+        else:
+            return "8bit", f"{int(total_gb - 3)}GiB"
+    except Exception:
+        return "4bit", "4GiB"  # 안전한 default
+
+
+_AUTO_QUANT, _AUTO_MAX_GPU_MEMORY = _auto_detect_vram_settings()
+# env 명시 시 자동 감지 override (사용자 강제 튜닝 경로 보존).
+VLM_MAX_GPU_MEMORY = os.environ.get("VLM_MAX_GPU_MEMORY", _AUTO_MAX_GPU_MEMORY)
+
 # 양자화 설정: "4bit" (기본), "8bit", "none"/"fp16"
 # VLM_USE_4BIT=false 이면 8bit 사용 (하위 호환)
 _vlm_4bit_raw = os.environ.get("VLM_USE_4BIT", "")
@@ -286,9 +327,18 @@ if _vlm_quant_raw:
 elif _vlm_4bit_raw:
     VLM_QUANTIZATION = "4bit" if _vlm_4bit_raw.lower() == "true" else "8bit"
 else:
-    VLM_QUANTIZATION = "4bit"  # 기본값
+    VLM_QUANTIZATION = _AUTO_QUANT  # 자동 감지 (VRAM 기반)
 
-print(f"[Config] VLM 양자화: {VLM_QUANTIZATION}")
+# VRAM 자동 감지 결과 로그 — 사용자가 콘솔에서 확인 가능
+try:
+    import torch as _t
+    if _t.cuda.is_available():
+        _gb = _t.cuda.get_device_properties(0).total_memory / (1024**3)
+        print(f"[Config] GPU VRAM: {_gb:.1f}GB → 양자화: {VLM_QUANTIZATION}, max_memory: {VLM_MAX_GPU_MEMORY}")
+    else:
+        print(f"[Config] CUDA 미사용 → 양자화: {VLM_QUANTIZATION}")
+except Exception:
+    print(f"[Config] VLM 양자화: {VLM_QUANTIZATION}")
 
 _vlm_model = None
 _vlm_processor = None
@@ -328,15 +378,20 @@ def get_vlm_model():
             "trust_remote_code": True,
         }
     elif VLM_QUANTIZATION == "8bit":
+        # GPU VRAM 부족 시 layer 단위로 CPU offload 자동 분배 (느려지지만 OOM 회피).
+        # weight 가 VLM_MAX_GPU_MEMORY 안에 다 들어가면 GPU 만 사용, 초과분만 CPU 로 떨어짐.
+        # 슬라이드 번역은 강의 전 미리 처리 가정 → 속도보다 안정성 + 8bit 품질 우선.
         bnb_config = BitsAndBytesConfig(
             load_in_8bit=True,
-            llm_int8_enable_fp32_cpu_offload=False,
+            llm_int8_enable_fp32_cpu_offload=True,
         )
         model_kwargs = {
             "quantization_config": bnb_config,
-            "device_map": {"": 0},
+            "device_map": "auto",
+            "max_memory": {0: VLM_MAX_GPU_MEMORY, "cpu": "32GiB"},
             "trust_remote_code": True,
         }
+        print(f"[VLM] 8bit GPU 한계: {VLM_MAX_GPU_MEMORY} (초과분 CPU offload)")
     else:
         # none / fp16
         model_kwargs = {
@@ -1364,10 +1419,10 @@ def stage_overlay(image_path: str, regions: list, output_path: str):
 OCR_CHUNK_SIZE = int(os.environ.get("OCR_CHUNK_SIZE", "5"))
 
 # VLM_CHUNK_SIZE: VLM 한 번 로드로 처리할 페이지 수
-#   - VLM 모델(Qwen2.5-VL-7B, 4bit)은 약 6GB VRAM 사용 → Surya보다 메모리 사용량이 큼
+#   - VLM 모델(Qwen3-VL-4B): VRAM 자동 감지로 4bit(~2.5GB) / 8bit(~4.5GB) 선택 — image_pipeline 상단 _auto_detect_vram_settings
 #   - 값이 너무 크면: OOM 위험, 번역 실패 시 재처리 범위 증가
 #   - 값이 너무 작으면: 모델 로드/언로드 오버헤드 증가 (청크당 ~8초)
-#   - 권장: 1-5 (8GB VRAM 기준 2가 적정, OCR보다 작게 설정)
+#   - 권장: 1-5 (6GB VRAM 4bit 기준 2가 적정, OCR보다 작게 설정)
 VLM_CHUNK_SIZE = int(os.environ.get("VLM_CHUNK_SIZE", "2"))
 
 
@@ -1375,8 +1430,16 @@ VLM_CHUNK_SIZE = int(os.environ.get("VLM_CHUNK_SIZE", "2"))
 # 중간 결과 캐시 (재시작 지원)
 # ============================================================
 def get_cache_dir(slide_id: str) -> Path:
-    """슬라이드별 캐시 디렉토리"""
-    cache_dir = Path(os.environ.get("CACHE_DIR", "uploads/cache")) / slide_id
+    """슬라이드별 중간 결과 캐시 디렉토리 (OCR/번역 재시작 지원).
+    기본 위치는 DATA_ROOT/uploads/cache/ — install dir 재설치로 덮어써져도 보존.
+    env CACHE_DIR 로 override 가능 (절대경로 권장 — 상대경로면 spawn CWD 기준이라 불안정).
+    """
+    override = os.environ.get("CACHE_DIR")
+    if override:
+        base = Path(override)
+    else:
+        base = _DATA_ROOT / "uploads" / "cache"
+    cache_dir = base / slide_id
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 

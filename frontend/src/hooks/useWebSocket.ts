@@ -100,6 +100,10 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
   const setLectureTitle = useLectureStore((s) => s.setLectureTitle)
   const setSlideFilename = useLectureStore((s) => s.setSlideFilename)
   const setSessionId = useLectureStore((s) => s.setSessionId)
+  const setModelMode = useLectureStore((s) => s.setModelMode)
+  const setModelsReady = useLectureStore((s) => s.setModelsReady)
+  const setToastMessage = useLectureStore((s) => s.setToastMessage)
+  const bumpSlideLibraryRefreshKey = useLectureStore((s) => s.bumpSlideLibraryRefreshKey)
   const studentName = useLectureStore((s) => s.studentName)
 
   const lecturerName = usePreferencesStore((s) => s.lecturerName)
@@ -297,6 +301,57 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
       case 'session_started':
         // 강의자: 강의 시작 시 자막 세션 ID 수신
         if (data.session_id) setSessionId(data.session_id as string)
+        break
+
+      case 'lecture_start_rejected':
+        // 옵션 C 가드: backend 가 슬라이드 처리 중 강의 시작 거부.
+        // 옵션 D 의 modelsReady 가드가 버튼을 비활성으로 만들기 때문에 정상 흐름에선 여기 도달 안 함.
+        // 도달했다면 race — 로그만 남기고 store 에러 상태로 표시 (alert 는 Electron UX 부적합으로 미사용).
+        if (role === 'lecturer') {
+          const msg = (data.message as string) || '강의를 시작할 수 없습니다.'
+          console.warn('[WebSocket] 강의 시작 거부:', data.reason, msg)
+          setToastMessage(msg)
+        }
+        break
+
+      case 'mode_change':
+        // 옵션 D: backend 가 모드 전환 시 push. 강의자만 받음 (manager.lecturer 로 전송).
+        // modelsReady 기준으로 강의 시작 버튼 / SlideUpload 의 선제 활성/비활성 가드.
+        if (role === 'lecturer') {
+          const m = (data.mode as string) || 'idle'
+          setModelMode(
+            (m === 'slide' || m === 'realtime' || m === 'switching' ? m : 'idle') as
+              'idle' | 'slide' | 'switching' | 'realtime'
+          )
+          setModelsReady(!!data.realtime_ready)
+        }
+        break
+
+      case 'toast':
+        // backend 가 글로벌 토스트 메시지 push (VLM 다운 안내 등).
+        // App.tsx 의 GlobalToast 가 자동 4초 dismiss.
+        if (role === 'lecturer' && data.message) {
+          setToastMessage(data.message as string)
+        }
+        break
+
+      case 'slide_status_update':
+        // backend process_slide / process_slide_pdf_layer 완료/실패 시 강의자에게 push.
+        // polling 끊긴 경우에도 즉시 UI 복구 — 현재 선택된 슬라이드면 slideStatus 갱신,
+        // 항상 라이브러리 refresh 트리거해서 라이브러리 안 자료 상태도 갱신.
+        if (role === 'lecturer') {
+          const sid = data.slide_id as string | undefined
+          const newStatus = data.status as string | undefined
+          if (sid && newStatus) {
+            const currentSlideId = useLectureStore.getState().slideId
+            if (currentSlideId === sid) {
+              if (newStatus === 'completed') setSlideStatus('ready')
+              // failed 는 slideStatus enum 에 없어 — 'none' 으로 reset 해서 dropzone 다시 보이게
+              else if (newStatus === 'failed') setSlideStatus('none')
+            }
+            bumpSlideLibraryRefreshKey()
+          }
+        }
         break
 
       case 'lecture_end':
