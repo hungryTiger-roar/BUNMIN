@@ -280,14 +280,44 @@ function Student() {
   const sendRef = useRef<((data: object) => void) | null>(null)
 
   const handleWebRtcOffer = useCallback(async (sdp: RTCSessionDescriptionInit) => {
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close()
+    // 진단: 받은 offer 의 m=audio 방향
+    const offerAudioDir = (sdp.sdp ?? '').match(/m=audio[\s\S]*?(?=m=|$)/)?.[0]?.match(/a=(sendrecv|sendonly|recvonly|inactive)/)?.[1] ?? '?'
+    console.log(`[SDP] offer 수신 audio direction=${offerAudioDir}`)
+
+    // 재협상 offer 지원 — 기존 PC 가 있고 stable 이면 그 위에서 setRemoteDescription.
+    // 강사가 micStream 늦게 잡힌 뒤 트랙 attach 하면 SDP 재협상이 필요한데, 그때 PC 를
+    // 닫고 새로 만들면 ontrack/MediaStream/DelayNode 파이프라인이 끊겨서 의미 없음.
+    const existingPc = peerConnectionRef.current
+    if (existingPc && (existingPc.signalingState === 'stable' || existingPc.signalingState === 'have-local-offer')) {
+      try {
+        await existingPc.setRemoteDescription(sdp)
+        const answer = await existingPc.createAnswer()
+        await existingPc.setLocalDescription(answer)
+        const ansDir = (existingPc.localDescription?.sdp ?? '').match(/m=audio[\s\S]*?(?=m=|$)/)?.[0]?.match(/a=(sendrecv|sendonly|recvonly|inactive)/)?.[1] ?? '?'
+        console.log(`[SDP] 재협상 answer 전송 audio direction=${ansDir}`)
+        sendRef.current?.({ type: 'webrtc_answer', sdp: existingPc.localDescription })
+        console.log('[Student] 재협상 answer 전송 (기존 PC 유지)')
+        return
+      } catch (err) {
+        console.error('[Student] 재협상 실패, PC 재생성으로 폴백:', err)
+        existingPc.close()
+        peerConnectionRef.current = null
+      }
+    } else if (existingPc) {
+      // signaling state 가 비정상 — 안전하게 재생성
+      existingPc.close()
       peerConnectionRef.current = null
     }
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     })
     peerConnectionRef.current = pc
+    pc.onconnectionstatechange = () => {
+      console.log(`[PC] connectionState=${pc.connectionState}`)
+    }
+    pc.oniceconnectionstatechange = () => {
+      console.log(`[PC] iceConnectionState=${pc.iceConnectionState}`)
+    }
     pc.ontrack = (e) => {
       if (e.track.kind === 'video') {
         const stream = e.streams[0]
@@ -296,6 +326,12 @@ function Student() {
           screenVideoRef.current.srcObject = stream
         }
       } else if (e.track.kind === 'audio') {
+        // 진단: 트랙 muted 상태와 이후 변화 추적. WebRTC 트랙은 RTP 가 안 흐를 때
+        // muted=true 가 됨. "트랙 받았는데 무음" 시나리오에서 결정적 단서.
+        console.log(`[Track] audio 도착: id=${e.track.id} muted=${e.track.muted} readyState=${e.track.readyState}`)
+        e.track.onunmute = () => console.log(`[Track] audio onunmute → RTP 흐름 시작 (id=${e.track.id})`)
+        e.track.onmute = () => console.log(`[Track] audio onmute → RTP 끊김 (id=${e.track.id})`)
+        e.track.onended = () => console.log(`[Track] audio onended (id=${e.track.id})`)
         const audioStream = new MediaStream([e.track])
         // <audio> 엘리먼트: 트랙 keepalive 용 srcObject 만 유지, 출력은 항상 muted.
         // 실제 재생은 Web Audio API (DelayNode → GainNode) 라인 — 자막/그림과 같은
@@ -769,7 +805,11 @@ function Student() {
     const gain = gainNodeRef.current
     const ctx = audioContextRef.current
     if (gain && ctx) {
-      const target = (audioLang === 'original' && !isMuted) ? (volume / 100) : 0
+      // 일시정지 중엔 원본 음성 강제 mute — TTS 는 unitPlayer 가 lifecycle 로 gate 하지만
+      // 원본 오디오는 별도 Web Audio 라인이라 여기서 직접 처리.
+      const target = (audioLang === 'original' && !isMuted && !isPaused) ? (volume / 100) : 0
+      // 진단 로그: audioLang/volume/muted/paused 변화 시 GainNode 목표값 출력.
+      console.log(`[OriginalAudio] gain effect audioLang=${audioLang} muted=${isMuted} paused=${isPaused} volume=${volume} target=${target}`)
       // 10ms 선형 ramp — 사람의 짧은 gap 감지 임계(~5-10ms) 아래라 "즉시" 로 느껴지면서
       // sample boundary 클릭/팝 차단. (이전 setTargetAtTime(0.05) 는 ~250ms 까지 끌어
       // 토글 시 부드럽지만 살짝 느린 감 있었음.)
@@ -778,7 +818,26 @@ function Student() {
       gain.gain.setValueAtTime(gain.gain.value, now)
       gain.gain.linearRampToValueAtTime(target, now + 0.01)
     }
-  }, [audioLang, volume, isMuted, isAudioUnlocked])
+  }, [audioLang, volume, isMuted, isPaused, isAudioUnlocked])
+
+  // 진단: 5초마다 WebRTC inbound audio stats 출력 — RTP 가 실제로 흐르는지 확인.
+  // "트랙은 받았는데 소리 무음" 시나리오에서 packetsReceived 가 0 이면 강사측 송신 문제,
+  // 0보다 크면 학생측 재생 단계 문제 (GainNode/AudioContext 등).
+  useEffect(() => {
+    const id = window.setInterval(async () => {
+      const pc = peerConnectionRef.current
+      if (!pc) return
+      try {
+        const stats = await pc.getStats()
+        stats.forEach((report) => {
+          if (report.type === 'inbound-rtp' && report.kind === 'audio') {
+            console.log(`[Stats] inbound audio: packets=${report.packetsReceived} bytes=${report.bytesReceived} jitter=${report.jitter?.toFixed?.(3) ?? '?'}`)
+          }
+        })
+      } catch { /* getStats 실패 — 무시 */ }
+    }, 5000)
+    return () => window.clearInterval(id)
+  }, [])
 
   useEffect(() => {
     chatScrollRef.current?.scrollTo({

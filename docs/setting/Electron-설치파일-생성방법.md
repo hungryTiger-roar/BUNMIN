@@ -170,7 +170,11 @@ npm run build:backend \
 
 VLM 동봉본 만들려면 electron:build 뒤에 `cp -r models/qwen3-vl-4b-instruct setup/win-unpacked/resources/backend/models/` 한 줄 끼우고 `installer.iss`를 (A) 형태로 수정.
 
-> **⚠ 빌드 순서 주의**: PyInstaller가 `frontend/dist/`를 그 시점에 캡처해 `_internal/frontend_dist/`에 임베드합니다. 만약 PyInstaller 후에 `npm run build --prefix frontend`로 frontend를 다시 빌드하면 PyInstaller bundle의 frontend는 stale해집니다. 프론트엔드만 수정한 경우 다음을 사용:
+> **⚠ 빌드 순서 주의**: PyInstaller가 `frontend/dist/`를 그 시점에 캡처해 `_internal/frontend_dist/`에 임베드합니다. 만약 PyInstaller 후에 `npm run build --prefix frontend`로 frontend를 다시 빌드하면 PyInstaller bundle의 frontend는 stale해집니다.
+>
+> **자동 가드** (`backend/aunion.spec` 상단): PyInstaller 실행 시 `frontend/dist/index.html` 이 존재하지 않으면 빌드를 **즉시 중단**하고 `먼저 npm run build --prefix frontend 실행하세요` 메시지를 띄움. 이전 buildchain 사고 (옛 frontend_dist 가 그대로 setup.exe 에 박힘) 재발 방지. `npm run build:installer` 정상 흐름은 영향 없음.
+>
+> 프론트엔드만 수정한 경우 다음을 사용:
 >
 > ```bash
 > # 백엔드 코드 변경 없을 때 — frontend만 다시 빌드 + 동봉본만 갱신

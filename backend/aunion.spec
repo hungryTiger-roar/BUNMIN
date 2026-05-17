@@ -86,6 +86,23 @@ datas += collect_data_files('surya')
 datas += copy_metadata('torchcodec')
 
 # 앱 디렉토리 포함
+# frontend/dist 존재 가드 — PyInstaller 가 stale/없는 dist 를 그대로 번들해서
+# setup.exe 안에 옛 프론트가 박히는 사고 방지 (사건 재발 방지).
+# PyInstaller spec namespace 에 __file__ 없음. SPECPATH (PyInstaller 가 주입하는 글로벌)
+# 를 써서 spec 파일이 어디서 실행되든 안정적으로 frontend/dist 위치 찾음.
+import os as _os
+_check_paths = [
+    _os.path.join(SPECPATH, '..', 'frontend', 'dist', 'index.html'),  # SPECPATH 기반 (정석)
+    _os.path.abspath('../frontend/dist/index.html'),                  # backend/ cwd 가정
+    _os.path.abspath('frontend/dist/index.html'),                     # 프로젝트 루트 cwd 가정
+]
+if not any(_os.path.exists(p) for p in _check_paths):
+    raise SystemExit(
+        'frontend/dist/index.html 이 없습니다. '
+        '먼저 `npm run build --prefix frontend` 로 프론트엔드를 빌드하세요.\n'
+        '확인한 경로: ' + ', '.join(_check_paths)
+    )
+
 datas += [
     ('app', 'app'),
     # 수강생 브라우저 접속용 프론트엔드 빌드 결과물

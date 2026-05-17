@@ -203,6 +203,11 @@ function Lecturer() {
   const handleWebRtcAnswer = useCallback(async (sender: string, sdp: RTCSessionDescriptionInit) => {
     const pc = peerConnectionsRef.current.get(sender)
     if (!pc) return
+    // 진단: 받은 answer 의 m=audio 방향 — sendonly/recvonly/sendrecv/inactive 중 무엇?
+    // 'inactive' 면 학생 측 SDP 협상에서 audio 가 비활성화 — 강사 송신해도 학생 무음.
+    const audioDirMatch = (sdp.sdp ?? '').match(/m=audio[\s\S]*?(?=m=|$)/)
+    const audioDir = audioDirMatch ? (audioDirMatch[0].match(/a=(sendrecv|sendonly|recvonly|inactive)/)?.[1] ?? '?') : 'no-m=audio'
+    console.log(`[SDP] answer 수신 ← ${sender} audio direction=${audioDir}`)
     try {
       await pc.setRemoteDescription(sdp)
     } catch (err) {
@@ -320,10 +325,14 @@ function Lecturer() {
       }
     }
     pc.onconnectionstatechange = () => {
+      console.log(`[PC] ${studentId} connectionState=${pc.connectionState}`)
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         peerConnectionsRef.current.delete(studentId)
         peerTransceiversRef.current.delete(studentId)
       }
+    }
+    pc.oniceconnectionstatechange = () => {
+      console.log(`[PC] ${studentId} iceConnectionState=${pc.iceConnectionState}`)
     }
     // sendonly transceiver 두 개 미리 등록 — 트랙 유무와 무관하게 m-line 확보.
     // 마이크/화면 한 쪽만 있어도 양쪽 swap 즉시 가능.
@@ -336,12 +345,17 @@ function Lecturer() {
     try {
       await audioTransceiver.sender.replaceTrack(micTrack)
       await videoTransceiver.sender.replaceTrack(screenTrack)
+      console.log(`[Lecturer] 초기 replaceTrack → ${studentId} audio=${micTrack?.id ?? 'null'} video=${screenTrack?.id ?? 'null'}`)
     } catch (err) {
       console.error('[Lecturer] 초기 replaceTrack 실패:', err)
     }
     try {
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
+      // 진단: 보낸 offer 의 m=audio 방향. mic 가 null 인 상태로 보내도 transceiver
+      // direction=sendonly 라 SDP 는 'a=sendonly' 가 정상. 'inactive' 면 그 자체가 버그.
+      const audioDir = (pc.localDescription?.sdp ?? '').match(/m=audio[\s\S]*?(?=m=|$)/)?.[0]?.match(/a=(sendrecv|sendonly|recvonly|inactive)/)?.[1] ?? '?'
+      console.log(`[SDP] 초기 offer 전송 → ${studentId} audio direction=${audioDir}`)
       send({ type: 'webrtc_offer', target: studentId, sdp: pc.localDescription })
     } catch (err) {
       console.error('[Lecturer] createOffer failed:', err)
@@ -376,23 +390,63 @@ function Lecturer() {
       }
     })
 
-    // 기존 학생: 트랙만 swap — PC 재생성 없음, audio 끊김 없음.
-    // micStream/screenStream 둘 다 effect 의존성이라 한 쪽 변경에도 이 분기 실행됨.
+    // 트랙 swap — 등록된 모든 transceiver 에 무조건 replaceTrack 호출.
+    // 신규 학생도 createOfferForStudent 의 async 구간에서 mic 가 늦게 켜질 수 있어
+    // 같은 micStream 으로 한 번 더 호출. replaceTrack 은 동일 track 시 no-op 이라 안전.
     const micTrack = micStream?.getAudioTracks()[0] ?? null
     const screenTrack = screenStream?.getVideoTracks()[0] ?? null
     peerTransceiversRef.current.forEach(({ audio, video }, studentId) => {
-      // 신규 학생은 createOfferForStudent 안에서 이미 동일한 replaceTrack 을 호출했으므로 skip.
-      if (!prevIds.has(studentId)) return
+      // null → real-track 첫 attach 감지: replaceTrack 만으로는 일부 Chrome 에서
+      // SDP 차원의 m=audio 방향이 활성화 안 돼 RTP 가 안 흐름. 새 offer 보내 재협상.
+      const prevAudioTrack = audio.sender.track
+      const prevVideoTrack = video.sender.track
+      const needsRenegotiate = (!prevAudioTrack && micTrack) || (!prevVideoTrack && screenTrack)
+
       audio.sender.replaceTrack(micTrack).catch((e) => console.error('[Lecturer] replaceTrack audio:', e))
       video.sender.replaceTrack(screenTrack).catch((e) => console.error('[Lecturer] replaceTrack video:', e))
+      console.log(`[Lecturer] swap → ${studentId} audio=${micTrack?.id ?? 'null'} video=${screenTrack?.id ?? 'null'} renegotiate=${needsRenegotiate}`)
+
+      if (needsRenegotiate) {
+        const pc = peerConnectionsRef.current.get(studentId)
+        if (pc && pc.signalingState === 'stable') {
+          pc.createOffer()
+            .then((offer) => pc.setLocalDescription(offer))
+            .then(() => {
+              // 진단: 재협상 offer 의 m=audio 방향 확인
+              const audioDir = (pc.localDescription?.sdp ?? '').match(/m=audio[\s\S]*?(?=m=|$)/)?.[0]?.match(/a=(sendrecv|sendonly|recvonly|inactive)/)?.[1] ?? '?'
+              console.log(`[SDP] 재협상 offer 전송 → ${studentId} audio direction=${audioDir}`)
+              send({ type: 'webrtc_offer', target: studentId, sdp: pc.localDescription })
+              console.log(`[Lecturer] 재협상 offer 전송 → ${studentId} (first-attach 후)`)
+            })
+            .catch((e) => console.error('[Lecturer] 재협상 실패:', e))
+        }
+      }
     })
 
     prevStudentIdsRef.current = currentIds
-  }, [screenStream, micStream, participants.students, createOfferForStudent])
+  }, [screenStream, micStream, participants.students, createOfferForStudent, send])
 
   useEffect(() => {
     connect()
   }, [connect])
+
+  // 진단: 5초마다 각 학생 PC 의 outbound audio stats 출력. "swap audio=<id>" 후에도
+  // 학생이 무음이면 packetsSent 가 정말 흐르는지 확인 — 0 이면 송신 자체가 안 됨.
+  useEffect(() => {
+    const id = window.setInterval(async () => {
+      for (const [studentId, pc] of peerConnectionsRef.current.entries()) {
+        try {
+          const stats = await pc.getStats()
+          stats.forEach((report) => {
+            if (report.type === 'outbound-rtp' && report.kind === 'audio') {
+              console.log(`[Stats] outbound audio → ${studentId}: packets=${report.packetsSent} bytes=${report.bytesSent}`)
+            }
+          })
+        } catch { /* getStats 실패 — 무시 */ }
+      }
+    }, 5000)
+    return () => window.clearInterval(id)
+  }, [])
 
   // 강사 기본값 — 원본 PDF 보기. lectureStore 의 default 는 'translated' (수강자 기준).
   // 강사 페이지 mount 시 강사용으로 override. 이후 강사가 토글로 변경 가능.

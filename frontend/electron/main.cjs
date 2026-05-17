@@ -300,7 +300,11 @@ function startTurnServer() {
     appendLog(`[TURN] 0.0.0.0:47878 listening, externalIps=${lanIp}`)
     devLog(`TURN 서버 시작: 0.0.0.0:47878 (externalIps=${lanIp})`)
   } catch (err) {
-    appendLog(`[TURN] 시작 실패: ${err && err.message ? err.message : err}`)
+    const msg = err && err.message ? err.message : String(err)
+    appendLog(`[TURN] 시작 실패: ${msg}`)
+    // renderer 로 경고 흘려 사용자에게 노출 — P2P 차단 환경(SSAFY 등)에서 학생 무음
+    // 시 원인 추적이 어려워서 추가. 정상 환경에선 catch 자체가 안 들어옴.
+    sendLog(`[경고] TURN 서버 시작 실패 — P2P 차단된 환경이면 학생 음성이 들리지 않을 수 있습니다 (${msg})`)
     console.error('[TURN] 시작 실패:', err)
     // TURN 실패해도 앱은 계속 — P2P 가능 환경에선 동작 가능, 아니면 ICE failed 로그
   }
