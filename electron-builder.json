@@ -4,26 +4,51 @@
   "directories": {
     "output": "setup"
   },
+  "files": [
+    "frontend/dist/**/*",
+    "frontend/electron/**/*",
+    "frontend/package.json",
+    "package.json",
+    "node_modules/**/*",
+    "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+    "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
+    "!**/node_modules/*.d.ts",
+    "!**/node_modules/.bin",
+    "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
+    "!**/{__pycache__,*.pyc}"
+  ],
   "extraResources": [
     {
       "from": "backend/dist/aunion_backend",
       "to": "backend",
       "filter": ["**/*"]
+    },
+    {
+      "from": ".env.example",
+      "to": "backend/.env"
+    },
+    {
+      "from": "models/whisper-large-v3-turbo-ct2-int8",
+      "to": "backend/models/whisper-large-v3-turbo-ct2-int8",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "models/nllb-200-distilled-600M-ct2",
+      "to": "backend/models/nllb-200-distilled-600M-ct2",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "config",
+      "to": "backend/config",
+      "filter": ["**/*.csv"]
     }
   ],
   "compression": "store",
   "win": {
     "target": [
-      { "target": "nsis", "arch": ["x64"] }
+      { "target": "dir", "arch": ["x64"] }
     ],
-    "requestedExecutionLevel": "requireAdministrator"
-  },
-  "nsis": {
-    "oneClick": false,
-    "allowToChangeInstallationDirectory": true,
-    "createDesktopShortcut": true,
-    "createStartMenuShortcut": true,
-    "deleteAppDataOnUninstall": true,
-    "language": "1042"
+    "requestedExecutionLevel": "asInvoker",
+    "icon": "frontend/electron/assets/icon.ico"
   }
 }

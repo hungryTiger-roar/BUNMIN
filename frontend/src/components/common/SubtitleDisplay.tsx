@@ -3,12 +3,24 @@ interface Subtitle {
   original: string
   translated: string
   timestamp: number
+  inputTime?: number
+  asrMs?: number
+  nmtMs?: number
+  ttsMs?: number
 }
 
 interface SubtitleDisplayProps {
   subtitles: Subtitle[]
   maxItems?: number
   variant?: 'light' | 'dark'
+}
+
+function formatTime(ms: number): string {
+  const d = new Date(ms)
+  const hh = d.getHours().toString().padStart(2, '0')
+  const mm = d.getMinutes().toString().padStart(2, '0')
+  const ss = d.getSeconds().toString().padStart(2, '0')
+  return `${hh}:${mm}:${ss}`
 }
 
 function SubtitleDisplay({ subtitles, maxItems = 3, variant = 'light' }: SubtitleDisplayProps) {
@@ -27,6 +39,7 @@ function SubtitleDisplay({ subtitles, maxItems = 3, variant = 'light' }: Subtitl
       {recentSubtitles.map((subtitle, index) => {
         const isLatest = index === recentSubtitles.length - 1
         const opacity = isLatest ? 1 : 0.6
+        const latencyMs = subtitle.inputTime ? subtitle.timestamp - subtitle.inputTime : null
 
         return (
           <div
@@ -47,6 +60,25 @@ function SubtitleDisplay({ subtitles, maxItems = 3, variant = 'light' }: Subtitl
                   <span className="inline-block w-8 text-xs font-medium text-blue-500">[EN]</span>
                   {subtitle.translated}
                 </p>
+                <p className="text-xs text-slate-400 pl-8">
+                  입력 {subtitle.inputTime ? formatTime(subtitle.inputTime) : '--:--:--'}
+                  {' → '}
+                  출력 {formatTime(subtitle.timestamp)}
+                  {latencyMs !== null && (
+                    <span className={`ml-1 font-medium ${latencyMs < 3000 ? 'text-green-500' : latencyMs < 6000 ? 'text-yellow-500' : 'text-red-500'}`}>
+                      ({(latencyMs / 1000).toFixed(1)}s)
+                    </span>
+                  )}
+                </p>
+                {/* 단계별 latency — backend 가 server 단일 시계로 측정한 ASR/MT,
+                    학생 브라우저가 측정한 TTS. 시계 동기화 caveat 무관. */}
+                {(subtitle.asrMs !== undefined || subtitle.nmtMs !== undefined || subtitle.ttsMs !== undefined) && (
+                  <p className="text-xs text-slate-400 pl-8">
+                    {subtitle.asrMs !== undefined && <span className="mr-2">ASR {subtitle.asrMs}ms</span>}
+                    {subtitle.nmtMs !== undefined && <span className="mr-2">MT {subtitle.nmtMs}ms</span>}
+                    {subtitle.ttsMs !== undefined && <span className="mr-2">TTS {subtitle.ttsMs}ms</span>}
+                  </p>
+                )}
               </div>
             ) : (
               // 수강자용 (어두운 배경)
@@ -57,6 +89,23 @@ function SubtitleDisplay({ subtitles, maxItems = 3, variant = 'light' }: Subtitl
                 <p className="text-sm text-slate-400 mt-1">
                   {subtitle.original}
                 </p>
+                {(subtitle.asrMs !== undefined || subtitle.nmtMs !== undefined || subtitle.ttsMs !== undefined) && (() => {
+                  // 전체 = 단계별 처리 시간 합 (ASR + MT + TTS).
+                  // 네트워크/큐 대기 제외 — 순수 처리 비용만. 시계 동기화 무관 (각 단계
+                  // 가 단일 시계로 측정됨).
+                  const sumMs = (subtitle.asrMs ?? 0) + (subtitle.nmtMs ?? 0) + (subtitle.ttsMs ?? 0)
+                  const sumColor = sumMs < 3000 ? 'text-green-400'
+                    : sumMs < 6000 ? 'text-yellow-400'
+                    : 'text-red-400'
+                  return (
+                    <p className="text-xs text-slate-500 mt-1">
+                      {subtitle.asrMs !== undefined && <span className="mr-2">ASR {subtitle.asrMs}ms</span>}
+                      {subtitle.nmtMs !== undefined && <span className="mr-2">MT {subtitle.nmtMs}ms</span>}
+                      {subtitle.ttsMs !== undefined && <span className="mr-2">TTS {subtitle.ttsMs}ms</span>}
+                      <span className={`font-medium ${sumColor}`}>전체 {(sumMs / 1000).toFixed(1)}s</span>
+                    </p>
+                  )
+                })()}
               </div>
             )}
           </div>

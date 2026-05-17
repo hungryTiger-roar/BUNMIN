@@ -5,6 +5,12 @@ interface Subtitle {
   original: string
   translated: string
   timestamp: number
+  inputTime?: number  // 오디오 전송 시각 (ms)
+  // 단계별 latency — backend 가 server 단일 시계로 측정한 duration (ms).
+  // 시계 동기화 무관하게 각 단계 처리 시간을 정확히 표시.
+  asrMs?: number
+  nmtMs?: number
+  ttsMs?: number      // 학생 브라우저에서 TTS 시작 시 useTTS 가 update
 }
 
 interface SlidePage {
@@ -13,7 +19,58 @@ interface SlidePage {
   ocrText?: string
 }
 
+export interface ChatMessage {
+  id: string
+  sender: 'lecturer' | 'student'
+  name: string
+  text: string
+  timestamp: number
+  studentId?: string
+}
+
+export interface Participant {
+  id: string
+  name: string
+  /** 학생이 듣는 음성 모드 — 'original' 이면 강사 원본 목소리, 그 외는 TTS 번역본. */
+  audioLang: string
+}
+
+export interface Participants {
+  lecturer: { name: string; connected: boolean } | null
+  students: Participant[]
+}
+
+type ModelMode = 'idle' | 'slide' | 'switching' | 'realtime'
+
 interface LectureState {
+  // AI 모델 모드 상태
+  modelMode: ModelMode
+  setModelMode: (mode: ModelMode) => void
+
+  // 옵션 D: ASR + NMT 둘 다 적재되어 강의 시작 가능한 상태인지 (backend mode_change push + polling 으로 갱신).
+  // 강의 시작 버튼 / SlideUpload 의 선제 가드 — modelsReady 가 false 면 버튼 비활성.
+  modelsReady: boolean
+  setModelsReady: (ready: boolean) => void
+
+  // 글로벌 토스트 메시지 (alert 대체) — Electron 환경에서 native blocking dialog 피하기 위한 inline 표시.
+  // App.tsx 의 토스트 컴포넌트가 이 상태를 읽어 자동 dismiss. 사용처: 강의 시작 거부, 슬라이드 삭제 실패 등.
+  toastMessage: string | null
+  setToastMessage: (msg: string | null) => void
+
+  // 슬라이드 라이브러리 강제 새로고침 트리거 — backend slide_status_update WS push 받았을 때 bump.
+  // SlideUpload → SlideLibrary 의 refreshKey 와 합쳐서 라이브러리가 fetch 다시 실행하게 함.
+  // polling 끊긴 케이스에서 즉시 UI 복구 보장.
+  slideLibraryRefreshKey: number
+  bumpSlideLibraryRefreshKey: () => void
+
+  // 수강자 이름
+  studentName: string
+  setStudentName: (name: string) => void
+
+  // 현재 접속 중인 수강자 수 (서버가 student_count 메시지를 보낼 때 갱신)
+  studentCount: number
+  setStudentCount: (count: number) => void
+
   // 연결 상태
   isConnected: boolean
   setConnected: (connected: boolean) => void
@@ -46,6 +103,10 @@ interface LectureState {
   nextPage: () => void
   prevPage: () => void
 
+  // 강의자료(슬라이드) 보기 모드 — 강의자/수강자 공통, 자막용 viewMode와 별개
+  materialMode: 'original' | 'translated'
+  setMaterialMode: (mode: 'original' | 'translated') => void
+
   // 수강자 상태
   viewMode: 'original' | 'translated'
   isAudioOn: boolean
@@ -55,25 +116,45 @@ interface LectureState {
   setAudioOn: (on: boolean) => void
   setSubtitleOn: (on: boolean) => void
 
-  // 자막 설정 (커스터마이징)
-  subtitleSettings: {
-    fontSize: number
-    position: 'top' | 'bottom'
-    opacity: number
-  }
-  setSubtitleSettings: (settings: Partial<LectureState['subtitleSettings']>) => void
-
   // 실시간 데이터
   subtitles: Subtitle[]
 
-  addSubtitle: (subtitle: Omit<Subtitle, 'id'>) => void
+  addSubtitle: (subtitle: Omit<Subtitle, 'id'>) => string  // 새 subtitle id 반환 (TTS 매칭용)
+  updateSubtitleTts: (id: string, ttsMs: number) => void
   clearSubtitles: () => void
+
+  // 채팅
+  chatMessages: ChatMessage[]
+  addChatMessage: (message: ChatMessage) => void
+  clearChatMessages: () => void
+
+  // 참여자
+  participants: Participants
+  setParticipants: (participants: Participants) => void
+
+  // 강의 제목 (강사가 설정) + 강의자료 파일명 (fallback)
+  lectureTitle: string
+  slideFilename: string
+  setLectureTitle: (title: string) => void
+  setSlideFilename: (filename: string) => void
+
+  // 자막 다운로드용 세션 ID
+  sessionId: string | null
+  setSessionId: (id: string | null) => void
 
   // 전체 초기화
   reset: () => void
 }
 
 const initialState = {
+  modelMode: 'idle' as ModelMode,
+  modelsReady: false,  // 옵션 D: 초기엔 false — backend 가 ASR/NMT 적재 완료해 mode_change push 또는 5초 polling 으로 true 전송할 때까지 강의 시작 차단.
+                       // 이전엔 true 였으나 .exe 시작 직후 race window 에서 강의 시작 → 첫 발화 손실 발견 → false 안전.
+                       // backend 응답 정상이면 5초 polling 1회 안에 true 로 set 됨. backend 영구 다운이면 차단 유지 (정확한 동작).
+  toastMessage: null as string | null,
+  slideLibraryRefreshKey: 0,
+  studentName: '',
+  studentCount: 0,
   isConnected: false,
   isMicOn: false,
   isLectureStarted: false,
@@ -85,19 +166,30 @@ const initialState = {
   currentPage: 1,
   totalPages: 0,
   slidePages: [],
+  materialMode: 'translated' as const,
   viewMode: 'original' as const,
   isAudioOn: true,
   isSubtitleOn: true,
-  subtitleSettings: {
-    fontSize: 18,
-    position: 'bottom' as const,
-    opacity: 0.9,
-  },
   subtitles: [],
+  chatMessages: [] as ChatMessage[],
+  participants: { lecturer: null, students: [] } as Participants,
+  lectureTitle: '',
+  slideFilename: '',
+  sessionId: null,
 }
 
 export const useLectureStore = create<LectureState>((set, get) => ({
   ...initialState,
+
+  // AI 모델 모드 상태
+  setModelMode: (mode) => set({ modelMode: mode }),
+  setModelsReady: (ready) => set({ modelsReady: ready }),
+  setToastMessage: (msg) => set({ toastMessage: msg }),
+  bumpSlideLibraryRefreshKey: () => set((s) => ({ slideLibraryRefreshKey: s.slideLibraryRefreshKey + 1 })),
+
+  // 수강자 이름
+  setStudentName: (name) => set({ studentName: name }),
+  setStudentCount: (count) => set({ studentCount: count }),
 
   // 연결 상태
   setConnected: (connected) => set({ isConnected: connected }),
@@ -130,24 +222,52 @@ export const useLectureStore = create<LectureState>((set, get) => ({
     }
   },
 
+  // 강의자료 보기 모드
+  setMaterialMode: (mode) => set({ materialMode: mode }),
+
   // 수강자 상태
   setViewMode: (mode) => set({ viewMode: mode }),
   setAudioOn: (on) => set({ isAudioOn: on }),
   setSubtitleOn: (on) => set({ isSubtitleOn: on }),
 
-  // 자막 설정
-  setSubtitleSettings: (settings) => set((state) => ({
-    subtitleSettings: { ...state.subtitleSettings, ...settings }
-  })),
-
-  // 실시간 데이터
-  addSubtitle: (subtitle) => set((state) => ({
-    subtitles: [
-      ...state.subtitles.slice(-50), // 최근 50개만 유지
-      { ...subtitle, id: crypto.randomUUID() }
-    ]
+  // 실시간 데이터 — id 발급은 set 외부에서 한 번만 (closure 안에서 호출 시마다 다시 만들면 set 안에서 못 빼냄)
+  addSubtitle: (subtitle) => {
+    // crypto.randomUUID는 secure context(HTTPS/localhost/file://) 전용 →
+    // LAN HTTP로 접속한 수강자에서는 throw되어 자막이 누락됨
+    const id = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+    set((state) => ({
+      subtitles: [
+        ...state.subtitles.slice(-50), // 최근 50개만 유지
+        { ...subtitle, id }
+      ]
+    }))
+    return id
+  },
+  // TTS 시작 시점에 호출 — 해당 subtitle 의 ttsMs 만 patch.
+  updateSubtitleTts: (id, ttsMs) => set((state) => ({
+    subtitles: state.subtitles.map((s) =>
+      s.id === id ? { ...s, ttsMs } : s
+    )
   })),
   clearSubtitles: () => set({ subtitles: [] }),
+
+  // 채팅
+  addChatMessage: (message) => set((state) => ({
+    chatMessages: [...state.chatMessages.slice(-200), message],
+  })),
+  clearChatMessages: () => set({ chatMessages: [] }),
+
+  // 참여자
+  setParticipants: (participants) => set({ participants }),
+
+  // 강의 제목
+  setLectureTitle: (title) => set({ lectureTitle: title }),
+  setSlideFilename: (filename) => set({ slideFilename: filename }),
+
+  // 자막 세션 ID
+  setSessionId: (id) => set({ sessionId: id }),
 
   // 전체 초기화
   reset: () => set(initialState),

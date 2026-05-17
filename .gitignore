@@ -5,6 +5,7 @@ __pycache__/
 *.egg-info/
 .env
 .env.*
+!.env.example
 server.log
 error_log.txt
 *.log
@@ -13,6 +14,7 @@ error_log.txt
 setup/
 node_modules/
 *.tsbuildinfo
+build_tmp/
 
 # AI 모델 가중치 (어느 위치에 있어도 차단)
 *.bin
@@ -21,15 +23,15 @@ node_modules/
 *.pt
 *.pth
 
-# TTS 자동 다운로드 모델 파일
-backend/app/services/models/
+# VAD 런타임 모델 — 작은 크기(~2MB), 프론트엔드 필수 파일이므로 예외
+!frontend/public/silero_vad_*.onnx
 
-# 업로드 파일 (슬라이드, 이미지) — 루트 기준 실행 시 생성됨
+# 다운로드 모델 디렉토리 — 전체 ignore
+# (모델은 npm run setup 에서 받음, git 추적 X)
+models/
+
+# 업로드 파일 (슬라이드, 이미지) — 항상 프로젝트 루트에 생성됨
 uploads/
-# 백엔드 디렉토리에서 직접 실행 시 잘못 생성되는 경로
-backend/uploads/
-backend/slides/
-backend/dist/
 
 # 보안
 *.pem
@@ -59,5 +61,57 @@ Thumbs.db
 evaluation/pdfs/
 evaluation/datasets/ocr_pdfs/
 
+# 용어집 캐시 (glossary_builder.py가 런타임에 자동 생성)
+glossary/
+
 # Claude
 .claude/
+
+# 자동 생성 API 문서
+docs/api/
+
+# 테스트 파일 및 출력물 (프로젝트 루트)
+test_*.py
+test_*.png
+test_*.pdf
+test_*.json
+test_*.txt
+compare_*.py
+create_*.py
+inference_vlm.py
+run_test.bat
+check_p*.png
+*_regions.json
+*_translated*.json
+*_translated*.png
+
+# 레거시 스크립트 (v3 사용)
+translate_slide.py
+translate_slide_v2.py
+
+# 프론트엔드 빌드 캐시
+frontend/.vite/
+
+# 로컬 모델 캐시 (백엔드 서비스 자체 캐시)
+backend/app/services/models/
+
+# 로컬 데이터셋
+datasets/
+backend/app/services/slide_translation/glossaries/*.json
+
+# 임시 파일 (커밋 메시지 작성용 등 + 로컬 진단용 .ps1)
+*.tmp
+.tmp_*.ps1
+# 프로젝트 루트에 떨어진 진단 .ps1 (kill_*, check_*, verify_*, wipe_* 등 로컬 셸 도우미)
+# scripts/ 하위는 정식 빌드 스크립트라 제외 안 함
+/*.ps1
+
+# 백업 파일 (아이콘/로고 교체 시 남기는 .bak 등)
+*.bak
+
+# 로컬 설명용 HTML 문서 — 저장소에 안 올림 (프로젝트 문서는 docs/*.md)
+docs/*.html
+
+# onnxruntime-web 런타임 WASM — npm run setup 이 node_modules 에서 복사 (산출물, ~40MB)
+frontend/public/ort-wasm-simd-threaded.jsep.*
+frontend/public/ort-wasm-simd-threaded.jspi.*

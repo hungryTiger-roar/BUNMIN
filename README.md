@@ -12,7 +12,8 @@
 | Frontend | React + TypeScript + Vite |
 | Backend | FastAPI + uvicorn |
 | 실시간 통신 | WebSocket |
-| AI | Cohere ASR, Tencent HY-MT, Piper TTS, RapidOCR |
+| AI (백엔드) | ASR (Whisper turbo CT2), NMT (NLLB-200), Qwen3-VL-4B (슬라이드 번역), Surya OCR |
+| TTS (클라이언트) | piper-tts-web — 수강자 브라우저 내 CPU ONNX WASM |
 | 데스크탑 (선택) | Electron |
 
 ---
@@ -21,50 +22,37 @@
 
 ### 사전 준비
 
-- Node.js 18+
-- Python 3.10+
-- 루트와 프론트엔드 의존성 설치
+| 도구 | 버전 |
+|------|------|
+| Node.js | 18+ |
+| conda | Miniconda 또는 Anaconda |
+| NVIDIA 드라이버 | CUDA 12.6 호환 (GPU 사용 시) |
+
+### 초기 설치 (최초 1회)
 
 ```bash
-# 루트 (concurrently, Electron 관련 deps)
-npm install
-
-# 프론트엔드
-cd frontend && npm install && cd ..
+npm run setup
 ```
 
-- 백엔드 conda 환경
+conda 환경 생성(Python 3.11), Python 패키지 설치, AI 모델 다운로드(~10GB — Whisper-turbo 800MB + NLLB-200 600MB + Qwen3-VL-4B 8GB + Surya OCR 500MB)까지 자동으로 처리됩니다.
 
-```bash
-conda create -n aunion python=3.10
-conda activate aunion
-pip install -r backend/requirements.txt
+> **설치 시간**: 약 15~30분 (AI 모델 다운로드 포함, 회선 따라 다름)  
+> **GPU 없는 환경**: 자동으로 CPU 모드로 진행됩니다. 실시간 ASR 성능이 저하될 수 있습니다.
 
-# transformers 4.50+ 필요 (CohereLabs ASR 지원)
-pip install "transformers>=4.50.0"
-```
+### .env 설정
 
-GPU 사용 시 CUDA 버전 PyTorch 재설치 (`nvidia-smi` 우측 상단 숫자 기준):
-
-```bash
-# CUDA 11.8 → cu118 / CUDA 12.1 → cu121 / CUDA 12.4 이상 or 13.x → cu124
-pip install torch --index-url https://download.pytorch.org/whl/cu124
-```
-
-- 프로젝트 루트에 `.env` 파일 생성
+`npm run setup` 실행 후 `.env`가 자동 생성됩니다. 기본값으로 바로 사용 가능합니다.
 
 ```env
-# 필수: CohereLabs ASR 모델은 gated 모델 — HuggingFace에서 접근 승인 후 토큰 입력
-HF_TOKEN=hf_xxxxxxxxxxxx
+# HuggingFace 토큰 (선택사항 — 다운로드 속도 향상)
+HF_TOKEN=
 
-ASR_MODEL=CohereLabs/cohere-transcribe-03-2026
-NMT_MODEL=tencent/HY-MT1.5-1.8B
-TTS_MODEL=piper
-OCR_MODEL=rapidocr
+ASR_MODEL=models/whisper-large-v3-turbo-ct2-int8
+NMT_ASR_MODEL=facebook/nllb-200-distilled-600M
+OCR_MODEL=surya
 
 ASR_DEVICE=cuda
-NMT_DEVICE=cuda
-TTS_DEVICE=cpu
+NMT_ASR_DEVICE=cuda
 OCR_DEVICE=cpu
 ```
 
@@ -79,7 +67,7 @@ OCR_DEVICE=cpu
 npm run dev
 ```
 
-브라우저에서 `http://localhost:3000` 접속
+브라우저에서 `http://localhost:43000` 접속 (백엔드는 48000)
 
 ### Electron 개발
 
@@ -87,17 +75,14 @@ npm run dev
 npm run electron:dev
 ```
 
-### Electron 빌드 (배포용 exe)
+### Electron 빌드 (배포용 setup.exe)
 
 ```bash
-# 백엔드 먼저 빌드
-cd backend && pyinstaller aunion.spec && cd ..
-
-# Electron 패키징
-npm run electron:build
+# 통합 빌드 — backend PyInstaller + frontend Vite + electron-builder + Inno Setup
+npm run build:installer
 ```
 
-결과물: `setup/` 폴더에 NSIS 인스톨러 생성
+결과물: `setup/Aunion-AI-Setup-<version>.exe` (Inno Setup 인스톨러). 본체 ~3.5GB, 첫 실행 시 VLM(Qwen3-VL-4B ~8GB) 자동 다운로드 마법사가 뜸. 자세한 빌드 절차는 [Electron-설치파일-생성방법](docs/setting/Electron-설치파일-생성방법.md) 참고.
 
 ---
 
@@ -116,12 +101,9 @@ S14P31S205/
 │   ├── app/                  # 라우터 + 서비스
 │   └── run.py                # 진입점
 │
-├── evaluation/               # AI 모델 평가 스크립트
-│
 └── docs/                     # 문서
     ├── setting/              # 환경설정, 실행방법
-    ├── planning/             # 설계 문서
-    └── evaluation/           # 평가 시스템
+    └── planning/             # 설계 문서
 ```
 
 ---
@@ -134,4 +116,3 @@ S14P31S205/
 | [환경설정](docs/setting/환경설정.md) | .env 및 AI 모델 설정 |
 | [백엔드 설계](docs/planning/백엔드_설계.md) | API 명세, AI 파이프라인 |
 | [프론트 설계](docs/planning/프론트_설계.md) | 화면 구성, 디렉토리 구조 |
-| [평가 시스템](docs/evaluation/평가시스템.md) | AI 모델 품질/속도 평가 |

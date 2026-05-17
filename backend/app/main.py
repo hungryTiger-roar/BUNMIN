@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import contextlib
 import json
+import mimetypes
 import os
 import sys
 import threading
@@ -12,8 +13,55 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.config import ModelConfig
-from app.routers import ws, slides
+# ES 모듈 (.mjs) 과 WASM 확장자를 mimetypes 에 등록.
+# Python 기본 mimetypes 는 .mjs 를 모르므로 FileResponse 가 text/plain 으로 응답 →
+# 브라우저 strict MIME check 가 module script 거부 → ort-wasm-simd-threaded.mjs
+# 로드 실패 → VAD/마이크 시작 실패. (운영판에서 FastAPI 가 정적 파일 서빙할 때만 발생,
+# Vite dev 는 자체 미들웨어로 처리해서 영향 없음.)
+mimetypes.add_type('application/javascript', '.mjs')
+mimetypes.add_type('application/wasm', '.wasm')
+
+from app.config import ModelConfig, PROJECT_ROOT, resolve_model_dir
+from app.routers import ws, slides, transcripts, network, mode, install
+from app.utils.firewall import ensure_firewall_rule
+from app.utils.network import SERVER_PORT, get_lan_ip
+
+# VLM Base 모델: env 미설정이면 로컬 동봉본(qwen3-vl-4b-instruct) 우선,
+# 없으면 HF repo_id로 fallback. 사용자가 env로 명시하면 그 값 그대로.
+from pathlib import Path as _Path
+
+def _vlm_default() -> str:
+    """env 미지정 시 사용할 기본값. 로컬 디렉토리(USER_DATA → INSTALL → PROJECT_ROOT)가
+    있으면 그 경로, 없으면 HF repo_id 로 fallback 해 다운로드 트리거.
+    Electron 배포 환경에서 사용자별 모델 디렉토리를 우선 사용하기 위함."""
+    found = resolve_model_dir("qwen3-vl-4b-instruct")
+    return str(found) if found is not None else "Qwen/Qwen3-VL-4B-Instruct"
+
+
+def _resolve_vlm(value: str) -> str:
+    p = _Path(value)
+    if p.is_absolute():
+        # 절대 경로 — 디렉토리 존재하면 그대로, 없으면 기본값으로 fallback
+        if p.is_dir():
+            return value
+        return _vlm_default()
+    # 상대 경로면 다단계 폴백 (USER_DATA → INSTALL → PROJECT_ROOT)
+    found = resolve_model_dir(_Path(value).name)
+    if found is not None:
+        return str(found)
+    # PROJECT_ROOT 직접 검사 (호환성)
+    candidate = PROJECT_ROOT / value
+    if candidate.is_dir():
+        return str(candidate)
+    # 로컬 경로 형식인데 어디에도 없음 → HF repo_id 기본값으로 fallback
+    # (그렇지 않으면 _download_one이 "로컬 경로에 없습니다" 에러로 막힘)
+    if value.startswith(("models/", "models\\", "./", "../", ".\\", "..\\")):
+        return _vlm_default()
+    # repo_id 형식 (예: "Qwen/Qwen3-VL-4B-Instruct") — 그대로
+    return value
+
+
+VLM_BASE_MODEL = _resolve_vlm(os.environ.get("VLM_BASE_MODEL") or _vlm_default())
 
 # PyInstaller 번들 여부에 따라 frontend dist 경로 결정
 if getattr(sys, 'frozen', False):
@@ -22,17 +70,32 @@ else:
     _FRONTEND_DIST = os.path.join(os.path.dirname(__file__), '..', '..', 'frontend', 'dist')
 
 # 모델 로딩 상태 추적
+# status:
+#   - "starting"          백엔드 부팅 중
+#   - "wait_user_action"  사용자 다운로드 시작 클릭 대기 (VLM 미캐시 + 첫 실행)
+#   - "loading"           모델 다운로드/메모리 로드 중
+#   - "ready" / "ok"      준비 완료
+#   - "error"             실패
+# download (있을 때만):
+#   - phase: "downloading" | "verifying"
+#   - current_bytes, total_bytes, speed_bps, current_file
 _model_status = {
     "status": "starting",
     "message": "백엔드 시작 중...",
     "progress": 0,
     "models": {
         "asr": {"status": "pending", "progress": 0, "label": "ASR (음성인식)", "desc": ModelConfig.ASR_MODEL},
-        "nmt": {"status": "pending", "progress": 0, "label": "NMT (번역)", "desc": ModelConfig.NMT_MODEL},
-        "tts": {"status": "pending", "progress": 0, "label": "TTS (음성합성)", "desc": ModelConfig.TTS_MODEL},
+        "nmt_asr": {"status": "pending", "progress": 0, "label": "NMT-ASR (실시간 번역)", "desc": ModelConfig.NMT_ASR_MODEL},
         "ocr": {"status": "pending", "progress": 0, "label": "OCR (문자인식)", "desc": ModelConfig.OCR_MODEL},
+        "vlm": {"status": "pending", "progress": 0, "label": "VLM (슬라이드 번역)", "desc": VLM_BASE_MODEL},
     },
+    # downloads: 모델별 진행 정보 — 병렬 다운로드에서 단일 필드를 두 watcher 가 덮어쓰는
+    # 깜빡임 방지 위해 모델 키(asr/nmt_asr/ocr/vlm)로 분리. 완료 시 해당 키 제거.
+    "downloads": {},
 }
+
+# 사용자가 "다운로드 시작" 버튼 클릭 시 set — VLM 미캐시 첫 실행 흐름에서 대기 해제
+_start_download_event = threading.Event()
 
 # 병렬 다운로드 시 스레드별 모델 키 추적
 _thread_model_key = threading.local()
@@ -58,15 +121,50 @@ def _start_health_thread(port: int = 18765):
     print(f"[Health] 전용 서버 시작: port {port}", flush=True)
 
 
+def _is_local_path_format(value: str) -> bool:
+    """value가 HF repo_id가 아니라 로컬 경로 형식인지 판별."""
+    from pathlib import Path
+    if Path(value).is_absolute():
+        return True
+    return value.startswith(("models/", "models\\", "./", "../", ".\\", "..\\"))
+
+
+def _has_weights(directory) -> bool:
+    """디렉토리에 모델 가중치 파일이 있는지 (HF safetensors/bin 또는 CT2 model.bin)."""
+    from pathlib import Path
+    p = Path(directory)
+    if not p.is_dir():
+        return False
+    return (
+        any(p.rglob("*.safetensors"))
+        or any(p.rglob("*.bin"))
+        or (p / "model.bin").is_file()
+    )
+
+
 def _is_cached(model_name: str) -> bool:
-    """HuggingFace 캐시에 모델이 완전히 있는지 확인.
-    incomplete 파일이 있거나 모델 가중치(10MB 이상 파일)가 없으면 False.
-    'piper' 등 HF 외 모델은 True로 처리 (서비스 자체에서 다운로드)."""
+    """모델이 로컬 디렉토리 또는 HF 캐시에 있는지 판단.
+      - 로컬 경로 형식(절대/`models/...`): 디렉토리 + 가중치 존재 검사
+      - 단순 이름(piper, rapidocr): True (서비스 자체에서 처리)
+      - HF repo_id: (1) CT2 변환된 로컬 디렉토리(<name>-ct2) 우선 → (2) HF 캐시 검사
+    """
+    from pathlib import Path
+    # 로컬 경로 형식
+    if _is_local_path_format(model_name):
+        p = Path(model_name)
+        target = p if p.is_absolute() else (PROJECT_ROOT / model_name)
+        return _has_weights(target)
+    # 서비스 내부 처리 (piper, rapidocr 등)
     if "/" not in model_name:
         return True
+    # CT2 동봉본 검사 — NLLB 처럼 HF repo_id 가 default 지만 CT2 가 설치본에 동봉되는 케이스.
+    # NMTService 가 _ct2_model_dir 로 우선 로드하므로 이 디렉토리만 있으면 다운로드 불필요.
+    ct2_name = model_name.split("/")[-1] + "-ct2"
+    if resolve_model_dir(ct2_name) is not None:
+        return True
+    # HF repo_id → 캐시 검사
     try:
         from huggingface_hub import scan_cache_dir
-        from pathlib import Path
         cache_info = scan_cache_dir()
         for repo in cache_info.repos:
             if repo.repo_id == model_name:
@@ -133,15 +231,157 @@ def _track_all_downloads():
             _tqdm_auto.tqdm.update = original_auto
 
 
+def _hf_repo_total_bytes(repo_id: str) -> int:
+    """HF 모델 repo의 전체 다운로드 사이즈를 합산 (시간↑, 대신 정확한 진행률)."""
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi()
+        info = api.model_info(repo_id, files_metadata=True)
+        total = sum(s.size or 0 for s in info.siblings)
+        return total
+    except Exception as e:
+        print(f"[Download] 전체 사이즈 조회 실패 ({repo_id}): {e}", flush=True)
+        return 0
+
+
+def _hf_cache_dir_for(repo_id: str):
+    """HF 캐시 안 특정 repo의 디렉토리. 캐시 사이즈 polling 대상."""
+    from pathlib import Path
+    hf_home = Path(os.environ.get("HF_HOME", ""))
+    safe = repo_id.replace("/", "--")
+    return hf_home / "hub" / f"models--{safe}"
+
+
+def _measure_dir_size(directory) -> int:
+    """HF 캐시 모델 디렉토리의 다운로드 사이즈 측정.
+
+    HF Hub 의 두 가지 layout 을 모두 다루기 위해 `blobs/` 와 `snapshots/` 의
+    재귀 사이즈 중 **MAX** 를 반환:
+
+    - **Symlink 가능 환경** (Linux, Windows admin/dev): blobs/ 에 실제 파일 저장,
+      snapshots/ 는 symlink (디스크 사이즈 0). → MAX = blobs/.
+    - **Symlink 차단 환경** (우리 backend/run.py 패치): HF Hub 이 blobs/ 건너뛰고
+      snapshots/ 에 직접 다운로드. blobs/ 0, snapshots/ 14GB. → MAX = snapshots/.
+    - **드물게 양쪽 다 차있을 때** (copy fallback): 같은 콘텐츠가 양쪽에 있어
+      더블 카운트 회피. → MAX = 단일 콘텐츠 사이즈.
+
+    이전 구현은 `blobs/` 직속만 non-recursive 합산이라 우리 패치 환경에서 항상 0 이었고,
+    UI 가 진행률을 못 따라가서 7GB → 2GB → "완료" 같은 부정확한 표시가 났음.
+    """
+    import os as _os
+
+    def _walk_size(path: str) -> int:
+        if not _os.path.isdir(path):
+            return 0
+        total = 0
+        for root, _dirs, files in _os.walk(path, followlinks=False):
+            for name in files:
+                try:
+                    total += _os.path.getsize(_os.path.join(root, name))
+                except OSError:
+                    pass
+        return total
+
+    if not _os.path.isdir(directory):
+        return 0
+
+    blobs_size = _walk_size(_os.path.join(directory, "blobs"))
+    snapshots_size = _walk_size(_os.path.join(directory, "snapshots"))
+    return max(blobs_size, snapshots_size)
+
+
+def _start_byte_progress_watcher(model_key: str, repo_id: str, total_bytes: int) -> threading.Event:
+    """1초 간격으로 캐시 디렉토리 사이즈를 측정해 다운로드 진행률 emit.
+    반환된 stop_event를 set하면 watcher 종료."""
+    import time as _time
+    stop_event = threading.Event()
+    cache_dir = _hf_cache_dir_for(repo_id)
+
+    def _run():
+        last_bytes = 0
+        last_time = _time.time()
+        while not stop_event.is_set():
+            measured = _measure_dir_size(cache_dir)
+            # 단조 증가 보장 — HF Hub 의 atomic move/rename 순간 측정에 걸려서 파일이
+            # 잠시 안 보이거나(락), partial 삭제 후 재시작으로 인해 측정값이 일시적으로
+            # 줄어드는 경우가 있음. 다운로드 본질상 진행률은 절대 감소하면 안 되므로
+            # 직전 값으로 clamp.
+            current = max(measured, last_bytes)
+            now = _time.time()
+            elapsed = now - last_time
+            speed = (current - last_bytes) / elapsed if elapsed > 0 else 0
+
+            # Phase 판정:
+            #   - blobs/가 전체 사이즈 도달 + snapshot_download 미반환 = "finalizing"
+            #     (Windows에서 blobs → snapshots 하드링크/복사 단계, 수 분 소요)
+            #   - 그 외 = "downloading"
+            if total_bytes > 0 and current >= total_bytes:
+                phase = "finalizing"
+            else:
+                phase = "downloading"
+
+            _model_status["downloads"][model_key] = {
+                "phase": phase,
+                "current_bytes": current,
+                "total_bytes": total_bytes,
+                "speed_bps": int(max(0, speed)),
+            }
+            # 모델 카드 진행률도 동기화
+            if total_bytes > 0:
+                pct = min(99, int(current * 100 / total_bytes))
+                if pct != _model_status["models"][model_key]["progress"]:
+                    _model_status["models"][model_key]["progress"] = pct
+                    _emit_status()
+            else:
+                _emit_status()
+            last_bytes = current
+            last_time = now
+            stop_event.wait(1.0)
+        # watcher 종료 → 해당 모델 download 슬롯 비움 (verifying 이전 라스트 값은 _download_one 가 별도로 채움)
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    return stop_event
+
+
 def _download_one(model_key: str, repo_id: str):
-    """단일 모델 HuggingFace 다운로드 — ThreadPoolExecutor에서 병렬 실행"""
+    """단일 모델 HuggingFace 다운로드 — ThreadPoolExecutor에서 병렬 실행.
+    repo_id가 로컬 경로 형식이면 (예: 'models/...') 다운로드 대신 명확한 에러.
+    바이트 단위 진행률을 watcher 스레드로 emit."""
+    if _is_local_path_format(repo_id):
+        raise RuntimeError(
+            f"{model_key.upper()} 모델이 지정된 로컬 경로에 없습니다: {repo_id}\n"
+            f"  해결: 'npm run setup' 재실행 또는 .env의 {model_key.upper()}_MODEL을\n"
+            f"        HuggingFace repo_id로 변경 (예: Qwen/Qwen3-VL-4B-Instruct)."
+        )
     from huggingface_hub import snapshot_download
-    _thread_model_key.key = model_key  # 이 스레드의 모델 키 등록
+    _thread_model_key.key = model_key
     _model_status["models"][model_key]["status"] = "loading"
+
+    # 전체 사이즈 미리 조회 (실패해도 다운로드 자체는 진행)
+    total_bytes = _hf_repo_total_bytes(repo_id)
+    if total_bytes > 0:
+        gb = total_bytes / (1024 ** 3)
+        print(f"[다운로드 시작] {model_key.upper()}: {repo_id} ({gb:.2f} GB)", flush=True)
+    else:
+        print(f"[다운로드 시작] {model_key.upper()}: {repo_id}", flush=True)
     _emit_status()
-    print(f"[다운로드 시작] {model_key.upper()}: {repo_id}", flush=True)
-    snapshot_download(repo_id=repo_id)
+
+    # 바이트 단위 진행률 watcher
+    stop_watcher = _start_byte_progress_watcher(model_key, repo_id, total_bytes)
+    try:
+        snapshot_download(repo_id=repo_id)
+    finally:
+        stop_watcher.set()
+
     _model_status["models"][model_key]["progress"] = 100
+    # 다운로드 완료 — phase 전환 (검증/초기화)
+    _model_status["downloads"][model_key] = {
+        "phase": "verifying",
+        "current_bytes": total_bytes,
+        "total_bytes": total_bytes,
+        "speed_bps": 0,
+    }
     _emit_status()
     print(f"[다운로드 완료] {model_key.upper()}", flush=True)
 
@@ -155,14 +395,36 @@ def _load_models_sync():
     print("Aunion AI Backend 시작", flush=True)
     print("=" * 50, flush=True)
 
+    # 슬라이드 번역 전용 모드 - 실시간 모델 스킵 (VLM은 다운로드만 진행)
+    skip_models = os.environ.get("SKIP_STARTUP_MODELS", "").lower() == "true"
+    if skip_models:
+        print("[모드] 슬라이드 번역 전용 - ASR/NMT/OCR 스킵 (VLM은 다운로드 진행)", flush=True)
+        for key in ["asr", "nmt_asr", "ocr"]:
+            _model_status["models"][key]["status"] = "skipped"
+        _emit_status()
+
     # ── 1단계: 병렬 다운로드 ─────────────────────────────────────────
-    model_repos = [
-        ("asr", ModelConfig.ASR_MODEL),
-        ("nmt", ModelConfig.NMT_MODEL),
-        ("tts", ModelConfig.TTS_MODEL),
+    # VLM은 사용 시점에 메모리 로드되지만, 다운로드는 미리 받아둠 (~17GB 첫 사용 대기 회피)
+    model_repos = [] if skip_models else [
+        ("asr",     ModelConfig.ASR_MODEL),
+        ("nmt_asr", ModelConfig.NMT_ASR_MODEL),
     ]
+    model_repos.append(("vlm", VLM_BASE_MODEL))
 
     to_download = [(key, repo) for key, repo in model_repos if not _is_cached(repo)]
+
+    # ── 첫 실행 사용자 액션 대기 ──────────────────────────────────────
+    # VLM 미캐시 = 신규 사용자 첫 실행 → 다운로드 마법사 UI 표시 후 "다운로드 시작" 클릭까지 대기.
+    # 사용자 동의 없이 8GB 자동 다운로드 안 함. (skip_models 모드 무관 — 풀모드 .exe 도 동일)
+    if any(k == "vlm" for k, _ in to_download):
+        _model_status["status"] = "wait_user_action"
+        _model_status["message"] = "사용자 다운로드 시작 클릭 대기 중"
+        _emit_status()
+        print("[설치] 사용자 액션 대기 중 — 프론트의 '다운로드 시작' 버튼 필요", flush=True)
+        _start_download_event.wait()
+        print("[설치] 사용자 액션 수신 — 다운로드 진행", flush=True)
+        _model_status["status"] = "loading"
+        _emit_status()
 
     if to_download:
         names = ", ".join(k.upper() for k, _ in to_download)
@@ -187,12 +449,67 @@ def _load_models_sync():
         print("[다운로드] 전체 완료", flush=True)
 
         # 다운로드 완료 표시를 잠깐 보여준 뒤 로딩 단계로 재설정
-        for key, _ in model_repos:
+        # VLM은 메모리 로드를 startup에서 안 함 (실시간 스택과 VRAM 충돌, 사용 시점에 lazy 로드)
+        for key, repo in model_repos:
+            if "/" not in repo:
+                continue
+            if key == "vlm":
+                continue
             _model_status["models"][key]["status"] = "loading"
             _model_status["models"][key]["progress"] = 0
         _emit_status()
     else:
         _set_status("모든 모델 캐시 확인됨, 초기화 시작...", progress=10)
+
+    # VLM은 다운로드 완료(또는 캐시됨) 시점에 done 처리 — 메모리 로드는 사용 시점에 lazy
+    _model_status["models"]["vlm"]["status"] = "done"
+    _model_status["models"]["vlm"]["progress"] = 100
+    _emit_status()
+
+    # 슬라이드 전용 모드는 여기서 종료 (실시간 스택 메모리 로드 안 함)
+    if skip_models:
+        # VLM을 방금 다운로드했다면 검증 단계 표시 — 파일 존재 + 사이즈 sanity 검사
+        vlm_just_downloaded = any(k == "vlm" for k, _ in to_download)
+        if vlm_just_downloaded:
+            import time as _time
+            # VLM 마지막 측정값 보존해 검증 단계에서도 동일 사이즈 표시
+            _vlm_prev = _model_status["downloads"].get("vlm") or {}
+            _model_status["downloads"]["vlm"] = {
+                "phase": "verifying",
+                "current_bytes": _vlm_prev.get("current_bytes", 0),
+                "total_bytes": _vlm_prev.get("total_bytes", 0),
+                "speed_bps": 0,
+            }
+            _model_status["message"] = "AI 엔진 준비 중..."
+            _emit_status()
+            print("[검증] 다운로드 결과 무결성 검사 중...", flush=True)
+
+            # 실제 검증: 캐시 디렉토리 존재 + safetensors 1개 이상 + 파일 헤더 읽기로 손상 확인
+            from pathlib import Path
+            cache_dir = _hf_cache_dir_for(VLM_BASE_MODEL) if not _is_local_path_format(VLM_BASE_MODEL) else Path(VLM_BASE_MODEL)
+            safetensors = list(cache_dir.rglob("*.safetensors"))
+            if not safetensors:
+                raise RuntimeError(f"VLM 검증 실패 — safetensors 파일이 없습니다: {cache_dir}")
+            # 각 shard 파일 헤더 8바이트 읽기 (2~5초 — 사용자에게 검증 단계 보여주기)
+            for sf in safetensors:
+                try:
+                    with open(sf, "rb") as f:
+                        f.read(8)
+                except OSError as e:
+                    raise RuntimeError(f"VLM 검증 실패 — 파일 손상: {sf} ({e})")
+            _time.sleep(0.5)  # 검증 단계 UI에 잠시 보이도록
+            print(f"[검증] 완료 ({len(safetensors)}개 파일 OK)", flush=True)
+
+        _model_status["downloads"] = {}
+        _model_status["status"] = "ready"
+        _model_status["message"] = "슬라이드 번역 전용 모드 — 준비 완료"
+        _model_status["progress"] = 100
+        _emit_status()
+        mode._current_mode = mode.Mode.SLIDE
+        print("=" * 50, flush=True)
+        print("[모드] 슬라이드 번역 전용 모드 — VLM 다운로드 완료, 메모리 로드는 사용 시점에", flush=True)
+        print("=" * 50, flush=True)
+        return
 
     # ── 2단계: 순차 메모리 로딩 ──────────────────────────────────────
     import traceback
@@ -201,7 +518,7 @@ def _load_models_sync():
     # ASR
     _model_status["models"]["asr"]["status"] = "loading"
     _emit_status()
-    _set_status(f"ASR 초기화 중... (1/4) - {ModelConfig.ASR_MODEL}", progress=15)
+    _set_status(f"ASR 초기화 중... (1/3) - {ModelConfig.ASR_MODEL}", progress=15)
     try:
         from app.services.asr_service import ASRService
         asr_service = ASRService(
@@ -212,7 +529,7 @@ def _load_models_sync():
         ws.set_asr_service(asr_service)
         _model_status["models"]["asr"]["status"] = "done"
         _model_status["models"]["asr"]["progress"] = 100
-        _set_status("ASR 완료 ✓ (1/4)", progress=40)
+        _set_status("ASR 완료 ✓ (1/3)", progress=40)
         print(f"[ASR] {ModelConfig.ASR_MODEL} 초기화 완료", flush=True)
     except Exception as e:
         tb = traceback.format_exc()
@@ -221,57 +538,34 @@ def _load_models_sync():
         _set_status(f"ASR 실패: {e}", progress=40)
         failed_models.append(f"ASR: {e}")
 
-    # NMT
-    _model_status["models"]["nmt"]["status"] = "loading"
+    # NMT-ASR (실시간 번역)
+    _model_status["models"]["nmt_asr"]["status"] = "loading"
     _emit_status()
-    _set_status(f"NMT 초기화 중... (2/4) - {ModelConfig.NMT_MODEL}", progress=45)
+    _set_status(f"NMT-ASR 초기화 중... (2/3) - {ModelConfig.NMT_ASR_MODEL}", progress=45)
     try:
         from app.services.nmt_service import NMTService
-        nmt_service = NMTService(
-            model_name=ModelConfig.NMT_MODEL,
-            device=ModelConfig.NMT_DEVICE,
-            dtype=ModelConfig.NMT_DTYPE,
+        nmt_asr_service = NMTService(
+            model_name=ModelConfig.NMT_ASR_MODEL,
+            device=ModelConfig.NMT_ASR_DEVICE,
+            dtype=ModelConfig.NMT_ASR_DTYPE,
         )
-        ws.set_nmt_service(nmt_service)
-        slides.set_nmt_service(nmt_service)
-        _model_status["models"]["nmt"]["status"] = "done"
-        _model_status["models"]["nmt"]["progress"] = 100
-        _set_status("NMT 완료 ✓ (2/4)", progress=65)
-        print(f"[NMT] {ModelConfig.NMT_MODEL} 초기화 완료", flush=True)
+        ws.set_nmt_service(nmt_asr_service)
+        _model_status["models"]["nmt_asr"]["status"] = "done"
+        _model_status["models"]["nmt_asr"]["progress"] = 100
+        _set_status("NMT-ASR 완료 ✓ (2/3)", progress=70)
+        print(f"[NMT-ASR] {ModelConfig.NMT_ASR_MODEL} 초기화 완료", flush=True)
     except Exception as e:
         tb = traceback.format_exc()
-        print(f"[NMT ERROR] {e}\n{tb}", flush=True)
-        _model_status["models"]["nmt"]["status"] = "error"
-        _set_status(f"NMT 실패: {e}", progress=65)
-        failed_models.append(f"NMT: {e}")
-
-    # TTS
-    _model_status["models"]["tts"]["status"] = "loading"
-    _emit_status()
-    _set_status(f"TTS 초기화 중... (3/4) - {ModelConfig.TTS_MODEL}", progress=70)
-    try:
-        from app.services.tts_service import TTSService
-        tts_service = TTSService(
-            model_name=ModelConfig.TTS_MODEL,
-            device=ModelConfig.TTS_DEVICE,
-        )
-        ws.set_tts_service(tts_service)
-        _model_status["models"]["tts"]["status"] = "done"
-        _model_status["models"]["tts"]["progress"] = 100
-        _set_status("TTS 완료 ✓ (3/4)", progress=85)
-        print(f"[TTS] {ModelConfig.TTS_MODEL} 초기화 완료", flush=True)
-    except Exception as e:
-        tb = traceback.format_exc()
-        print(f"[TTS ERROR] {e}\n{tb}", flush=True)
-        _model_status["models"]["tts"]["status"] = "error"
-        _set_status(f"TTS 실패: {e}", progress=85)
-        failed_models.append(f"TTS: {e}")
+        print(f"[NMT-ASR ERROR] {e}\n{tb}", flush=True)
+        _model_status["models"]["nmt_asr"]["status"] = "error"
+        _set_status(f"NMT-ASR 실패: {e}", progress=70)
+        failed_models.append(f"NMT-ASR: {e}")
 
     # OCR
     _model_status["models"]["ocr"]["status"] = "loading"
     _emit_status()
     _ocr_model_name = ModelConfig.OCR_MODEL
-    _set_status(f"OCR 초기화 중... (4/4) - {_ocr_model_name}", progress=90)
+    _set_status(f"OCR 초기화 중... (3/3) - {_ocr_model_name}", progress=75)
     try:
         from app.services.ocr_service import OCRService
         ocr_service = OCRService()
@@ -279,7 +573,7 @@ def _load_models_sync():
         slides.set_ocr_service(ocr_service)
         _model_status["models"]["ocr"]["status"] = "done"
         _model_status["models"]["ocr"]["progress"] = 100
-        _set_status("OCR 완료 ✓ (4/4)", progress=100)
+        _set_status("OCR 완료 ✓ (3/3)", progress=100)
         print(f"[OCR] {_ocr_model_name} 초기화 완료", flush=True)
     except Exception as e:
         tb = traceback.format_exc()
@@ -295,6 +589,9 @@ def _load_models_sync():
         print("모든 모델 초기화 완료!", flush=True)
     print("=" * 50, flush=True)
 
+    # 다운로드 진행 정보는 더 이상 유효하지 않으므로 정리 (UI 가 깔끔하게 progress 화면 떠남)
+    _model_status["downloads"] = {}
+
     if failed_models:
         _model_status["status"] = "error"
         _model_status["message"] = f"모델 로드 실패: {'; '.join(failed_models)}"
@@ -303,6 +600,7 @@ def _load_models_sync():
         _model_status["status"] = "ok"
         _model_status["message"] = "모든 모델 로드 완료 ✓"
         _model_status["progress"] = 100
+        mode._current_mode = mode.Mode.REALTIME
     _emit_status()  # Electron에 완료/실패 신호 전달
 
 
@@ -317,12 +615,100 @@ async def _load_models():
         _emit_status()
 
 
+# ─── 부모 프로세스 (Electron .exe) 종료 감지 + 학생 다운로드 5분 grace ──────
+# 강사가 .exe 를 닫으면 백엔드는 5분 더 살면서 학생들이 자막 다운로드 받을 시간을 줌.
+# .exe 가 다시 켜지면 startBackend() 의 taskkill 이 이 grace 도중 강제 kill 함 (의도된 동작).
+_PARENT_GRACE_SECONDS = 5 * 60
+
+
+def _is_parent_alive_windows(pid: int) -> bool:
+    """Windows: PID 의 프로세스가 살아 있는지 OpenProcess + WaitForSingleObject 로 확인.
+    psutil 의존성 없이 표준 라이브러리(ctypes) 만으로 구현."""
+    import ctypes
+    SYNCHRONIZE = 0x00100000
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+    if not handle:
+        return False
+    try:
+        # WaitForSingleObject(handle, 0): 0ms 타임아웃으로 즉시 체크.
+        # WAIT_OBJECT_0 (0)  = signaled (프로세스 종료됨)
+        # WAIT_TIMEOUT (258) = still running
+        result = kernel32.WaitForSingleObject(handle, 0)
+        return result != 0
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+async def _graceful_shutdown_for_parent_exit():
+    """학생 자막 다운로드 5분 grace 후 백엔드 자살.
+    부모 (.exe) 가 죽었음을 watchdog 가 감지했을 때만 호출."""
+    # 1. 진행 중 강의가 있으면 lecture_end + transcripts 정리.
+    #    disconnect_lecturer 의 30초 grace 와 race 가능 — 둘 다 같은 정리를 하지만
+    #    is_lecture_started 가드로 중복 broadcast 차단.
+    try:
+        manager = ws.manager
+        # disconnect_lecturer 의 30초 grace task 가 진행 중이면 cancel
+        # (우리가 즉시 lecture_end 해주므로 그 task 가 또 broadcast 할 필요 없음).
+        if manager._lecturer_grace_task and not manager._lecturer_grace_task.done():
+            manager._lecturer_grace_task.cancel()
+        if manager.is_lecture_started and manager.current_session_id:
+            ended_id = transcripts.end_session(manager.current_session_id)
+            try:
+                await manager.broadcast_to_students({
+                    "type": "lecture_end",
+                    "session_id": ended_id,
+                })
+                print(f"[Watchdog] lecture_end broadcast (session={ended_id})", flush=True)
+            except Exception as e:
+                print(f"[Watchdog] lecture_end broadcast 실패: {e}", flush=True)
+            manager.is_lecture_started = False
+            manager.is_paused = False
+            manager.current_session_id = None
+    except Exception as e:
+        print(f"[Watchdog] 강의 정리 중 오류: {e}", flush=True)
+
+    # 2. 5분 grace — HTTP 다운로드 엔드포인트 그대로 살아 있음.
+    print(f"[Watchdog] {_PARENT_GRACE_SECONDS}초 grace 시작 — 학생 자막 다운로드 대기", flush=True)
+    await asyncio.sleep(_PARENT_GRACE_SECONDS)
+
+    # 3. 자살 — orphan 백엔드 영구 잔류 차단.
+    print("[Watchdog] grace 종료 → 백엔드 종료", flush=True)
+    os._exit(0)
+
+
+async def _watch_parent_pid(parent_pid: int):
+    """부모 프로세스 PID 를 2초마다 체크. 죽으면 graceful shutdown 트리거."""
+    print(f"[Watchdog] 부모 프로세스 감시 시작 (PID={parent_pid})", flush=True)
+    while True:
+        await asyncio.sleep(2)
+        if not _is_parent_alive_windows(parent_pid):
+            print(f"[Watchdog] 부모 프로세스 (PID={parent_pid}) 종료 감지", flush=True)
+            await _graceful_shutdown_for_parent_exit()
+            return
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _start_health_thread()
+    ensure_firewall_rule(SERVER_PORT)
+    print(f"[Network] LAN 접속 주소: http://{get_lan_ip()}:{SERVER_PORT}", flush=True)
     task = asyncio.create_task(_load_models())
+
+    # Electron 이 spawn 시 AUNION_PARENT_PID 를 env 로 넘김. 미설정이면 standalone 실행으로 간주.
+    parent_watch_task = None
+    parent_pid_str = os.environ.get("AUNION_PARENT_PID")
+    if parent_pid_str:
+        try:
+            parent_pid = int(parent_pid_str)
+            parent_watch_task = asyncio.create_task(_watch_parent_pid(parent_pid))
+        except ValueError:
+            print(f"[Watchdog] AUNION_PARENT_PID 파싱 실패: {parent_pid_str!r}", flush=True)
+
     yield
     task.cancel()
+    if parent_watch_task:
+        parent_watch_task.cancel()
     print("서버 종료 중...")
 
 
@@ -341,8 +727,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# 학생 브라우저(=Electron renderer)에서 SharedArrayBuffer 활성화 →
+# onnxruntime-web WASM 이 멀티스레드로 동작 → piper-tts 합성 지연 단축.
+# 미설정 시 crossOriginIsolated=false 라 ort 가 numThreads=1 로 강제됨 (useTTS.ts 경고).
+# credentialless: HuggingFace 등 cross-origin 자원도 CORP 헤더 없이 fetch 가능.
+@app.middleware("http")
+async def add_cross_origin_isolation_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    response.headers["Cross-Origin-Embedder-Policy"] = "credentialless"
+    return response
+
+
 app.include_router(ws.router)
 app.include_router(slides.router)
+app.include_router(transcripts.router)
+app.include_router(network.router)
+app.include_router(mode.router)
+app.include_router(install.router)
 
 
 @app.api_route("/health", methods=["GET", "HEAD"], tags=["Health"])
@@ -357,7 +760,33 @@ if os.path.isdir(_assets_dir):
 
 @app.get('/{path:path}', include_in_schema=False)
 async def spa_fallback(path: str):
+    # 1) frontend/dist 최상단의 정적 파일 (ort.all.min.js, vad-bundle.min.js,
+    #    silero_vad_*.onnx, vite.svg 등)은 직접 서빙. 안 그러면 index.html이
+    #    대신 반환되어 JS 파서가 '<' 토큰 에러로 죽음.
+    if path:
+        candidate = os.path.join(_FRONTEND_DIST, path)
+        try:
+            real_candidate = os.path.realpath(candidate)
+            real_dist = os.path.realpath(_FRONTEND_DIST)
+            if (
+                os.path.commonpath([real_candidate, real_dist]) == real_dist
+                and os.path.isfile(real_candidate)
+            ):
+                return FileResponse(real_candidate)
+        except (OSError, ValueError):
+            pass
+    # 2) SPA 라우트 (/, /lecturer 등) → index.html
+    # index.html은 항상 최신 빌드(에셋 해시 참조)를 가리켜야 하므로 캐시 비활성.
+    # /assets/index-<hash>.js 같은 해시된 정적 파일은 위쪽 경로에서 FileResponse로
+    # 그대로 캐시 가능(해시가 바뀌면 자동으로 cache miss).
     index = os.path.join(_FRONTEND_DIST, 'index.html')
     if os.path.isfile(index):
-        return FileResponse(index)
+        return FileResponse(
+            index,
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
     return {'service': 'Aunion AI Backend', 'version': '1.0.0'}

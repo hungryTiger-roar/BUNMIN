@@ -2,6 +2,213 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Electron frame: false + 자체 타이틀바(32px)용 — 페이지의 min-h-screen / h-screen 이
+   타이틀바 영역을 침범하지 않도록 viewport 에서 32px 차감. App.tsx 의 wrapper 가
+   pt-8(32px) 로 콘텐츠를 아래로 밀고, 페이지는 남은 영역만 채우게 됨.
+   브라우저로 직접 접속한 경우(html.is-electron 없음)에는 자체 타이틀바가 없으므로
+   이 보정을 끄고 Tailwind 기본값(100vh)을 그대로 사용. */
+@layer utilities {
+  html.is-electron .min-h-screen {
+    min-height: calc(100vh - 32px);
+  }
+  html.is-electron .h-screen {
+    height: calc(100vh - 32px);
+  }
+}
+
+@font-face {
+  font-family: 'Hakgyoansim Allimjang';
+  src: url('../assets/fonts/Hakgyoansim Allimjang OTF R.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Hakgyoansim Allimjang';
+  src: url('../assets/fonts/Hakgyoansim Allimjang OTF B.otf') format('opentype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* paybooc — 본문/소제목용 한글 폰트.
+   각 weight 를 범위로 등록해 Tailwind 의 font-light/normal/medium/semibold/bold/extrabold
+   클래스가 가까운 weight 글리프로 정확히 잡히도록 한다.
+   - Light(300)      → font-light
+   - Medium(500)     → font-normal(400), font-medium(500)
+   - Bold(700)       → font-semibold(600), font-bold(700)  ← 소제목 700 요구사항 자동 충족
+   - ExtraBold(800)  → font-extrabold(800) */
+@font-face {
+  font-family: 'paybooc';
+  src: url('../assets/fonts/paybooc OTF Light.otf') format('opentype');
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'paybooc';
+  src: url('../assets/fonts/paybooc OTF Medium.otf') format('opentype');
+  font-weight: 400 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'paybooc';
+  src: url('../assets/fonts/paybooc OTF Bold.otf') format('opentype');
+  font-weight: 600 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'paybooc';
+  src: url('../assets/fonts/paybooc OTF ExtraBold.otf') format('opentype');
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'A2z';
+  src: url('https://cdn.jsdelivr.net/gh/projectnoonnu/2601-6@1.0/에이투지체-6SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'ELAND Naise';
+  src: url('../assets/fonts/ELAND 나이스OTF M.otf') format('opentype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@layer base {
+  :root {
+    /* ---- Light Mode ---- cool-toned palette harmonizing with the blue-purple gradient */
+    --color-primary: #6495EB;          /* 브랜드 블루 (gradient-blue 계열) */
+    --color-on-primary: #FFFFFF;
+    --color-primary-container: #E8EDFB; /* 연한 블루-라벤더 */
+
+    --color-secondary: #2A2F4A;        /* 쿨 다크 네이비 (본문 텍스트용) */
+    --color-tertiary: #4A4F6B;         /* 쿨 미디엄 (보조 텍스트/아이콘) */
+
+    --color-background: #F7F8FC;       /* 쿨 오프화이트 */
+    --color-on-background: #2A2F4A;
+
+    --color-surface: #FFFFFF;          /* 화이트 서피스 */
+    --color-on-surface: #2A2F4A;
+
+    --color-error: #E53E3E;
+
+    /* Gradient (브랜드) */
+    --color-gradient-blue: #7DB3FF;
+    --color-gradient-purple: #C0A4D6;
+
+    /* 그라데이션 위에 띄우는 패널용 중간톤 네이비 (ParticipantsPanel 등) */
+    --color-overlay-surface: #2E3257;
+    --color-on-overlay-surface: #F0F1FA;
+    --color-overlay-border: #454A78;
+
+    --color-find-id: #2E2E2E;
+
+    /* 채팅 강사 강조색 — 모드별로 살짝 보라톤이 섞인 색.
+       일반 텍스트와 너무 같지도(다크 #FFFFFF), 너무 강하지도(#6650a4) 않게 톤 다운. */
+    --color-lecturer-accent: #7858B0;
+
+    /* 자체 타이틀바 (Electron frame: false) — 테마별로 재정의 */
+    --titlebar-bg: #FFFFFF;
+    --titlebar-fg: #2A2F4A;
+  }
+
+  .dark {
+    /* ---- Dark Mode ---- deep navy/purple */
+    --color-primary: #7DA9F5;
+    --color-on-primary: #0F1228;
+    --color-primary-container: #2D3259;
+
+    --color-secondary: #E8E9F5;
+    --color-tertiary: #B0B4D6;
+
+    --color-background: #13152C;       /* 깊은 네이비 */
+    --color-on-background: #E8E9F5;
+
+    --color-surface: #1E2142;          /* 배경보다 약간 밝은 네이비 */
+    --color-on-surface: #E8E9F5;
+
+    --color-error: #F87171;
+
+    --color-overlay-surface: #252A52;
+    --color-on-overlay-surface: #E8E9F5;
+    --color-overlay-border: #3E4475;
+
+    /* 다크 배경에서도 일반 텍스트(#E8E9F5)와 구별되도록 라벤더 톤 */
+    --color-lecturer-accent: #D8C5F0;
+
+    /* 자체 타이틀바 다크 */
+    --titlebar-bg: #1E2142;
+    --titlebar-fg: #E8E9F5;
+  }
+
+  /* ---- Gradient Mode ---- 움직이는 하늘-보라 배경 + 글래스 서피스
+     primary-container는 rgba(255,255,255,0.25)로 두어 bg-primaryContainer/60 = ~15% glass가
+     되도록 함 (기존 bg-white/15 룩 유지). */
+  html.theme-gradient {
+    --color-background: transparent;
+    --color-on-background: #FFFFFF;
+
+    --color-surface: rgba(255, 255, 255, 0.1);
+    --color-on-surface: #FFFFFF;
+
+    --color-primary-container: rgba(255, 255, 255, 0.25);
+    --color-secondary: #FFFFFF;
+    --color-tertiary: #FFFFFF;
+
+    --color-overlay-border: rgba(255, 255, 255, 0.2);
+
+    /* 자체 타이틀바 — 그라데이션 위에 어두운 글래스 (텍스트 가독성) */
+    --titlebar-bg: rgba(46, 50, 87, 0.75);
+    --titlebar-fg: #FFFFFF;
+  }
+
+  html.theme-gradient body {
+    background: linear-gradient(
+      to right,
+      var(--color-gradient-blue) 0%,
+      var(--color-gradient-purple) 25%,
+      var(--color-gradient-blue) 50%,
+      var(--color-gradient-purple) 75%,
+      var(--color-gradient-blue) 100%
+    );
+    background-size: 800% 800%;
+    animation: gradient-shift 15s linear infinite;
+    min-height: 100vh;
+  }
+
+  @keyframes gradient-shift {
+    0% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+}
+
+.sidebar-panel {
+  background-color: var(--color-background);
+}
+html.theme-gradient .sidebar-panel {
+  background: rgba(224, 222, 247, 0.65);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+html.theme-gradient .sidebar-card {
+  background: #E0DEF7;
+  --color-on-surface: #374151;
+  --color-on-background: #374151;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -9,26 +216,58 @@
 }
 
 body {
-  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background-color: #f8fafc;
-  color: #1e293b;
+  font-family: 'paybooc', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-weight: 500;
+  background-color: var(--color-background);
+  color: var(--color-on-background);
 }
 
-/* 스크롤바 스타일 */
+/* 스크롤바 스타일 — 배경 위에서 튀지 않도록 subtle하게 */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #f1f5f9;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: var(--color-tertiary);
   border-radius: 3px;
+  opacity: 0.5;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+  background: var(--color-primary);
+}
+
+/* 스크롤바 완전 숨김 (스크롤 기능은 유지) */
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;  /* IE/Edge */
+  scrollbar-width: none;     /* Firefox */
+}
+
+/* 항상 보이는 스크롤바 (라이브러리 카드 영역 등 — 호버 안 해도 "더 있음" 인식되게) */
+.scrollbar-always::-webkit-scrollbar {
+  width: 6px;
+}
+.scrollbar-always::-webkit-scrollbar-track {
+  background: var(--color-primary-container);
+  border-radius: 3px;
+}
+.scrollbar-always::-webkit-scrollbar-thumb {
+  background: var(--color-tertiary);
+  border-radius: 3px;
+}
+.scrollbar-always::-webkit-scrollbar-thumb:hover {
+  background: var(--color-primary);
+}
+.scrollbar-always {
+  scrollbar-width: thin;                                            /* Firefox */
+  scrollbar-color: var(--color-tertiary) var(--color-primary-container);
 }

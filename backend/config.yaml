@@ -1,0 +1,438 @@
+# ============================================================
+# AunionAI Slide Translation Pipeline Config
+# 목적:
+# - OCR 결과 정규화
+# - 레이아웃/세로 텍스트 감지
+# - 렌더링 안정화
+# - prefix 기호/이모지 fallback 정책
+#
+# 주의:
+# - 번역 용어 glossary는 여기 넣지 않음
+# - 용어 일관성은 추후 pgvector RAG에서 처리
+# ============================================================
+
+
+# ============================================================
+# 1. OCR 설정
+# ============================================================
+ocr:
+  # 사용 OCR 엔진: surya
+  engine: "surya"
+
+  # OCR confidence 최소값
+  # 너무 높이면 작은 글자/장식 텍스트가 누락됨
+  min_confidence: 0.2
+
+  # 너무 작은 bbox는 렌더링/번역 대상에서 제외
+  min_area: 500
+
+  # OCR 직후 HTML 스타일 태그 제거
+  # 예: <b>HANSUNG</b> -> HANSUNG
+  strip_html_tags: true
+
+  # 연속 공백 정리
+  normalize_whitespace: true
+
+
+# ============================================================
+# 2. OCR 필터 설정
+# ============================================================
+ocr_filters:
+  # OCR이 스타일화된 한글을 한자로 오인식하는 경우 필터링
+  # 예: "수한" -> "赤些"
+  # 중국어 원본 슬라이드 번역 시 false로 변경
+  enable_hanja_filter: true
+
+  # 영어/숫자/기호만 있는 영역은 번역하지 않음
+  skip_english_number_only: true
+
+  # URL, 이메일, 파일 경로 등은 그대로 유지
+  skip_passthrough_content: true
+
+  # 수식-only 영역은 번역하지 않음
+  skip_math_only: true
+
+  # 코드 영역은 기본적으로 번역하지 않음
+  skip_code_block: true
+
+
+# ============================================================
+# 3. 코드 영역 감지 패턴
+# ============================================================
+code_patterns:
+  - "#include\\s*<"
+  - "using\\s+namespace"
+  - "\\bint\\s+main\\s*\\("
+  - "\\bcout\\s*<<"
+  - "\\bcin\\s*>>"
+  - "\\bprintf\\s*\\("
+  - "\\bscanf\\s*\\("
+  - "\\breturn\\s+\\d+;"
+  - "%[dfsclx]"
+  - "\\\\n[\"']"
+  - "<<\\s*endl"
+  - "\\bSystem\\.out\\.print"
+  - "\\bconsole\\.log\\s*\\("
+  - "\\bpublic\\s+static\\s+void\\s+main"
+
+
+# ============================================================
+# 4. 레이아웃 분류 설정
+# STRICT_LITERAL / CONTEXT_AWARE 분류용
+# ============================================================
+layout:
+  # 근처 텍스트 영역 판단 거리
+  nearby_threshold: 80
+
+  # 다른 텍스트와 정렬되어 있는지 판단
+  alignment_threshold: 25
+
+  # 이미지 전체 대비 작은 영역인지 판단
+  area_ratio_limit: 0.015
+
+  # 짧은 독립 라벨 최대 길이
+  max_label_length: 15
+
+  # bbox 종횡비 기준
+  base_aspect_threshold: 3
+
+  # 글자 수에 따라 종횡비 허용치를 늘리는 계수
+  aspect_per_char: 0.5
+
+
+# ============================================================
+# 5. 세로 텍스트 감지 설정
+# ============================================================
+vertical_text:
+  enabled: true
+
+  # 세로 텍스트는 번역은 하되 이미지에 렌더링하지 않음
+  # JSON에는 english 저장
+  render_skip: true
+
+  # height > width * aspect_ratio_threshold 이면 세로 후보
+  aspect_ratio_threshold: 2.5
+
+  # 세로 텍스트 후보 최대 너비
+  # 너무 크면 좁은 표 셀/문단이 오탐됨
+  max_width_px: 80
+
+  # 텍스트 최소 길이
+  min_chars: 2
+
+  # 한글 비율이 이 값 이상일 때만 세로 텍스트 후보
+  korean_ratio_threshold: 0.6
+
+  # 세로 텍스트 번역 시 공백 제거 후 번역 프롬프트에 전달할지 여부
+  # 예: 호 감 의 결 정 요 소 -> 호감의결정요소
+  normalize_vertical_text: true
+
+  # 세로 텍스트 로그 출력
+  debug_log: true
+
+
+# ============================================================
+# 6. VLM / 번역 모델 설정
+# 현재는 Qwen2.5-VL을 text-only로 사용
+# 향후 TowerInstruct / NLLB / Qwen-MT 등과 교체 가능
+# ============================================================
+vlm:
+  max_new_tokens: 2048
+  temperature: 0.3
+
+  # 번역 부족 시 재시도 횟수
+  max_retries: 2
+
+  # 배치 번역 실패 항목 개별 재번역 최대 개수
+  individual_fallback_limit: 5
+
+  # 현재 서비스에서는 이미지 입력을 사용하지 않음
+  # images=None
+  use_image_input: false
+
+  # page context에 넣을 최대 OCR 영역 개수
+  max_page_context_items: 20
+
+  # VLM 응답에서 번호 매핑이 80% 이상 성공하면 진행
+  min_mapping_success_ratio: 0.8
+
+  # 출력 필터링 패턴 (이 패턴을 번역 결과에서 제거)
+  output_filters:
+    - "\\s*\\[OCR[^\\]]*\\]?\\s*$"
+    - "\\s*\\[OCR\\s*$"
+    - "<br\\s*/?>"
+
+
+# ============================================================
+# 7. 렌더링 기본 설정
+# ============================================================
+rendering:
+  # 최소 렌더링 대상 bbox 면적
+  min_area: 500
+
+  # 최소 폰트 크기
+  min_font_size: 8
+
+  # 기본 최대 폰트 크기
+  max_font_size: 40
+
+  # 줄 간격 보정값
+  line_height_padding: 2
+
+  # 텍스트가 박스에 안 들어갈 경우 ellipsis 사용
+  use_ellipsis: true
+
+  # ellipsis 문자
+  ellipsis_char: "..."
+
+  # 단어 단위 줄바꿈 우선
+  word_wrap_only: true
+
+  # 글자 단위 분리 금지
+  allow_character_split: false
+
+  # 긴 단어만 하이픈 분리
+  enable_hyphenation: true
+
+  # 이 길이 이상인 단어만 하이픈 분리 후보
+  hyphenation_min_word_length: 10
+
+  # 하이픈 분리 시 최소 앞/뒤 글자 수
+  hyphenation_min_part_length: 3
+
+  # bbox 확장은 1차 구현에서 사용하지 않음
+  enable_bbox_expansion: false
+
+  # 렌더링 디버그 로그
+  debug_log: true
+
+
+# ============================================================
+# 8. 하이픈 분리 접미사 패턴
+# 긴 영어 단어를 자연스러운 위치에서 나누기 위한 후보
+# ============================================================
+hyphenation:
+  suffix_patterns:
+    - "tion"
+    - "sion"
+    - "ness"
+    - "ment"
+    - "able"
+    - "ible"
+    - "ful"
+    - "less"
+    - "ing"
+    - "ous"
+    - "ive"
+    - "ence"
+    - "ance"
+    - "ally"
+    - "ically"
+
+
+# ============================================================
+# 9. Prefix 기호 처리 정책
+# ============================================================
+prefix_symbols:
+  enabled: true
+
+  # OCR prefix로 인식할 명시적 기호 목록
+  # 긴 패턴/공백 포함 패턴을 먼저 둔다.
+  explicit_symbols:
+    - "▶ "
+    - "► "
+    - "› "
+    - "> "
+    - "- "
+    - "• "
+    - "◦ "
+    - "○ "
+    - "● "
+    - "· "
+    - "ㆍ "
+    - "☐ "
+    - "☑ "
+    - "□ "
+    - "■ "
+    - "※ "
+    - "★ "
+    - "☆ "
+    - "▶"
+    - "►"
+    - "›"
+    - ">"
+    - "-"
+    - "•"
+    - "◦"
+    - "○"
+    - "●"
+    - "·"
+    - "ㆍ"
+    - "☐"
+    - "☑"
+    - "□"
+    - "■"
+    - "※"
+    - "★"
+    - "☆"
+
+  # 유니코드 카테고리 기반 자동 prefix 감지
+  unicode_auto_detect: true
+
+  # 자동 감지할 Unicode category
+  # So: Symbol, other
+  # Sm: Symbol, math
+  # Sk: Symbol, modifier
+  unicode_categories:
+    - "So"
+    - "Sm"
+    - "Sk"
+
+  # Emoji/Dingbat 범위 자동 감지
+  emoji_auto_detect: true
+
+  emoji_ranges:
+    - [0x2600, 0x27BF]
+    - [0x1F300, 0x1F9FF]
+
+  # 기본 정책:
+  # render   : 전체 bbox 지우고 prefix 포함 영어를 새로 렌더링
+  # preserve : prefix 픽셀은 원본 유지, 뒤 텍스트만 렌더링
+  default_policy: "render"
+
+  # 폰트로 렌더링할 prefix
+  # 대부분의 일반 불렛/기호는 여기에 둔다.
+  force_render_prefixes:
+    - "-"
+    - ">"
+    - "›"
+    - "•"
+    - "◦"
+    - "○"
+    - "●"
+    - "·"
+    - "ㆍ"
+    - "▶"
+    - "►"
+    - "※"
+    - "★"
+    - "☆"
+
+  # 원본 픽셀을 보존할 prefix
+  # 컬러 이모지, 체크박스, 폰트 렌더링이 불안정한 기호
+  pixel_preserve_prefixes:
+    # 체크박스/체크 계열
+    - "☑"
+    - "☐"
+    - "□"
+    - "■"
+    - "✓"
+    - "✔"
+    - "✗"
+    - "✘"
+    # 컬러 이모지/아이콘 계열
+    - "📦"
+    - "📌"
+    - "🔹"
+    - "🔸"
+    - "✅"
+    - "⚠️"
+    - "💡"
+    - "📍"
+    - "🔴"
+    - "🟢"
+    - "🔵"
+    - "⭐"
+    - "🎯"
+    - "📝"
+    - "📋"
+    - "🚀"
+    - "⚡"
+    - "🔥"
+
+  # 이미지 분석 기반 prefix/본문 경계 감지
+  image_split:
+    enabled: true
+    # ink 픽셀 감지 threshold (배경과의 차이)
+    ink_threshold: 25
+    # column당 활성 픽셀 비율 threshold
+    active_col_ratio: 0.08
+    # prefix-본문 사이 최소 gap (픽셀)
+    min_gap_px: 3
+    # prefix가 차지할 수 있는 최대 비율 (한글 잔존 방지)
+    max_prefix_region_ratio: 0.35
+
+  # Fallback: 이미지 분석 실패 시 높이 기반 추정
+  preserve_width:
+    fallback_height_ratio: 0.9
+    min_px: 10
+    max_region_ratio: 0.25
+
+  # prefix 처리 로그
+  debug_log: true
+
+
+# ============================================================
+# 10. 폰트 설정
+# ============================================================
+fonts:
+  # 우선순위대로 시도
+  paths:
+    - "C:/Windows/Fonts/NotoSansKR-Regular.ttf"
+    - "C:/Windows/Fonts/malgun.ttf"
+    - "C:/Windows/Fonts/segoeui.ttf"
+    - "C:/Windows/Fonts/arial.ttf"
+    - "arial.ttf"
+
+  # fallback font 사용 허용
+  allow_default_font: true
+
+
+# ============================================================
+# 11. Inpainting 설정
+# ============================================================
+inpainting:
+  enabled: true
+
+  # 단색 배경이면 단순 채우기, 복잡 배경이면 inpainting
+  hybrid_mode: true
+
+  # 단색 배경 판단 threshold
+  solid_background_threshold: 15
+
+  # inpainting 반경
+  radius: 3
+
+  # OpenCV 알고리즘: TELEA | NS
+  method: "TELEA"
+
+  # 마스크 여백
+  mask_padding_x: 0
+  mask_padding_y: 0
+
+
+# ============================================================
+# 12. 출력/디버그 설정
+# ============================================================
+output:
+  save_json: true
+  save_translated_image: true
+
+  # 디버그용 중간 산출물 저장
+  save_debug_mask: false
+  save_debug_regions: false
+
+  # 로그 길이 제한
+  log_text_preview_length: 30
+
+
+# ============================================================
+# 13. 제외: 번역 용어 glossary
+# ============================================================
+# term_glossary:
+#   사용하지 않음.
+#
+# 이유:
+# - 호감 -> Likability 같은 도메인 용어는 하드코딩하지 않음
+# - 추후 pgvector 기반 용어 검색/RAG로 처리
+# ============================================================

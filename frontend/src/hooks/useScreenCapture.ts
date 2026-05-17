@@ -1,118 +1,118 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 interface UseScreenCaptureOptions {
-  onFrame?: (imageData: string) => void
-  frameRate?: number
-  maxWidth?: number  // 최대 너비 (리사이즈)
-  quality?: number   // JPEG 품질 (0.1 ~ 1.0)
+  /** 캡처 해상도 상한 (track constraint) — 0이면 원본 그대로 */
+  maxWidth?: number
+  /** 캡처가 끝났을 때 호출 (UI 버튼 또는 브라우저 native stop 양쪽 다) */
+  onCaptureEnd?: () => void
 }
 
 export function useScreenCapture(options: UseScreenCaptureOptions = {}) {
-  const {
-    onFrame,
-    frameRate = 10,      // 10 FPS (더 부드럽게)
-    maxWidth = 0,        // 0 = 리사이즈 안함 (원본 해상도)
-    quality = 0.6        // JPEG 품질
-  } = options
+  const { maxWidth = 0, onCaptureEnd } = options
+
   const [isCapturing, setIsCapturing] = useState(false)
+  const [stream, setStream] = useState<MediaStream | null>(null)
+  const [pickerSources, setPickerSources] = useState<ScreenSource[] | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
-  const canvasRef = useRef<HTMLCanvasElement | null>(null)
-  const videoRef = useRef<HTMLVideoElement | null>(null)
-  const intervalRef = useRef<NodeJS.Timeout | null>(null)
+  const pickerResolveRef = useRef<((id: string | null) => void) | null>(null)
+
+  const onCaptureEndRef = useRef(onCaptureEnd)
+  useEffect(() => { onCaptureEndRef.current = onCaptureEnd }, [onCaptureEnd])
+
+  const stopCapture = useCallback(() => {
+    const wasCapturing = !!streamRef.current
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop())
+      streamRef.current = null
+    }
+    setStream(null)
+    setIsCapturing(false)
+    if (wasCapturing) onCaptureEndRef.current?.()
+  }, [])
+
+  const acquireStream = useCallback(async (): Promise<MediaStream | null> => {
+    // Electron: desktopCapturer로 sources 가져온 뒤 picker 모달로 사용자 선택 대기
+    if (window.electron) {
+      const sources = await window.electron.getScreenSources()
+      const sourceId = await new Promise<string | null>((resolve) => {
+        pickerResolveRef.current = resolve
+        setPickerSources(sources)
+      })
+      if (!sourceId) return null
+      return await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: {
+          mandatory: {
+            chromeMediaSource: 'desktop',
+            chromeMediaSourceId: sourceId,
+          },
+        } as unknown as MediaTrackConstraints,
+      })
+    }
+
+    // 웹: 브라우저 기본 picker
+    // surfaceSwitching: 'exclude' — Chrome이 다른 탭에 "이 탭을 대신 공유" 배너를 띄우는 동작 차단
+    return await navigator.mediaDevices.getDisplayMedia({
+      video: {
+        cursor: 'always',
+        displaySurface: 'monitor',
+      } as MediaTrackConstraints,
+      audio: false,
+      surfaceSwitching: 'exclude',
+    } as DisplayMediaStreamOptions & { surfaceSwitching?: 'include' | 'exclude' })
+  }, [])
 
   const startCapture = useCallback(async () => {
     try {
-      // 화면 공유 요청
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          cursor: 'always',
-          displaySurface: 'monitor',
-        } as MediaTrackConstraints,
-        audio: false,
-      })
+      const newStream = await acquireStream()
+      if (!newStream) return // 사용자가 picker에서 취소
 
-      streamRef.current = stream
-
-      // 비디오 엘리먼트 생성
-      const video = document.createElement('video')
-      video.srcObject = stream
-      video.autoplay = true
-      video.muted = true
-      video.playsInline = true
-      videoRef.current = video
-
-      // 캔버스 생성
-      const canvas = document.createElement('canvas')
-      canvasRef.current = canvas
-
-      // 비디오 재생 시작
-      await video.play()
-
-      // 리사이즈 계산 (maxWidth > 0일 때만)
-      let targetWidth = video.videoWidth
-      let targetHeight = video.videoHeight
-
-      if (maxWidth > 0 && targetWidth > maxWidth) {
-        const scale = maxWidth / targetWidth
-        targetWidth = maxWidth
-        targetHeight = Math.round(video.videoHeight * scale)
-      }
-
-      canvas.width = targetWidth
-      canvas.height = targetHeight
-
-      const ctx = canvas.getContext('2d')
-      if (!ctx) return
-
-      // 주기적으로 프레임 캡처
-      intervalRef.current = setInterval(() => {
-        if (video.readyState === video.HAVE_ENOUGH_DATA) {
-          // 리사이즈하여 그리기
-          ctx.drawImage(video, 0, 0, targetWidth, targetHeight)
-          const imageData = canvas.toDataURL('image/jpeg', quality)
-          // data:image/jpeg;base64, 부분 제거
-          const base64 = imageData.split(',')[1]
-          onFrame?.(base64)
+      // 해상도 상한 적용 (인코딩 부담 ↓)
+      if (maxWidth > 0) {
+        const track = newStream.getVideoTracks()[0]
+        if (track) {
+          try {
+            await track.applyConstraints({ width: { max: maxWidth } })
+          } catch {
+            // 일부 환경에서 화면 캡처 트랙은 width 제약 미지원 — 무시
+          }
         }
-      }, 1000 / frameRate)
-
-      // 사용자가 공유 중지했을 때
-      stream.getVideoTracks()[0].onended = () => {
-        stopCapture()
       }
+
+      streamRef.current = newStream
+      setStream(newStream)
+
+      // 사용자가 브라우저 native UI에서 "공유 중지" 누르면 트랙 ended → 정리
+      newStream.getVideoTracks()[0].addEventListener('ended', () => {
+        stopCapture()
+      })
 
       setIsCapturing(true)
     } catch (err) {
       console.error('[ScreenCapture] 화면 공유 실패:', err)
       throw err
     }
-  }, [onFrame, frameRate])
+  }, [acquireStream, maxWidth, stopCapture])
 
-  const stopCapture = useCallback(() => {
-    // 인터벌 정리
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current)
-      intervalRef.current = null
-    }
+  const selectPickerSource = useCallback((sourceId: string) => {
+    setPickerSources(null)
+    pickerResolveRef.current?.(sourceId)
+    pickerResolveRef.current = null
+  }, [])
 
-    // 스트림 정리
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop())
-      streamRef.current = null
-    }
-
-    // 비디오 정리
-    if (videoRef.current) {
-      videoRef.current.srcObject = null
-      videoRef.current = null
-    }
-
-    setIsCapturing(false)
+  const cancelPicker = useCallback(() => {
+    setPickerSources(null)
+    pickerResolveRef.current?.(null)
+    pickerResolveRef.current = null
   }, [])
 
   return {
     isCapturing,
+    stream,
     startCapture,
     stopCapture,
+    pickerSources,
+    selectPickerSource,
+    cancelPicker,
   }
 }
