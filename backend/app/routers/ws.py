@@ -258,6 +258,9 @@ class ConnectionManager:
         self.presentation_mode: str = "slide"  # 'slide' or 'screen'
         self.current_session_id: Optional[str] = None  # 자막 저장 세션
         self.lecture_title: str = ""  # 강사가 설정한 강의 제목
+        # 강의 시작 시 config/glossary.csv 에서 로드된 한국어 용어 키 — ASR hotwords 로 전달.
+        # lecture_end 시 비움. NMT 측 dict 는 _nmt_service.set_glossary() 가 별도 보관.
+        self.lecture_glossary_keys: list[str] = []
         self._lock = asyncio.Lock()  # students 리스트 동시 접근 방지
         self._tasks: set[asyncio.Task] = set()  # 실행 중인 태스크 추적
 
@@ -336,6 +339,7 @@ class ConnectionManager:
         self.is_paused = False
         self.lecturer_name = "professor"
         self.lecture_title = ""
+        self.lecture_glossary_keys = []
         self.current_slide_id = None
         self.current_page = 1
         self.presentation_mode = "slide"
@@ -792,6 +796,27 @@ async def handle_lecturer(websocket: WebSocket, pong_event: asyncio.Event | None
                     manager.current_slide_id
                 )
                 print(f"[WS] 강의 시작: {manager.current_slide_id}, 모드: {manager.presentation_mode}, 세션: {manager.current_session_id}")
+                # 도메인 용어집 (config/glossary.csv) 주입 — NMT 는 한글→영어 inline 치환,
+                # ASR 은 한국어 키를 hotwords 로 (process_audio 가 manager 캐시에서 읽음).
+                # 로드 실패해도 강의는 그대로 진행 — 용어집은 품질 보강용이라 fail-safe.
+                # 항상 set_glossary 호출 (빈 dict 면 None) — 이전 강의가 lecture_end/grace 없이
+                # 끊긴 stale 케이스에서도 NMT 잔여 glossary 가 새 강의로 새지 않게 보장.
+                try:
+                    from app.services.slide_translation.term_corrections import get_mandatory_terms
+                    glossary_terms = get_mandatory_terms() or {}
+                    _nmt_service.set_glossary(glossary_terms if glossary_terms else None)
+                    manager.lecture_glossary_keys = list(glossary_terms.keys())
+                    if glossary_terms:
+                        print(f"[WS] glossary 주입: {len(glossary_terms)}개 (NMT inline 치환 + ASR hotwords)")
+                    else:
+                        print("[WS] glossary 비어 있음 — 기본 동작")
+                except Exception as e:
+                    manager.lecture_glossary_keys = []
+                    try:
+                        _nmt_service.set_glossary(None)  # 잔여 상태 방어
+                    except Exception:
+                        pass
+                    print(f"[WS] glossary 로드 실패 (무시됨): {e}")
                 # 강의자에게 session_id 회신 (다운로드 시 필요)
                 await websocket.send_json({
                     "type": "session_started",
@@ -830,6 +855,7 @@ async def handle_lecturer(websocket: WebSocket, pong_event: asyncio.Event | None
                         _nmt_service.set_glossary(None)
                     except Exception:
                         pass
+                manager.lecture_glossary_keys = []
                 manager.current_slide_id = None
                 manager.current_page = 1
                 manager.presentation_mode = "slide"
@@ -1061,13 +1087,16 @@ async def process_audio(message: dict):
         speech_start_slide_id = manager.current_slide_id
         speech_start_page = manager.current_page
 
-        # ASR 어휘 힌트 — 현재 슬라이드 용어집의 한국어 키 + 강의 제목을 Whisper hotwords 로
+        # ASR 어휘 힌트 — 강의 제목 + config/glossary.csv 한국어 키를 Whisper hotwords 로
         # 넘겨 도메인 단어를 더 정확히 받아쓰게 함. 용어집 없으면 빈 리스트 → 기존 동작과 동일.
-        # (asr_service 가 길이/개수 상한으로 다시 정제 — 여기선 모아서 넘기기만.)
+        # term_corrections 의 길이 내림차순 정렬 덕에 앞쪽에 긴 합성어가 와서, asr_service 의
+        # 32개/280자 상한에 잘릴 때도 가장 도움 되는 (길고 구체적인) 용어가 살아남음.
         asr_hint_terms: list = []
         try:
             if manager.lecture_title:
                 asr_hint_terms.append(manager.lecture_title)
+            if manager.lecture_glossary_keys:
+                asr_hint_terms.extend(manager.lecture_glossary_keys)
         except Exception:
             asr_hint_terms = []
 

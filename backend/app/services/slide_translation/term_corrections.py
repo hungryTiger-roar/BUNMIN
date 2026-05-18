@@ -39,16 +39,24 @@ _TERM_FILE: Optional[Path] = None
 def _get_csv_path() -> Path:
     """용어집 CSV 파일 경로 반환.
 
-    검색 순서:
-    1. 환경변수 TERM_CORRECTIONS_FILE
-    2. config/term_corrections.csv (프로젝트 루트)
-    3. USER_DATA_DIR/config/term_corrections.csv
+    검색 순서 (앞 항목 우선):
+    1. 환경변수 GLOSSARY_FILE (신규)
+    2. 환경변수 TERM_CORRECTIONS_FILE (구버전 호환)
+    3. config/glossary.csv (프로젝트 루트, 신규 표준)
+    4. USER_DATA_DIR/config/glossary.csv
+    5. config/term_corrections.csv (구파일명, 외부 사용자 깨짐 방지용 fallback)
+    6. USER_DATA_DIR/config/term_corrections.csv
     """
-    env_path = os.environ.get("TERM_CORRECTIONS_FILE")
-    if env_path and Path(env_path).exists():
-        return Path(env_path)
+    for env_var in ("GLOSSARY_FILE", "TERM_CORRECTIONS_FILE"):
+        env_path = os.environ.get(env_var)
+        if env_path and Path(env_path).exists():
+            return Path(env_path)
 
     candidates = [
+        PROJECT_ROOT / "config" / "glossary.csv",
+        USER_DATA_DIR / "config" / "glossary.csv",
+        Path(__file__).parent / "glossary.csv",
+        # 구파일명 — 외부 사용자가 아직 rename 안 했을 때만 사용됨
         PROJECT_ROOT / "config" / "term_corrections.csv",
         USER_DATA_DIR / "config" / "term_corrections.csv",
         Path(__file__).parent / "term_corrections.csv",
@@ -58,8 +66,8 @@ def _get_csv_path() -> Path:
         if path.exists():
             return path
 
-    # 기본 경로 반환 (파일이 없어도)
-    return PROJECT_ROOT / "config" / "term_corrections.csv"
+    # 기본 경로 반환 (파일이 없어도) — 신규 표준명
+    return PROJECT_ROOT / "config" / "glossary.csv"
 
 
 def load_term_corrections(force_reload: bool = False) -> list[tuple[str, str]]:
@@ -208,7 +216,7 @@ def clear_cache():
 #
 # TODO: OCR 후처리 개선 (docs/slide/TODO_OCR_POSTPROCESS.md 참조)
 #   - 현재: ocr_corrections.csv 수동 등록 방식만 지원
-#   - 개선안 1: term_corrections.csv 기반 fuzzy matching (edit distance)
+#   - 개선안 1: glossary.csv 기반 fuzzy matching (edit distance)
 #   - 개선안 2: 한글 맞춤법 검사기 통합 (py-hanspell 등)
 #   - 개선안 3: LLM 기반 OCR 후보정
 # ─────────────────────────────────────────────────────────────────────────────
@@ -297,12 +305,12 @@ def load_ocr_corrections(force_reload: bool = False) -> dict[str, str]:
 def correct_ocr_text(text: str) -> str:
     """OCR 오인식 텍스트 보정.
 
-    용어집(term_corrections.csv)의 한글 키를 기준으로
+    용어집(glossary.csv)의 한글 키를 기준으로
     비슷하지만 틀린 OCR 결과를 교정합니다.
 
     동작 방식:
     1. ocr_corrections.csv에서 명시적 오타→교정 매핑 적용
-    2. term_corrections.csv의 한글 용어를 기준으로 유사도 기반 교정 (선택적)
+    2. glossary.csv의 한글 용어를 기준으로 유사도 기반 교정 (선택적)
 
     Args:
         text: OCR로 인식된 텍스트

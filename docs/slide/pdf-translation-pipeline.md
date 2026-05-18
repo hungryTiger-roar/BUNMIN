@@ -6,7 +6,7 @@ PDF 텍스트 레이어 기반 한국어 → 영어 번역 시스템입니다.
 이미지 기반 방식보다 품질이 높고 벡터 텍스트를 유지합니다.
 
 **번역 모델**: Qwen3-VL-4B-Instruct (4bit 양자화)
-**용어집**: config/term_corrections.csv (537개 용어)
+**용어집**: config/glossary.csv (537개 용어)
 
 ## 파이프라인 흐름도
 

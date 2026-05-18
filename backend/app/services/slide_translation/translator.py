@@ -133,7 +133,7 @@ def translate_blocks(
 
     Notes:
         - PDF와 OCR 블록을 분리하여 배치 처리 (OCR 노이즈 격리)
-        - 용어집(term_corrections.csv)은 모든 배치에 공유
+        - 용어집(glossary.csv)은 모든 배치에 공유
         - 페이지 단위로 청크 (같은 페이지 블록은 함께)
     """
     # 환경변수에서 기본값 사용
