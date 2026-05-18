@@ -312,11 +312,50 @@ function Student() {
       iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
     })
     peerConnectionRef.current = pc
+
+    // 자동 재연결 — failed 즉시, disconnected 는 5초 grace (일시적 jitter 회복 대기).
+    // 동일 PC 에서 여러 번 발화하지 않도록 reconnectingFor 플래그로 1회만.
+    let disconnectedTimer: ReturnType<typeof setTimeout> | null = null
+    let reconnectingFor = false
+    const triggerReconnect = (reason: string) => {
+      if (reconnectingFor) return
+      if (peerConnectionRef.current !== pc) return  // 이미 다른 PC 로 교체됨
+      reconnectingFor = true
+      console.warn(`[PC] 자동 재연결 트리거 — ${reason}`)
+      setAudioReconnecting(true)
+      try { pc.close() } catch { /* ignore */ }
+      if (peerConnectionRef.current === pc) peerConnectionRef.current = null
+      // WS 재연결 → 강사가 새 offer 보냄 → handleWebRtcOffer 가 새 PC 생성.
+      forceReconnectRef.current?.()
+      // 토스트는 새 offer 도착 시 (ontrack onunmute) 또는 5초 후 자동 해제.
+      window.setTimeout(() => setAudioReconnecting(false), 5000)
+    }
+
     pc.onconnectionstatechange = () => {
       console.log(`[PC] connectionState=${pc.connectionState}`)
+      if (pc.connectionState === 'failed') {
+        triggerReconnect('connectionState=failed')
+      } else if (pc.connectionState === 'connected') {
+        // 복구 — 진행 중인 disconnected timer 취소 + 재연결 토스트 해제.
+        if (disconnectedTimer) { clearTimeout(disconnectedTimer); disconnectedTimer = null }
+        setAudioReconnecting(false)
+      }
     }
     pc.oniceconnectionstatechange = () => {
       console.log(`[PC] iceConnectionState=${pc.iceConnectionState}`)
+      if (pc.iceConnectionState === 'failed') {
+        triggerReconnect('iceConnectionState=failed')
+      } else if (pc.iceConnectionState === 'disconnected') {
+        // 5초 grace — 일시적 network jitter 면 자체 복구되므로 즉시 재연결 안 함.
+        if (disconnectedTimer) clearTimeout(disconnectedTimer)
+        disconnectedTimer = setTimeout(() => {
+          if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+            triggerReconnect('iceConnectionState=disconnected (5s grace 후 미복구)')
+          }
+        }, 5000)
+      } else if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        if (disconnectedTimer) { clearTimeout(disconnectedTimer); disconnectedTimer = null }
+      }
     }
     pc.ontrack = (e) => {
       if (e.track.kind === 'video') {
@@ -402,7 +441,7 @@ function Student() {
     unitPlayer.enqueueLifecycle(apply, label)
   }, [unitPlayer])
 
-  const { isConnected, connect, send, sendChat, sendStudentRename, sendStudentAudioLang } = useWebSocket(
+  const { isConnected, connect, forceReconnect, send, sendChat, sendStudentRename, sendStudentAudioLang } = useWebSocket(
     WS_PIPELINE_URL,
     'student',
     {
@@ -415,6 +454,17 @@ function Student() {
       onLifecycle,
     },
   )
+
+  // 음성 자동 재연결 상태 — PC failed/disconnected 감지 시 WS 재연결 + 토스트.
+  const [audioReconnecting, setAudioReconnecting] = useState(false)
+  // 회선 품질 — inbound-rtp stats 기반 5초 윈도우 packet loss 비율.
+  // 'good' < 1%, 'fair' 1~5%, 'poor' > 5%, 'offline' = PC 미연결 또는 stats 없음.
+  const [connectionQuality, setConnectionQuality] = useState<'good' | 'fair' | 'poor' | 'offline'>('offline')
+  const [lossPercent, setLossPercent] = useState(0)
+
+  // forceReconnect 를 ref 로 — handleWebRtcOffer 클로저에서 최신 함수 호출.
+  const forceReconnectRef = useRef(forceReconnect)
+  useEffect(() => { forceReconnectRef.current = forceReconnect }, [forceReconnect])
 
   useEffect(() => { sendRef.current = send }, [send])
 
@@ -561,23 +611,28 @@ function Student() {
     connect()
   }, [connect])
 
-  // 화면 공유 모드 진입 → 이미 받아둔 stream을 video에 연결, 종료 시 PC + srcObject 정리
+  // 화면 공유 모드 ↔ 슬라이드 모드 전환 시 video 엘리먼트만 관리.
+  // PC 는 audio (lecturer voice) 와 video (screen share) 를 함께 옮기므로 강의 종료
+  // 전엔 절대 닫지 않음. (이전 구현이 슬라이드 모드 진입 시 PC 닫아 원본 음성 끊김 발생)
   useEffect(() => {
     const video = screenVideoRef.current
     if (isLectureStarted && presentationMode === 'screen') {
-      // ontrack이 useEffect보다 먼저 발화했을 수 있으므로 pendingStream을 적용
+      // 화면 공유 모드: ontrack이 useEffect 보다 먼저 발화했을 수 있으므로 pendingStream을 적용
       if (video && pendingStreamRef.current) {
         video.srcObject = pendingStreamRef.current
       }
       return
     }
-    // 화면 공유 모드 이탈 → PC 종료 + video 비우기
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.close()
-      peerConnectionRef.current = null
-    }
-    pendingStreamRef.current = null
+    // 슬라이드 모드 (강의 중) 또는 강의 종료 → video 엘리먼트만 비움. PC 는 유지.
     if (video) video.srcObject = null
+    // 강의 종료 시점에만 PC 종료 — audio 도 같이 흘렀으므로 강의 중 닫으면 원본 음성 끊김.
+    if (!isLectureStarted) {
+      if (peerConnectionRef.current) {
+        peerConnectionRef.current.close()
+        peerConnectionRef.current = null
+      }
+      pendingStreamRef.current = null
+    }
   }, [isLectureStarted, presentationMode])
 
   // 자동 unlock 은 autoEnter 경로 한정 — /start "강의 참여" 클릭의 transient
@@ -820,20 +875,55 @@ function Student() {
     }
   }, [audioLang, volume, isMuted, isPaused, isAudioUnlocked])
 
-  // 진단: 5초마다 WebRTC inbound audio stats 출력 — RTP 가 실제로 흐르는지 확인.
-  // "트랙은 받았는데 소리 무음" 시나리오에서 packetsReceived 가 0 이면 강사측 송신 문제,
-  // 0보다 크면 학생측 재생 단계 문제 (GainNode/AudioContext 등).
+  // 5초 윈도우 WebRTC inbound audio stats — 진단 로그 + 회선 품질 indicator 계산.
+  // packetsLost / (packetsLost + packetsReceived) 비율로 손실률 측정.
+  //   < 1% → good, 1~5% → fair, > 5% → poor.
+  // delta 기반이라 직전 5초 윈도우만 반영 (누적이 아니라 "지금 회선 상태").
   useEffect(() => {
+    let prevPackets = 0
+    let prevLost = 0
+    let trackedPc: RTCPeerConnection | null = null   // PC 교체 감지 — 재연결 후 prev 카운터 오염 방지
     const id = window.setInterval(async () => {
       const pc = peerConnectionRef.current
-      if (!pc) return
+      if (!pc || pc.connectionState !== 'connected') {
+        setConnectionQuality('offline')
+        setLossPercent(0)
+        trackedPc = null
+        return
+      }
+      // PC 가 교체됐으면 (auto-reconnect 후 새 PC) prev 카운터 리셋.
+      if (pc !== trackedPc) {
+        prevPackets = 0
+        prevLost = 0
+        trackedPc = pc
+      }
       try {
         const stats = await pc.getStats()
+        let cur = 0, lost = 0, jitter = 0
         stats.forEach((report) => {
           if (report.type === 'inbound-rtp' && report.kind === 'audio') {
-            console.log(`[Stats] inbound audio: packets=${report.packetsReceived} bytes=${report.bytesReceived} jitter=${report.jitter?.toFixed?.(3) ?? '?'}`)
+            cur = report.packetsReceived ?? 0
+            lost = report.packetsLost ?? 0
+            jitter = report.jitter ?? 0
           }
         })
+        const deltaReceived = Math.max(0, cur - prevPackets)
+        const deltaLost = Math.max(0, lost - prevLost)
+        prevPackets = cur
+        prevLost = lost
+        const denom = deltaReceived + deltaLost
+        const loss = denom > 0 ? (deltaLost / denom) * 100 : 0
+        setLossPercent(loss)
+        if (deltaReceived === 0) {
+          setConnectionQuality('offline')   // RTP 안 흐름
+        } else if (loss < 1) {
+          setConnectionQuality('good')
+        } else if (loss < 5) {
+          setConnectionQuality('fair')
+        } else {
+          setConnectionQuality('poor')
+        }
+        console.log(`[Stats] inbound audio: Δrecv=${deltaReceived} Δlost=${deltaLost} loss=${loss.toFixed(1)}% jitter=${jitter.toFixed(3)}`)
       } catch { /* getStats 실패 — 무시 */ }
     }, 5000)
     return () => window.clearInterval(id)
@@ -923,6 +1013,14 @@ function Student() {
         </div>
       )}
 
+      {/* 음성 자동 재연결 진행 토스트 — 약 2~5초 뒤 자동 사라짐. */}
+      {audioReconnecting && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[80] flex items-center gap-2 px-4 py-2.5 bg-yellow-500/95 text-white rounded-xl shadow-xl backdrop-blur-md text-sm font-medium">
+          <span className="w-2 h-2 bg-white rounded-full animate-pulse" />
+          음성 재연결 중…
+        </div>
+      )}
+
       {/* 자막 다운로드 모달 */}
       {showTranscriptModal && sessionId && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -995,6 +1093,33 @@ function Student() {
           {ttsStatus === 'error' && (
             <span className="flex items-center gap-1.5 px-2.5 py-1 bg-error/20 text-error text-xs font-medium rounded-full border border-error/30">
               TTS 오류
+            </span>
+          )}
+          {/* 회선 품질 indicator — 강의 진행 중에만 표시.
+              good: 초록 / fair: 노랑 / poor: 빨강 / offline: 회색 (PC 미연결).
+              tooltip 으로 손실률 % 노출 — 사용자가 회선 자가 진단 가능. */}
+          {isLectureStarted && (
+            <span
+              className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full border ${
+                connectionQuality === 'good'
+                  ? 'bg-green-500/20 text-green-600 dark:text-green-400 border-green-500/30'
+                  : connectionQuality === 'fair'
+                  ? 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400 border-yellow-500/30'
+                  : connectionQuality === 'poor'
+                  ? 'bg-error/20 text-error border-error/30'
+                  : 'bg-onSurface/10 text-onSurface/60 border-onSurface/20'
+              }`}
+              title={
+                connectionQuality === 'offline'
+                  ? '음성 연결 없음'
+                  : `회선 품질: ${connectionQuality === 'good' ? '좋음' : connectionQuality === 'fair' ? '보통' : '나쁨'} (손실률 ${lossPercent.toFixed(1)}%)`
+              }
+              aria-label="회선 품질"
+            >
+              {/* WiFi 아이콘 — 품질 따라 막대 표시 (poor/offline 도 같은 아이콘, 색상으로 구분) */}
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
+              </svg>
             </span>
           )}
         </div>

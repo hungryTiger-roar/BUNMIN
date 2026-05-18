@@ -763,7 +763,13 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     socketRef.current = socket
   }, [url, role, setConnected])
 
+  // connectGenerationRef — disconnect / forceReconnect 가 호출될 때마다 증가.
+  // forceReconnect 의 100ms 지연 setTimeout 이 fire 할 시점에 그 사이 disconnect 가
+  // 호출됐는지 비교 → unmount 중 leak (좀비 소켓 생성) 차단.
+  const connectGenerationRef = useRef(0)
+
   const disconnect = useCallback(() => {
+    connectGenerationRef.current++
     intentionallyClosedRef.current = true
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current)
@@ -774,6 +780,28 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     setIsConnected(false)
     setConnected(false)
   }, [setConnected])
+
+  // forceReconnect — WebRTC PC 가 failed 등으로 죽었을 때 강사측이 새 offer 를 보내도록
+  // WS 를 닫았다 다시 열어 재등록 흐름을 트리거. 자동 reconnect 의 3초 지연을 우회.
+  const forceReconnect = useCallback(() => {
+    const myGen = ++connectGenerationRef.current
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current)
+      reconnectTimeoutRef.current = undefined
+    }
+    intentionallyClosedRef.current = true   // onclose 의 자동 reconnect 차단 — 우리가 직접 다시 connect.
+    socketRef.current?.close()
+    socketRef.current = null
+    setIsConnected(false)
+    setConnected(false)
+    // 100ms 지연으로 close 가 서버에 전파되고 cleanup 마무리 후 새 연결 시도.
+    // 단, 그 사이 disconnect (unmount) 또는 또 다른 forceReconnect 가 발생했으면 skip.
+    setTimeout(() => {
+      if (myGen !== connectGenerationRef.current) return
+      intentionallyClosedRef.current = false
+      connect()
+    }, 100)
+  }, [connect, setConnected])
 
   // 마운트/언마운트 시에만 cleanup이 호출되도록 ref 패턴 + 빈 deps.
   // disconnect를 직접 deps에 넣으면 reference가 흔들릴 때마다 cleanup → disconnect → onclose 자동재연결 무한 루프 위험.
@@ -789,6 +817,7 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
     isConnected,
     connect,
     disconnect,
+    forceReconnect,
     send,
     sendChat,
     sendLectureTitle,
