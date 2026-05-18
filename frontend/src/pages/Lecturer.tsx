@@ -1407,7 +1407,7 @@ function Lecturer() {
                             startScreenCapture()
                           }}
                           aria-disabled={!isLectureStarted}
-                          className={`px-4 py-2 bg-primary text-onPrimary rounded-lg transition-colors ${
+                          className={`px-4 py-2 bg-bunmin text-white rounded-lg transition-colors ${
                             isLectureStarted ? 'hover:opacity-90' : 'opacity-50 cursor-not-allowed'
                           }`}
                         >
@@ -1495,7 +1495,7 @@ function Lecturer() {
                   }}
                   className={`px-4 py-1.5 rounded-md font-medium transition-colors text-sm ${
                     presentationMode === 'slide'
-                      ? 'bg-primary text-onPrimary shadow-sm'
+                      ? 'bg-bunmin text-white shadow-sm'
                       : 'text-onSurface/70 hover:text-onSurface'
                   }`}
                 >
@@ -1512,7 +1512,7 @@ function Lecturer() {
                   }}
                   className={`px-4 py-1.5 rounded-md font-medium transition-colors text-sm ${
                     presentationMode === 'screen'
-                      ? 'bg-primary text-onPrimary shadow-sm'
+                      ? 'bg-bunmin text-white shadow-sm'
                       : 'text-onSurface/70 hover:text-onSurface'
                   }`}
                 >
@@ -1676,64 +1676,67 @@ function Lecturer() {
               </div>
             </div>
 
-            {/* 마우스 포인터 카드 */}
-            <div className="bg-surface dark:bg-overlaySurface text-onSurface rounded-xl p-4 shadow-sm sidebar-card">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold">마우스 포인터</h3>
-                <button
-                  type="button"
-                  onClick={() => setSpotlightEnabled((v) => !v)}
-                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                    spotlightEnabled
-                      ? 'bg-primary text-onPrimary shadow-sm'
-                      : 'bg-primaryContainer text-onSurface/60 hover:bg-primaryContainer hover:text-onSurface'
-                  }`}
-                  aria-pressed={spotlightEnabled}
-                >
-                  {spotlightEnabled ? 'ON' : 'OFF'}
-                </button>
-              </div>
+            {/* 마우스 포인터 / 필기 카드 — 강의 시작 후에만 노출 */}
+            {isLectureStarted && (
+              <>
+                <div className="bg-surface dark:bg-overlaySurface text-onSurface rounded-xl p-4 shadow-sm sidebar-card">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold">마우스 포인터</h3>
+                    <button
+                      type="button"
+                      onClick={() => setSpotlightEnabled((v) => !v)}
+                      className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                        spotlightEnabled
+                          ? 'bg-primary text-onPrimary shadow-sm'
+                          : 'bg-primaryContainer text-onSurface/60 hover:bg-primaryContainer hover:text-onSurface'
+                      }`}
+                      aria-pressed={spotlightEnabled}
+                    >
+                      {spotlightEnabled ? 'ON' : 'OFF'}
+                    </button>
+                  </div>
 
-              <label className="text-xs text-onSurface/60 mb-1.5 block">
-                스팟라이트 색상
-              </label>
-              <div className="grid grid-cols-6 gap-1.5 mb-2">
-                {SPOTLIGHT_PRESETS.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => {
-                      setSpotlightColor(c)
-                      if (!spotlightEnabled) setSpotlightEnabled(true)
-                    }}
-                    className={`w-full aspect-square rounded-full border-2 transition-transform hover:scale-110 ${
-                      spotlightColor === c
-                        ? 'border-onSurface ring-2 ring-offset-1 ring-onSurface/30'
-                        : 'border-transparent'
-                    }`}
-                    style={{ backgroundColor: c }}
-                    aria-label={`Color ${c}`}
-                  />
-                ))}
-              </div>
-            </div>
+                  <label className="text-xs text-onSurface/60 mb-1.5 block">
+                    스팟라이트 색상
+                  </label>
+                  <div className="grid grid-cols-6 gap-1.5 mb-2">
+                    {SPOTLIGHT_PRESETS.map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => {
+                          setSpotlightColor(c)
+                          if (!spotlightEnabled) setSpotlightEnabled(true)
+                        }}
+                        className={`w-full aspect-square rounded-full border-2 transition-transform hover:scale-110 ${
+                          spotlightColor === c
+                            ? 'border-onSurface ring-2 ring-offset-1 ring-onSurface/30'
+                            : 'border-transparent'
+                        }`}
+                        style={{ backgroundColor: c }}
+                        aria-label={`Color ${c}`}
+                      />
+                    ))}
+                  </div>
+                </div>
 
-            {/* 필기 카드 */}
-            <DrawingToolbar
-              enabled={drawingEnabled}
-              setEnabled={setDrawingEnabled}
-              tool={drawingTool}
-              setTool={setDrawingTool}
-              color={drawingColor}
-              setColor={setDrawingColor}
-              palette={SPOTLIGHT_PRESETS}
-              onClearAll={() => {
-                drawingCanvasRef.current?.clearPage(currentPage)
-                if (isConnected && isLectureStarted) {
-                  send({ type: 'draw_clear', page: currentPage })
-                }
-              }}
-            />
+                <DrawingToolbar
+                  enabled={drawingEnabled}
+                  setEnabled={setDrawingEnabled}
+                  tool={drawingTool}
+                  setTool={setDrawingTool}
+                  color={drawingColor}
+                  setColor={setDrawingColor}
+                  palette={SPOTLIGHT_PRESETS}
+                  onClearAll={() => {
+                    drawingCanvasRef.current?.clearPage(currentPage)
+                    if (isConnected && isLectureStarted) {
+                      send({ type: 'draw_clear', page: currentPage })
+                    }
+                  }}
+                />
+              </>
+            )}
 
             {/* 자료 다운로드 */}
             {slideStatus === 'ready' && slideId && (
