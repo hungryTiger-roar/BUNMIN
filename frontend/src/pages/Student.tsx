@@ -277,6 +277,9 @@ function Student() {
         mute.gain.cancelScheduledValues(now)
         mute.gain.setValueAtTime(mute.gain.value, now)
         mute.gain.linearRampToValueAtTime(0, now + 0.03)
+        // snap 끝날 때까지 0 hold — 없으면 0.03 ramp-down 직후 곧바로 0.10 ramp-up 으로
+        // 선형 보간돼서 snap 시점(t=0.05)에 gain≈0.29 (-10.9dB) 로 클릭 누출. 헤드폰 환경에서 인지 가능.
+        mute.gain.setValueAtTime(0, now + 0.07)
         node.delayTime.cancelScheduledValues(now + 0.05)
         node.delayTime.setValueAtTime(clamped, now + 0.05)
         mute.gain.linearRampToValueAtTime(1, now + 0.10)
