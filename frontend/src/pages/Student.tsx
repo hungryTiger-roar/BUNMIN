@@ -167,6 +167,9 @@ function Student() {
   const audioContextRef = useRef<AudioContext | null>(null)
   const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null)
   const delayNodeRef = useRef<DelayNode | null>(null)
+  // muteGain: delayTime 큰 폭 변경 직전 짧은 mute 전용 — 사용자 볼륨/audioLang 토글의 gainNode 와
+  // 직렬 연결되어 곱연산. 분리해야 외계어 방지 mute 가 사용자 볼륨 상태와 race 안 함.
+  const muteGainRef = useRef<GainNode | null>(null)
   const gainNodeRef = useRef<GainNode | null>(null)
   const pendingAudioStreamRef = useRef<MediaStream | null>(null)
 
@@ -186,12 +189,15 @@ function Student() {
         const ctx = new AudioContext()
         const delayNode = ctx.createDelay(ORIGINAL_AUDIO_DELAY_MAX_SEC)
         delayNode.delayTime.value = delayMs / 1000
+        const muteGain = ctx.createGain()
+        muteGain.gain.value = 1
         const gainNode = ctx.createGain()
         gainNode.gain.value = 0  // 초기 0 — sync effect 가 즉시 올림
-        delayNode.connect(gainNode).connect(ctx.destination)
+        delayNode.connect(muteGain).connect(gainNode).connect(ctx.destination)
 
         audioContextRef.current = ctx
         delayNodeRef.current = delayNode
+        muteGainRef.current = muteGain
         gainNodeRef.current = gainNode
 
         // ontrack 이 unlock 보다 먼저 도착해서 보관된 stream 이 있으면 지금 연결.
@@ -244,20 +250,37 @@ function Student() {
   // hook docstring 이 명시한 "Student.tsx 가 getCurrentDelay 폴링" 의 빠진 구현부 —
   // 미구현 시 처리시간 > 고정 delayMs 인 발화에서 원본만 먼저 들리는 desync 발생.
   // DelayNode max 는 (delayMs/1000)+5 라 env 작을 때 그 한도까지만 따라감 (clamp).
+  //
+  // 변화량 분기 (외계어/역재생 방지):
+  //   - delayTime 을 짧은 시간에 큰 폭으로 ramp 하면 DelayNode 가 소스를 거꾸로/빠르게 읽어
+  //     "삐리리" / 역재생 노이즈 발생 (output(t)=input(t-delayTime(t)) 의 미분 결과로 재생속도 = 1 - d(delay)/dt).
+  //   - 작은 변화 (< 0.2s): 2초 ramp — 변화율 < 0.1/s 라 pitch shift 거의 안 들림 (5% 이하).
+  //   - 큰 변화 (≥ 0.2s): 100ms mute → setValueAtTime snap → unmute. 외계어 대신 짧은 무음 + rewind/skip.
   useEffect(() => {
     const id = window.setInterval(() => {
       const ctx = audioContextRef.current
       const node = delayNodeRef.current
-      if (!ctx || !node) return
+      const mute = muteGainRef.current
+      if (!ctx || !node || !mute) return
       const targetSec = unitPlayerRef.current.getCurrentDelay() / 1000
       if (!Number.isFinite(targetSec)) return
       const clamped = Math.min(targetSec, ORIGINAL_AUDIO_DELAY_MAX_SEC)
       const current = node.delayTime.value
-      if (Math.abs(clamped - current) < 0.1) return
+      const diffSec = Math.abs(clamped - current)
+      if (diffSec < 0.1) return
       const now = ctx.currentTime
-      node.delayTime.cancelScheduledValues(now)
-      node.delayTime.setValueAtTime(current, now)
-      node.delayTime.linearRampToValueAtTime(clamped, now + 0.2)
+      if (diffSec < 0.2) {
+        node.delayTime.cancelScheduledValues(now)
+        node.delayTime.setValueAtTime(current, now)
+        node.delayTime.linearRampToValueAtTime(clamped, now + 2.0)
+      } else {
+        mute.gain.cancelScheduledValues(now)
+        mute.gain.setValueAtTime(mute.gain.value, now)
+        mute.gain.linearRampToValueAtTime(0, now + 0.03)
+        node.delayTime.cancelScheduledValues(now + 0.05)
+        node.delayTime.setValueAtTime(clamped, now + 0.05)
+        mute.gain.linearRampToValueAtTime(1, now + 0.10)
+      }
     }, 250)
     return () => window.clearInterval(id)
   }, [])
@@ -767,10 +790,12 @@ function Student() {
   useEffect(() => () => {
     try { sourceNodeRef.current?.disconnect() } catch {}
     try { delayNodeRef.current?.disconnect() } catch {}
+    try { muteGainRef.current?.disconnect() } catch {}
     try { gainNodeRef.current?.disconnect() } catch {}
     audioContextRef.current?.close().catch(() => {})
     sourceNodeRef.current = null
     delayNodeRef.current = null
+    muteGainRef.current = null
     gainNodeRef.current = null
     audioContextRef.current = null
   }, [])
@@ -790,16 +815,21 @@ function Student() {
       try {
         try { sourceNodeRef.current?.disconnect() } catch { /* ignore */ }
         try { delayNodeRef.current?.disconnect() } catch { /* ignore */ }
+        try { muteGainRef.current?.disconnect() } catch { /* ignore */ }
         sourceNodeRef.current = null
         delayNodeRef.current = null
+        muteGainRef.current = null
 
         await ctx.resume()
 
-        // 새 DelayNode — 이전 buffer (suspend 시점에 freeze 된 stale 샘플) 폐기.
+        // 새 DelayNode + muteGain — 이전 buffer (suspend 시점에 freeze 된 stale 샘플) 폐기.
         const newDelayNode = ctx.createDelay(ORIGINAL_AUDIO_DELAY_MAX_SEC)
         newDelayNode.delayTime.value = delayMs / 1000
-        newDelayNode.connect(gain)
+        const newMuteGain = ctx.createGain()
+        newMuteGain.gain.value = 1
+        newDelayNode.connect(newMuteGain).connect(gain)
         delayNodeRef.current = newDelayNode
+        muteGainRef.current = newMuteGain
 
         // WebRTC MediaStream 재연결 — audio element 의 srcObject 우선, 없으면 pending
         const audioEl = originalAudioRef.current
