@@ -98,8 +98,8 @@ OCR_DEVICE=cpu
 
 **해결:**
 ```bash
-# config/term_corrections.csv에 용어 추가
-echo "한계비용,Marginal Cost" >> config/term_corrections.csv
+# config/glossary.csv에 용어 추가
+echo "한계비용,Marginal Cost" >> config/glossary.csv
 ```
 
 **주의:**
@@ -116,8 +116,8 @@ echo "한계비용,Marginal Cost" >> config/term_corrections.csv
 **해결:**
 ```bash
 # CSV에 해당 패턴 추가
-echo "10대 기본원리,10 Fundamental Principles" >> config/term_corrections.csv
-echo "10대 원리,10 Principles" >> config/term_corrections.csv
+echo "10대 기본원리,10 Fundamental Principles" >> config/glossary.csv
+echo "10대 원리,10 Principles" >> config/glossary.csv
 ```
 
 ---
@@ -254,7 +254,7 @@ chmod -R 755 uploads/
 
 ---
 
-### 4.3 term_corrections.csv 로드 안 됨
+### 4.3 glossary.csv 로드 안 됨
 
 **증상:**
 - 로그에 `[TermCorrections] CSV 파일 없음` 출력
@@ -263,10 +263,10 @@ chmod -R 755 uploads/
 **해결:**
 ```bash
 # CSV 파일 위치 확인
-ls -la config/term_corrections.csv
+ls -la config/glossary.csv
 
 # 또는 환경변수로 경로 지정
-export TERM_CORRECTIONS_FILE=/path/to/term_corrections.csv
+export GLOSSARY_FILE=/path/to/glossary.csv
 ```
 
 ---

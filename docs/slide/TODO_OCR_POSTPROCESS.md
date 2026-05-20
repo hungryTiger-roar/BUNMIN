@@ -35,7 +35,7 @@ VLM 번역: "Principles of Gigye Learning" (오역)
 
 ## 향후 개선 방안
 
-### 방안 1: term_corrections.csv 기반 Fuzzy Matching
+### 방안 1: glossary.csv 기반 Fuzzy Matching
 기존 용어집의 한글 키를 기준으로 유사도 매칭.
 
 ```python
@@ -86,7 +86,7 @@ VLM에 OCR 결과 + 이미지를 함께 전달하여 교정.
 ## 우선순위
 
 1. **단기**: ocr_corrections.csv에 자주 발생하는 오타 수동 등록
-2. **중기**: term_corrections.csv 기반 fuzzy matching 구현
+2. **중기**: glossary.csv 기반 fuzzy matching 구현
 3. **장기**: LLM 기반 후보정 또는 맞춤법 검사기 통합
 
 ## 관련 파일

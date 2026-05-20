@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aunion AI — 포팅 매뉴얼</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #5a5a5a;
+    --accent: #2563eb;
+    --accent-bg: #eff6ff;
+    --border: #e5e7eb;
+    --table-head: #f8fafc;
+    --table-row-alt: #fafafa;
+    --code-bg: #f5f5f5;
+    --code-block-bg: #1e1e1e;
+    --code-block-fg: #e6e6e6;
+    --quote-bg: #fff7ed;
+    --quote-border: #fb923c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard", "Noto Sans KR", "맑은 고딕", Roboto, sans-serif;
+    line-height: 1.7;
+    color: var(--fg);
+    background: var(--bg);
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 40px 32px 80px;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1 {
+    font-size: 2.2em;
+    margin: 0 0 0.4em;
+    padding-bottom: 0.4em;
+    border-bottom: 3px solid var(--accent);
+    letter-spacing: -0.5px;
+  }
+  h2 {
+    font-size: 1.6em;
+    margin: 2em 0 0.6em;
+    padding-bottom: 0.3em;
+    border-bottom: 1px solid var(--border);
+    letter-spacing: -0.3px;
+  }
+  h3 {
+    font-size: 1.25em;
+    margin: 1.6em 0 0.5em;
+    color: var(--accent);
+  }
+  h4 {
+    font-size: 1.05em;
+    margin: 1.2em 0 0.4em;
+  }
+  p { margin: 0.8em 0; }
+  ul, ol { margin: 0.6em 0; padding-left: 1.6em; }
+  li { margin: 0.25em 0; }
+  a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px dotted var(--accent);
+  }
+  a:hover { background: var(--accent-bg); }
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 2.4em 0;
+  }
+  blockquote {
+    margin: 1em 0;
+    padding: 0.8em 1.2em;
+    background: var(--quote-bg);
+    border-left: 4px solid var(--quote-border);
+    color: var(--muted);
+    border-radius: 0 6px 6px 0;
+  }
+  blockquote p { margin: 0; }
+  code {
+    font-family: "JetBrains Mono", "Fira Code", "D2Coding", Consolas, Monaco, monospace;
+    font-size: 0.9em;
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #be185d;
+  }
+  pre {
+    background: var(--code-block-bg);
+    color: var(--code-block-fg);
+    padding: 16px 20px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.88em;
+    line-height: 1.55;
+    margin: 1em 0;
+  }
+  pre code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    font-size: 1em;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1em 0;
+    font-size: 0.94em;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  th, td {
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    background: var(--table-head);
+    font-weight: 600;
+    color: var(--fg);
+    border-bottom: 2px solid var(--border);
+  }
+  tr:nth-child(even) td { background: var(--table-row-alt); }
+  tr:hover td { background: var(--accent-bg); }
+  td code { white-space: nowrap; }
+  .toc {
+    background: var(--accent-bg);
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    padding: 18px 24px;
+    margin: 1.5em 0 2.5em;
+  }
+  .toc h2 {
+    margin-top: 0;
+    border: none;
+    font-size: 1.15em;
+    color: var(--accent);
+  }
+  .toc ol { margin: 0; padding-left: 1.4em; }
+  .toc li { margin: 0.15em 0; }
+  .toc a { border-bottom: none; }
+  .toc a:hover { text-decoration: underline; }
+  .badge {
+    display: inline-block;
+    font-size: 0.75em;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--accent);
+    color: white;
+    font-weight: 500;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  @media print {
+    body { padding: 20px; max-width: none; }
+    pre, table { page-break-inside: avoid; }
+    h2 { page-break-before: auto; }
+  }
+  @media (max-width: 720px) {
+    body { padding: 24px 16px; }
+    h1 { font-size: 1.7em; }
+    h2 { font-size: 1.35em; }
+    table { font-size: 0.85em; }
+    th, td { padding: 8px 10px; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Aunion AI — 포팅 매뉴얼</h1>
+
+<p>새 PC 에서 GitLab 소스를 클론한 직후부터 빌드 및 배포까지의 전 과정을 다룹니다. 소스코드 자체는 별도 업로드하지 않으며, 본 문서만으로 동일 환경 재현이 가능합니다.</p>
+
+<blockquote><p>본 매뉴얼은 SSAFY 자율프로젝트 S14P31S205 (Aunion AI) 의 공식 배포 가이드입니다.</p></blockquote>
+
+<nav class="toc">
+  <h2>목차</h2>
+  <ol>
+    <li><a href="#sec-0">본 프로젝트의 핵심 특이사항</a></li>
+    <li><a href="#sec-1">개발 환경 / 빌드 환경 명세</a></li>
+    <li><a href="#sec-2">빌드 시 사용되는 환경 변수</a></li>
+    <li><a href="#sec-3">환경 변수 / 설정이 정의된 파일 목록</a></li>
+    <li><a href="#sec-4">사전 도구 설치 (개발 PC)</a></li>
+    <li><a href="#sec-5">소스 클론 + 초기 setup</a></li>
+    <li><a href="#sec-6">개발 모드 실행 (검증용)</a></li>
+    <li><a href="#sec-7">설치본 빌드 (배포용 .exe)</a></li>
+    <li><a href="#sec-8">배포 시 특이사항</a></li>
+    <li><a href="#sec-9">동작 검증 시나리오</a></li>
+    <li><a href="#sec-10">트러블슈팅</a></li>
+    <li><a href="#sec-11">버전 갱신 절차</a></li>
+    <li><a href="#sec-12">참고 문서</a></li>
+    <li><a href="#sec-13">포트 / 통신 정리</a></li>
+    <li><a href="#sec-14">디렉토리 구조</a></li>
+  </ol>
+</nav>
+
+<hr>
+
+<h2 id="sec-0">0. 본 프로젝트의 핵심 특이사항 (먼저 읽기)</h2>
+
+<table>
+  <thead><tr><th>항목</th><th>본 프로젝트의 선택</th></tr></thead>
+  <tbody>
+    <tr><td>백엔드 형태</td><td>Python FastAPI (PyInstaller 로 패키징, 별도 WAS / 톰캣 없음)</td></tr>
+    <tr><td>프론트엔드 형태</td><td>Vite + React (Electron 앱으로 packaged, 별도 웹서버 없음)</td></tr>
+    <tr><td>데이터베이스</td><td><strong>RDBMS 미사용</strong> (브라우저 IndexedDB + 파일시스템 기반)</td></tr>
+    <tr><td>배포 방식</td><td>Inno Setup <code>.exe</code> 단일 인스톨러 (Windows per-user)</td></tr>
+    <tr><td>외부 서버</td><td>자체 호스팅 (강사 노트북) — 클라우드 서버 미사용</td></tr>
+    <tr><td>통신</td><td>WebRTC P2P + WebSocket (TURN 서버 자체 호스팅)</td></tr>
+  </tbody>
+</table>
+
+<p>JVM / WAS / DB 가 일반적인 웹 프로젝트와 달라 본 매뉴얼은 "사용한 기술 스택 그대로" 기재합니다.</p>
+
+<hr>
+
+<h2 id="sec-1">1. 개발 환경 / 빌드 환경 명세</h2>
+
+<h3>1.1 사용한 IDE / 도구 종류 및 버전</h3>
+
+<table>
+  <thead><tr><th>분류</th><th>도구</th><th>버전</th><th>비고</th></tr></thead>
+  <tbody>
+    <tr><td>코드 에디터</td><td>Visual Studio Code</td><td>1.x</td><td>권장 (필수 X)</td></tr>
+    <tr><td>OS</td><td>Windows 10 / 11 64-bit</td><td>—</td><td>PyInstaller spec 이 Windows 전용</td></tr>
+    <tr><td>Node.js</td><td><strong>20+ LTS</strong></td><td>v20.x</td><td>nodejs.org 다운로드</td></tr>
+    <tr><td>npm</td><td>10+</td><td>(Node.js 내장)</td><td>—</td></tr>
+    <tr><td>Python</td><td><strong>3.11</strong></td><td>conda 환경에서 자동 설치</td><td>3.10 / 3.12 호환 X</td></tr>
+    <tr><td>conda</td><td>Miniconda / Anaconda</td><td>24+</td><td>conda.io 다운로드</td></tr>
+    <tr><td>Git</td><td>최신</td><td>—</td><td>git-scm.com</td></tr>
+    <tr><td>Inno Setup</td><td><strong>6.x</strong></td><td>6.2+</td><td>인스톨러 컴파일러</td></tr>
+    <tr><td>Electron</td><td><strong>41.0.0</strong></td><td>package.json devDependencies</td><td>electron-builder 가 관리</td></tr>
+    <tr><td>electron-builder</td><td>26.0.0</td><td>package.json devDependencies</td><td>—</td></tr>
+  </tbody>
+</table>
+
+<h3>1.2 백엔드 (Python FastAPI) 스택</h3>
+
+<p>JVM / WAS 가 아닌 Python 백엔드라 일반적인 톰캣/제티 설정은 해당 없음. 대신 다음:</p>
+
+<table>
+  <thead><tr><th>항목</th><th>값</th></tr></thead>
+  <tbody>
+    <tr><td>런타임</td><td><strong>Python 3.11</strong> (conda 환경 <code>aunion</code>)</td></tr>
+    <tr><td>웹 프레임워크</td><td><strong>FastAPI</strong> + Uvicorn ASGI 서버</td></tr>
+    <tr><td>백엔드 포트</td><td><strong>48000</strong> (hard-coded, <code>backend/run.py</code>)</td></tr>
+    <tr><td>백엔드 entry</td><td><code>backend/run.py</code> → <code>app/main.py</code></td></tr>
+    <tr><td>패키징</td><td><strong>PyInstaller</strong> (<code>backend/aunion.spec</code>) → 단일 폴더 실행파일</td></tr>
+    <tr><td>헬스체크</td><td><code>GET http://127.0.0.1:48000/health</code> → <code>{"status":"ok"}</code></td></tr>
+  </tbody>
+</table>
+
+<h3>1.3 프론트엔드 (Vite + React + Electron) 스택</h3>
+
+<table>
+  <thead><tr><th>항목</th><th>값</th></tr></thead>
+  <tbody>
+    <tr><td>빌드 도구</td><td><strong>Vite 5.x</strong></td></tr>
+    <tr><td>UI 프레임워크</td><td><strong>React 18.x</strong> + TypeScript</td></tr>
+    <tr><td>스타일</td><td>Tailwind CSS</td></tr>
+    <tr><td>상태 관리</td><td>Zustand</td></tr>
+    <tr><td>Dev 서버 포트</td><td><strong>43000</strong> (개발 모드만, <code>frontend/vite.config.ts</code>)</td></tr>
+    <tr><td>Production</td><td>Electron <code>file://</code> (별도 웹서버 없음)</td></tr>
+    <tr><td>Electron entry</td><td><code>frontend/electron/main.cjs</code></td></tr>
+    <tr><td>Renderer entry</td><td><code>frontend/src/main.tsx</code></td></tr>
+  </tbody>
+</table>
+
+<h3>1.4 자체 호스팅 TURN 서버</h3>
+
+<p>WebRTC 의 P2P 보조용 자체 TURN 서버 (사내망 P2P 차단 환경 대비).</p>
+
+<table>
+  <thead><tr><th>항목</th><th>값</th></tr></thead>
+  <tbody>
+    <tr><td>구현</td><td><strong>node-turn 0.0.6</strong> (<code>turn-server/index.js</code>)</td></tr>
+    <tr><td>포트</td><td><strong>47878</strong></td></tr>
+    <tr><td>인증</td><td>username=<code>aunion</code>, credential=<code>aunion-secret</code></td></tr>
+    <tr><td>실행</td><td>Electron 앱 시작 시 자동 spawn (또는 dev 모드 <code>node turn-server/index.js</code>)</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<h2 id="sec-2">2. 빌드 시 사용되는 환경 변수</h2>
+
+<p><code>.env.example</code> → <code>.env</code> 로 복사 후 사용. <code>npm run setup</code> 이 자동으로 처리.</p>
+
+<h3>2.1 API 키</h3>
+
+<table>
+  <thead><tr><th>변수</th><th>필수?</th><th>설명</th></tr></thead>
+  <tbody>
+    <tr><td><code>HF_TOKEN</code></td><td>선택</td><td>HuggingFace 토큰 (gated 모델 다운로드 시). 공개 모델만 쓰면 비워둬도 됨.</td></tr>
+  </tbody>
+</table>
+
+<h3>2.2 실시간 AI 모델 (ASR / NMT / OCR)</h3>
+
+<table>
+  <thead><tr><th>변수</th><th>기본값</th><th>설명</th></tr></thead>
+  <tbody>
+    <tr><td><code>ASR_MODEL</code></td><td><code>models/whisper-large-v3-turbo-ct2-int8</code></td><td>음성 인식 (Whisper-large-v3-turbo, CT2 양자화)</td></tr>
+    <tr><td><code>NMT_ASR_MODEL</code></td><td><code>facebook/nllb-200-distilled-600M</code></td><td>한→영 번역 (NLLB-200-distilled-600M)</td></tr>
+    <tr><td><code>OCR_MODEL</code></td><td><code>surya</code></td><td>OCR (Surya)</td></tr>
+    <tr><td><code>ASR_DEVICE</code></td><td><code>cuda</code></td><td><code>cuda</code> (GPU) 또는 <code>cpu</code></td></tr>
+    <tr><td><code>NMT_ASR_DEVICE</code></td><td><code>cuda</code></td><td>동일</td></tr>
+    <tr><td><code>OCR_DEVICE</code></td><td><code>cuda</code></td><td>동일</td></tr>
+  </tbody>
+</table>
+
+<h3>2.3 VLM (슬라이드 번역)</h3>
+
+<table>
+  <thead><tr><th>변수</th><th>기본값</th><th>설명</th></tr></thead>
+  <tbody>
+    <tr><td><code>VLM_BASE_MODEL</code></td><td><code>Qwen/Qwen3-VL-4B-Instruct</code></td><td>슬라이드 번역 VLM</td></tr>
+    <tr><td><code>VLM_DEVICE</code></td><td><code>cuda</code></td><td>GPU 권장</td></tr>
+  </tbody>
+</table>
+
+<p>VRAM 자동 감지로 양자화 결정:</p>
+<ul>
+  <li>&lt; 7.5GB → 4bit (RTX 3060 6GB 등)</li>
+  <li>7.5 ~ 12GB → 8bit</li>
+  <li>≥ 12GB → 8bit + 더 큰 max_memory</li>
+</ul>
+
+<h3>2.4 PDF 텍스트 레이어 번역</h3>
+
+<table>
+  <thead><tr><th>변수</th><th>기본값</th><th>설명</th></tr></thead>
+  <tbody>
+    <tr><td><code>KOREAN_FONT_PATH</code></td><td><code>C:/Windows/Fonts/malgun.ttf</code></td><td>한글 폰트 (Linux: NotoSansKR)</td></tr>
+    <tr><td><code>IMAGE_BG_VARIANCE_THRESHOLD</code></td><td><code>150</code></td><td>이미지 배경 감지 임계</td></tr>
+    <tr><td><code>MIN_FONT_SIZE_TITLE</code></td><td><code>14.0</code></td><td>역할별 최소 폰트</td></tr>
+    <tr><td><code>MIN_FONT_SIZE_HEADING</code></td><td><code>12.0</code></td><td></td></tr>
+    <tr><td><code>MIN_FONT_SIZE_BODY</code></td><td><code>10.0</code></td><td></td></tr>
+    <tr><td><code>MIN_FONT_SIZE_CAPTION</code></td><td><code>6.0</code></td><td></td></tr>
+    <tr><td><code>MIN_FONT_SIZE_DEFAULT</code></td><td><code>8.0</code></td><td></td></tr>
+  </tbody>
+</table>
+
+<h3>2.5 배치 처리</h3>
+
+<table>
+  <thead><tr><th>변수</th><th>기본값</th><th>설명</th></tr></thead>
+  <tbody>
+    <tr><td><code>OCR_CHUNK_SIZE</code></td><td><code>5</code></td><td>OCR 한 번 로드로 처리할 페이지 수</td></tr>
+    <tr><td><code>VLM_CHUNK_SIZE</code></td><td><code>2</code></td><td>VLM 한 번 로드로 처리할 페이지 수</td></tr>
+    <tr><td><code>CACHE_DIR</code></td><td>(자동)</td><td>중간 결과 캐시. frozen=<code>%LOCALAPPDATA%\Aunion AI\uploads\cache\</code>, dev=<code>uploads/cache/</code></td></tr>
+  </tbody>
+</table>
+
+<h3>2.6 프론트엔드 sync 설정 (Vite 빌드 시점 inject)</h3>
+
+<table>
+  <thead><tr><th>변수</th><th>기본값</th><th>설명</th></tr></thead>
+  <tbody>
+    <tr><td><code>VITE_SYNC_DELAY_MS</code></td><td><code>5000</code></td><td>강사↔수강자 wall-clock delay 기본값 (ms). 적응형 계산이 [2000, 20000] 범위에서 자동 조정. 변경 시 frontend 재빌드 필요.</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<h2 id="sec-3">3. 환경 변수 / 설정이 정의된 파일 목록</h2>
+
+<p>DB 가 없으므로 일반적인 DB 접속 설정 파일 없음. 대신 다음 설정 파일들:</p>
+
+<table>
+  <thead><tr><th>파일</th><th>역할</th><th>gitignored?</th></tr></thead>
+  <tbody>
+    <tr><td><code>.env.example</code></td><td>환경 변수 템플릿 (커밋됨)</td><td>아니오</td></tr>
+    <tr><td><code>.env</code></td><td>실제 환경 변수 (로컬 전용)</td><td>예</td></tr>
+    <tr><td><code>backend/aunion.spec</code></td><td>PyInstaller 빌드 설정</td><td>아니오</td></tr>
+    <tr><td><code>electron-builder.json</code></td><td>Electron 패키징 설정 (extraResources / target / icon)</td><td>아니오</td></tr>
+    <tr><td><code>installer.iss</code></td><td>Inno Setup 인스톨러 설정 (AppId, 버전, 디스크 체크 등)</td><td>아니오</td></tr>
+    <tr><td><code>frontend/vite.config.ts</code></td><td>Vite 빌드 설정 (서버 포트, 환경변수 prefix)</td><td>아니오</td></tr>
+    <tr><td><code>frontend/electron/main.cjs</code></td><td>Electron main process (백엔드 spawn, TURN 시작 등)</td><td>아니오</td></tr>
+    <tr><td><code>package.json</code> (루트)</td><td>빌드 스크립트 (<code>build:installer</code>, <code>electron:build</code> 등)</td><td>아니오</td></tr>
+    <tr><td><code>frontend/package.json</code></td><td>프론트엔드 의존성</td><td>아니오</td></tr>
+    <tr><td><code>backend/requirements.txt</code> (또는 <code>pyproject.toml</code>)</td><td>Python 의존성</td><td>아니오</td></tr>
+    <tr><td><code>glossary/</code></td><td>도메인별 용어집 (커밋됨, ASR/NMT 정확도 향상)</td><td>아니오</td></tr>
+  </tbody>
+</table>
+
+<h3>데이터 저장 경로 (DB 접속 정보 대체)</h3>
+
+<table>
+  <thead><tr><th>경로</th><th>저장 내용</th></tr></thead>
+  <tbody>
+    <tr><td><code>%LOCALAPPDATA%\Aunion AI\uploads\</code></td><td>강사 업로드 자료 (PDF)</td></tr>
+    <tr><td><code>%LOCALAPPDATA%\Aunion AI\transcripts\</code></td><td>강의별 자막 파일</td></tr>
+    <tr><td><code>%LOCALAPPDATA%\Aunion AI\cache\huggingface\</code></td><td>HuggingFace 모델 캐시 (~14GB)</td></tr>
+    <tr><td><code>%LOCALAPPDATA%\Aunion AI\uploads\cache\</code></td><td>슬라이드 번역 중간 결과 캐시</td></tr>
+    <tr><td><code>%LOCALAPPDATA%\Aunion AI\error_log.txt</code></td><td>Electron 에러 로그</td></tr>
+    <tr><td><code>%LOCALAPPDATA%\Aunion AI\window-state.json</code></td><td>창 위치/크기 영속화</td></tr>
+    <tr><td><code>%APPDATA%\Aunion AI\IndexedDB\</code></td><td>학생 측 Piper TTS voice (~30MB), 학생 설정</td></tr>
+    <tr><td><code>%APPDATA%\Aunion AI\Local Storage\</code></td><td>학생 이름, 자막 스타일, audioLang 선택</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<h2 id="sec-4">4. 사전 도구 설치 (개발 PC)</h2>
+
+<pre><code># 1. Node.js 20+ LTS (nodejs.org)
+node --version    # v20+ 확인
+
+# 2. Miniconda or Anaconda (conda.io)
+conda --version
+
+# 3. NVIDIA 드라이버 + CUDA 12.x
+nvidia-smi        # CUDA Version: 12.x 표시
+
+# 4. Git
+git --version
+
+# 5. Inno Setup 6.x
+winget install JRSoftware.InnoSetup
+# 설치 후 위치: %LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe</code></pre>
+
+<p>Visual Studio Build Tools 불필요 (PyInstaller / Electron 이 내장).</p>
+
+<hr>
+
+<h2 id="sec-5">5. 소스 클론 + 초기 setup</h2>
+
+<pre><code># 1. 클론
+git clone https://lab.ssafy.com/s14-final/S14P31S205.git
+cd S14P31S205
+
+# 2. 원클릭 설치 (약 20~40분, 약 10 GB 다운로드)
+npm run setup</code></pre>
+
+<p><code>npm run setup</code> 이 자동으로 처리:</p>
+
+<table>
+  <thead><tr><th>#</th><th>단계</th><th>산출물</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>루트 npm 패키지 설치</td><td><code>node_modules/</code></td></tr>
+    <tr><td>2</td><td>프론트엔드 npm 패키지 + VAD ONNX 복사</td><td><code>frontend/node_modules/</code>, <code>frontend/public/silero_vad_*.onnx</code></td></tr>
+    <tr><td>3</td><td><code>.env.example</code> → <code>.env</code> 복사</td><td><code>.env</code></td></tr>
+    <tr><td>4</td><td>conda <code>aunion</code> 환경 생성 (Python 3.11)</td><td>conda env</td></tr>
+    <tr><td>5</td><td>Python 패키지 설치 (CUDA 12.6 PyTorch 포함)</td><td><code>aunion</code> 환경 의존성</td></tr>
+    <tr><td>6</td><td>AI 모델 다운로드 (Whisper / NLLB / Surya) + CT2 변환</td><td><code>models/whisper-large-v3-turbo-ct2-int8/</code>, <code>models/nllb-200-distilled-600M-ct2/</code></td></tr>
+    <tr><td>7</td><td>필수 파일 존재 검증</td><td>(검증만)</td></tr>
+  </tbody>
+</table>
+
+<blockquote><p>setup 도중 실패 시: <code>conda env remove -n aunion -y</code> 후 재실행.</p></blockquote>
+
+<hr>
+
+<h2 id="sec-6">6. 개발 모드 실행 (검증용)</h2>
+
+<pre><code># dev 서버 3개 동시 실행 (백엔드 + Vite + TURN)
+npm run dev
+
+# Electron 셸까지 같이 띄우려면
+npm run electron:dev</code></pre>
+
+<p>확인할 포트:</p>
+<ul>
+  <li>백엔드: <code>http://127.0.0.1:48000/health</code> → <code>{"status":"ok"}</code></li>
+  <li>프론트: <code>http://localhost:43000</code></li>
+  <li>TURN: <code>47878</code> (LISTENING)</li>
+</ul>
+
+<hr>
+
+<h2 id="sec-7">7. 설치본 빌드 (배포용 <code>.exe</code>)</h2>
+
+<h3>한 줄로</h3>
+
+<pre><code>npm run build:installer</code></pre>
+
+<h3>내부 4단계 (순차, 총 ~50분)</h3>
+
+<table>
+  <thead><tr><th>#</th><th>단계</th><th>명령</th><th>산출물</th><th>소요</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Vite 프론트 빌드</td><td><code>npm run build --prefix frontend</code></td><td><code>frontend/dist/</code></td><td>~1분</td></tr>
+    <tr><td>2</td><td>PyInstaller 백엔드 패키징</td><td><code>pyinstaller backend/aunion.spec</code></td><td><code>backend/dist/aunion_backend/</code> (5GB+)</td><td>~10~15분</td></tr>
+    <tr><td>3</td><td>electron-builder Electron 패키징</td><td><code>electron-builder --config electron-builder.json</code></td><td><code>setup/win-unpacked/</code> (~7GB)</td><td>~5~7분</td></tr>
+    <tr><td>4</td><td>Inno Setup 압축 → 단일 .exe</td><td><code>node scripts/run-iscc.js installer.iss</code></td><td><code>setup/Aunion-AI-Setup-{ver}.exe</code> (~3.4GB)</td><td>~20~30분</td></tr>
+  </tbody>
+</table>
+
+<h3>빌드 전 깨끗이 시작</h3>
+
+<pre><code># 실행 중인 앱 종료
+Get-Process | Where-Object { $_.ProcessName -match '^(aunion|Aunion)' } | Stop-Process -Force
+
+# 이전 빌드 산출물 삭제
+Remove-Item -Recurse -Force frontend\dist, backend\dist, backend\build, setup -ErrorAction SilentlyContinue</code></pre>
+
+<hr>
+
+<h2 id="sec-8">8. 배포 시 특이사항</h2>
+
+<h3>8.1 설치 위치</h3>
+
+<pre><code>%LOCALAPPDATA%\Aunion AI\          ← per-user 설치, UAC 권한 X
+├─ Aunion AI.exe                   ← 앱 본체
+├─ resources\backend\              ← PyInstaller 백엔드 (재설치 시 덮어쓰기)
+├─ resources\app.asar              ← Electron + Vite 빌드 (재설치 시 덮어쓰기)
+├─ cache\huggingface\              ← VLM 모델 (재설치 시 보존)
+├─ uploads\                        ← 강의자료 (재설치 시 보존)
+├─ transcripts\                    ← 강의 자막 (재설치 시 보존)
+├─ logs\
+└─ error_log.txt</code></pre>
+
+<h3>8.2 재설치 동작</h3>
+
+<table>
+  <thead><tr><th>항목</th><th>처리</th></tr></thead>
+  <tbody>
+    <tr><td><code>Aunion AI.exe</code>, <code>backend\</code>, <code>app.asar</code></td><td><strong>덮어씌움</strong></td></tr>
+    <tr><td>모델 캐시 / 강의자료 / 자막 / 학생 설정</td><td><strong>보존</strong></td></tr>
+    <tr><td>AppId (<code>installer.iss:8</code>)</td><td>동일 → "업데이트" 로 인식</td></tr>
+  </tbody>
+</table>
+
+<h3>8.3 첫 실행 시 추가 다운로드</h3>
+
+<ul>
+  <li>슬라이드 번역용 VLM (<code>Qwen3-VL-4B-Instruct</code>, 약 14GB) 미캐시 시 HuggingFace 에서 자동 다운로드</li>
+  <li>디스크 35GB 여유 권장 (본체 3.4GB + VLM 14GB + symlink copy 사본 14GB + 마진)</li>
+  <li>설치 마법사에서 디스크 여유 자동 체크 → 부족 시 경고</li>
+</ul>
+
+<h3>8.4 Windows 보안 정책 호환</h3>
+
+<ul>
+  <li><code>PrivilegesRequired=lowest</code> + asInvoker manifest → UAC 안 뜸</li>
+  <li>WinError 448 (신뢰할 수 없는 탑재 지점) 우회 — HF symlink → copy 모드 강제</li>
+  <li>백엔드 grace period 5분 — Electron 종료 후에도 학생 자막 다운로드 처리</li>
+</ul>
+
+<h3>8.5 알려진 이슈</h3>
+
+<table>
+  <thead><tr><th>이슈</th><th>원인</th><th>해결</th></tr></thead>
+  <tbody>
+    <tr><td>학생 측 영어 TTS "외계어" 노이즈</td><td>WebRTC PLC (네트워크 패킷 손실)</td><td>강사·학생 같은 LAN / 유선 LAN 권장</td></tr>
+    <tr><td>영어 TTS 빠른 발화 누적 desync</td><td>1.0배 고정 시 짧은 호흡 강의에서 발생 가능</td><td>호흡 시 자연 회복 (보험: catch-up 코드 비활성화)</td></tr>
+    <tr><td>GPU 메모리 부족 (Qwen3-VL 로드 실패)</td><td>&lt; 6GB VRAM</td><td>OCR / VLM 한 번에 동작 안 함, 순차 실행 필요</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<h2 id="sec-9">9. 동작 검증 시나리오</h2>
+
+<p>상세 시연 시나리오는 <a href="시연시나리오.md"><code>시연시나리오.md</code></a> 참고.</p>
+
+<p>빠른 검증 4단계:</p>
+
+<table>
+  <thead><tr><th>#</th><th>항목</th><th>확인</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>강의자: PDF 업로드 → 슬라이드 번역 진행</td><td>진행률 100% 도달</td></tr>
+    <tr><td>2</td><td>학생: 초대 링크 접속 → 음성 'original'</td><td>강사 발화 들림</td></tr>
+    <tr><td>3</td><td>학생: 'en' 토글 → Piper TTS</td><td>영어 음성 들림</td></tr>
+    <tr><td>4</td><td>강사: 일시정지 / 재개</td><td>학생 측 음성 즉시 mute / 복귀</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<h2 id="sec-10">10. 트러블슈팅</h2>
+
+<h3><code>npm run setup</code> 도중 실패</h3>
+
+<pre><code>conda env remove -n aunion -y
+npm run setup</code></pre>
+
+<h3>PyInstaller 가 <code>frontend/dist</code> 없다고 빌드 중단</h3>
+
+<pre><code>npm run build --prefix frontend
+npm run build:installer</code></pre>
+
+<h3>설치본이 마이크 / 카메라 못 잡음</h3>
+
+<ul>
+  <li><code>http://127.0.0.1:48000</code> 로딩이 secure context 인정 조건</li>
+  <li><code>%LOCALAPPDATA%\Aunion AI\error_log.txt</code> 확인</li>
+</ul>
+
+<h3><code>[WinError 448] 신뢰할 수 없는 탑재 지점</code></h3>
+
+<pre><code>Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Aunion AI\cache"
+# 앱 재시작 → 자동 재다운로드</code></pre>
+
+<h3>Inno Setup 컴파일 실패 (<code>ISCC.exe</code> 못 찾음)</h3>
+
+<pre><code>&amp; "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" installer.iss</code></pre>
+
+<h3>강사 발화가 학생에게 안 들림</h3>
+
+<p>콘솔(F12) 에서 다음 로그 확인:</p>
+<ul>
+  <li><code>[Lecturer] 초기 replaceTrack → audio=null|&lt;id&gt;</code></li>
+  <li><code>[Lecturer] swap → audio=&lt;id&gt; renegotiate=true</code></li>
+  <li><code>[Track] audio onunmute → RTP 흐름 시작</code></li>
+</ul>
+
+<p>학생 측 <code>[Stats] inbound audio packets=</code> 가 증가하면 정상. 0이면 WebRTC 재협상 / TURN 점검.</p>
+
+<h3>새로고침 후 영어 TTS 안 들림 (v0.1.0 fix 완료)</h3>
+
+<p><code>Student.tsx:847</code> 의 TTS GainNode 동기화 effect deps 에 <code>isAudioUnlocked</code> 추가됨. v0.1.0 새 빌드 사용 시 정상 작동. 옛 빌드 사용 중이면 콘솔에 <code>Student-CIiFaLnG.js</code> 가 보여야 함 (옛 빌드는 다른 hash).</p>
+
+<hr>
+
+<h2 id="sec-11">11. 버전 갱신 절차</h2>
+
+<ol>
+  <li><code>package.json</code> 의 <code>version</code> 올림 (예: <code>0.1.0</code> → <code>0.2.0</code>)</li>
+  <li><code>installer.iss</code> 의 <code>MyAppVersion</code> 동일하게 수정</li>
+  <li><code>npm run build:installer</code> 재실행</li>
+  <li>새 <code>setup/Aunion-AI-Setup-0.2.0.exe</code> 배포</li>
+  <li>사용자는 새 setup.exe 실행 → 자동 덮어쓰기 (사용자 데이터 자동 보존)</li>
+</ol>
+
+<hr>
+
+<h2 id="sec-12">12. 참고 문서</h2>
+
+<ul>
+  <li><a href="외부서비스정보.md">외부서비스정보.md</a> — 외부 서비스 (HuggingFace, STUN 등) 가입/활용 정보</li>
+  <li><a href="데이터구조.md">데이터구조.md</a> — DB 미사용 / 데이터 저장 구조 / 덤프 대체 자료</li>
+  <li><a href="시연시나리오.md">시연시나리오.md</a> — 화면별 클릭 위치까지 상세</li>
+  <li><a href="../docs/setting/실행방법.md"><code>/docs/setting/실행방법.md</code></a> — 일상적 dev 실행</li>
+  <li><a href="../docs/setting/환경설정.md"><code>/docs/setting/환경설정.md</code></a> — <code>.env</code> 항목별 의미</li>
+  <li><a href="../docs/setting/Electron-설치파일-생성방법.md"><code>/docs/setting/Electron-설치파일-생성방법.md</code></a> — 빌드 내부 동작 + 트러블슈팅 상세</li>
+</ul>
+
+<hr>
+
+<h2 id="sec-13">13. 포트 / 통신 정리 (방화벽 설정용)</h2>
+
+<table>
+  <thead><tr><th>포트</th><th>프로토콜</th><th>용도</th><th>외부 노출</th></tr></thead>
+  <tbody>
+    <tr><td><strong>48000</strong></td><td>HTTP/WS</td><td>백엔드 FastAPI + WebSocket (강사↔수강자 시그널링)</td><td>같은 LAN 내 학생에게 노출</td></tr>
+    <tr><td><strong>47878</strong></td><td>UDP/TCP</td><td>TURN 서버 (WebRTC relay)</td><td>같은 LAN 내 학생에게 노출</td></tr>
+    <tr><td><strong>43000</strong></td><td>HTTP</td><td>Vite dev 서버 (개발 시만)</td><td>외부 노출 X</td></tr>
+    <tr><td>동적 UDP</td><td>UDP</td><td>WebRTC P2P (오디오/비디오)</td><td>학생 간 직접 P2P</td></tr>
+  </tbody>
+</table>
+
+<p>방화벽에서 48000, 47878 인바운드 허용 필요 (학생 PC 가 강사 노트북 접근 가능하도록).</p>
+
+<hr>
+
+<h2 id="sec-14">14. 디렉토리 구조 (저장소)</h2>
+
+<pre><code>S14P31S205/
+├─ backend/                  # Python FastAPI 백엔드
+│   ├─ app/                  # 라우터 / 서비스
+│   ├─ aunion.spec           # PyInstaller spec
+│   └─ run.py                # 백엔드 엔트리포인트
+├─ frontend/                 # Vite + React + Electron
+│   ├─ electron/             # main.cjs / preload.cjs / 아이콘
+│   ├─ src/                  # React 소스
+│   ├─ public/               # 정적 자원 (VAD ONNX 등)
+│   └─ package.json
+├─ turn-server/              # node-turn 로컬 TURN 서버
+├─ models/                   # AI 모델 (gitignore, npm run setup 으로 받음)
+├─ installer-assets/         # Inno Setup 마법사 비주얼 자산
+├─ scripts/                  # setup.js / ensure-env.js / run-iscc.js 등
+├─ docs/                     # 추가 설정/실행 문서
+├─ exec/                     # ★ 본 포팅 매뉴얼 + 시연 시나리오 + 외부 서비스 정보
+├─ glossary/                 # 도메인 용어집 (ASR/NMT 정확도용)
+├─ uploads/                  # 강의 자료 (dev 모드, gitignore)
+├─ electron-builder.json     # Electron 빌드 설정
+├─ installer.iss             # Inno Setup 인스톨러 설정
+├─ package.json              # 루트 — 빌드 스크립트
+├─ .env.example              # 환경 변수 템플릿
+└─ .gitignore</code></pre>
+
+</body>
+</html>

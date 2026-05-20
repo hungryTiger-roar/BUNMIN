@@ -62,7 +62,7 @@ Page N: (반복)
 │  [Stage 4] VLM 번역 배치                                  │
 │  ├─ VLM 모델 로드 (1회, Qwen3-VL-4B 4bit)                 │
 │  ├─ 한글 포함 페이지만 필터링                             │
-│  ├─ 용어집 (term_corrections.csv) 프롬프트에 포함         │
+│  ├─ 용어집 (glossary.csv) 프롬프트에 포함         │
 │  ├─ 모든 번역 대상 페이지 처리                            │
 │  ├─ 결과 → uploads/cache/{id}/translate_*.json           │
 │  └─ VLM 언로드                                            │
@@ -207,4 +207,4 @@ batch_overlay(
    - `torch.cuda.empty_cache()`
    - `torch.cuda.synchronize()`
 4. **중간 결과 JSON 캐시로 재시작 지원**
-5. **용어집 (term_corrections.csv) 프롬프트에 자동 포함**
+5. **용어집 (glossary.csv) 프롬프트에 자동 포함**

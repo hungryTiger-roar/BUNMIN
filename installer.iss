@@ -49,8 +49,19 @@ Name: "desktopicon"; Description: "바탕화면에 바로가기 만들기"; Grou
 [Files]
 ; win-unpacked 전체 복사. NLLB/Whisper 동봉, VLM(Qwen3-VL-4B ~16GB) 은 미동봉 —
 ; 첫 실행 시 설치 마법사에서 사용자 동의 후 HuggingFace 에서 다운로드.
+; Excludes: 사용자 데이터 폴더 (uploads / models / cache) 는 빌드 산출물에 들어가도 절대 덮어쓰지 않음.
+;   - uploads: 강의자료 (원본 PDF, 번역본, 이미지, 라이브러리)
+;   - models: 다운로드한 AI 모델 (VLM 등)
+;   - cache:  HuggingFace 모델 캐시
 Source: "setup\win-unpacked\*"; DestDir: "{app}"; \
+  Excludes: "uploads\*,models\*,cache\*"; \
   Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Dirs]
+; 사용자 데이터 폴더 — Inno Setup 의 디렉토리 추적에서 제외 (uninstall 시 빈 폴더 자동 삭제 방지).
+Name: "{app}\uploads"; Flags: uninsneveruninstall
+Name: "{app}\models"; Flags: uninsneveruninstall
+Name: "{app}\cache"; Flags: uninsneveruninstall
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -154,8 +165,10 @@ end;
 
   앱이 만드는 사용자 데이터는 2 군데에 흩어져 있음:
     1) %LOCALAPPDATA%\Aunion AI\
-       - HF 모델 캐시 (VLM ~8GB, config.py:36-40 의 CACHE_DIR / "huggingface")
-       - 다운받은 모델, error_log.txt, window-state.json, .last-run-version
+       - uploads/  (강의자료 — 원본·번역본 PDF, 이미지, 라이브러리)  ★ 항상 보존
+       - models/   (다운로드 AI 모델 — VLM 등)                       ★ 항상 보존
+       - cache/    (HF 모델 캐시 ~8GB+)                              ★ 항상 보존
+       - 그 외: error_log.txt, window-state.json, .last-run-version
     2) %APPDATA%\Aunion AI\  (Electron app.getPath('userData') 기본 경로)
        - IndexedDB (학생 piper TTS voice 30MB+, 직접 다운받은 자산)
        - LocalStorage (학생 이름, 자막 언어 선택, 자막 스타일)
@@ -163,7 +176,45 @@ end;
 
   silent uninstall (/VERYSILENT 등) → 안전하게 데이터 유지 (프롬프트 X, 삭제 X).
   기본 권장 = "아니오" — 재설치 시 8GB 모델 재다운로드 회피 + 학생 설정 보존.
+  "예" 선택 시에도 uploads/models/cache 는 절대 삭제하지 않음 (사용자 핵심 자산 보호).
 }
+
+{
+  DelTreeExcept: BaseDir 의 직계 자식 중 KeepNames 에 없는 것만 삭제.
+  uploads/models/cache 보존 대상은 보호하고 나머지(임시 파일/로그)만 정리하는 데 사용.
+}
+procedure DelTreeExcept(BaseDir: String; KeepNames: TArrayOfString);
+var
+  FindRec: TFindRec;
+  ChildPath: String;
+  IsKeep: Boolean;
+  I: Integer;
+begin
+  if not DirExists(BaseDir) then Exit;
+  if not FindFirst(BaseDir + '\*', FindRec) then Exit;
+  try
+    repeat
+      if (FindRec.Name = '.') or (FindRec.Name = '..') then
+        Continue;
+      IsKeep := False;
+      for I := 0 to GetArrayLength(KeepNames) - 1 do
+        if CompareText(FindRec.Name, KeepNames[I]) = 0 then
+        begin
+          IsKeep := True;
+          Break;
+        end;
+      if IsKeep then Continue;
+      ChildPath := BaseDir + '\' + FindRec.Name;
+      if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
+        DelTree(ChildPath, True, True, True)
+      else
+        DeleteFile(ChildPath);
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   LocalDir: String;
@@ -171,6 +222,7 @@ var
   Response: Integer;
   AnyExists: Boolean;
   Failures: String;
+  KeepNames: TArrayOfString;
 begin
   if CurUninstallStep <> usPostUninstall then Exit;
   if UninstallSilent then Exit;
@@ -182,22 +234,28 @@ begin
   if not AnyExists then Exit;
 
   Response := MsgBox(
-    '사용자 데이터를 함께 삭제하시겠습니까?' + #13#10 + #13#10 +
-    '삭제 대상:' + #13#10 +
-    '  - ' + LocalDir + #13#10 +
-    '    (AI 모델 캐시 ~8GB+, 로그, 창 상태)' + #13#10 +
-    '  - ' + RoamingDir + #13#10 +
-    '    (학생 TTS voice ~30MB, 학생 이름·자막 설정, 쿠키)' + #13#10 + #13#10 +
-    '[예] 함께 삭제 — 디스크 공간 회복 + 완전 초기화' + #13#10 +
-    '[아니오] 데이터 유지 — 재설치 시 모델·설정 그대로 (권장)',
+    '임시 데이터 (로그, 창 상태 등) 를 함께 삭제하시겠습니까?' + #13#10 + #13#10 +
+    '★ 항상 보존되는 항목 (재설치 시 그대로 사용):' + #13#10 +
+    '  - ' + LocalDir + '\uploads  (강의자료 — 원본/번역본 PDF, 이미지, 라이브러리)' + #13#10 +
+    '  - ' + LocalDir + '\models   (다운로드 AI 모델)' + #13#10 +
+    '  - ' + LocalDir + '\cache    (HF 모델 캐시 ~8GB+)' + #13#10 + #13#10 +
+    '[예] 임시 데이터 삭제 — 로그·창 상태·학생 설정만 초기화' + #13#10 +
+    '[아니오] 모두 유지 — 학생 이름·자막 설정도 그대로 (권장)',
     mbConfirmation, MB_YESNO);
 
   if Response <> IDYES then Exit;
 
+  { uploads / models / cache 는 절대 삭제 안 함 — 사용자 핵심 자산 }
+  SetArrayLength(KeepNames, 3);
+  KeepNames[0] := 'uploads';
+  KeepNames[1] := 'models';
+  KeepNames[2] := 'cache';
+
   Failures := '';
   if DirExists(LocalDir) then
-    if not DelTree(LocalDir, True, True, True) then
-      Failures := Failures + '  - ' + LocalDir + #13#10;
+    DelTreeExcept(LocalDir, KeepNames);
+
+  { Roaming 측은 강의자료/모델 없음 — 학생 설정 영역. 사용자 선택대로 전체 삭제. }
   if DirExists(RoamingDir) then
     if not DelTree(RoamingDir, True, True, True) then
       Failures := Failures + '  - ' + RoamingDir + #13#10;

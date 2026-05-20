@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aunion AI — 데이터 구조 / DB 덤프 (대체)</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #5a5a5a;
+    --accent: #2563eb;
+    --accent-bg: #eff6ff;
+    --border: #e5e7eb;
+    --table-head: #f8fafc;
+    --table-row-alt: #fafafa;
+    --code-bg: #f5f5f5;
+    --code-block-bg: #1e1e1e;
+    --code-block-fg: #e6e6e6;
+    --quote-bg: #fff7ed;
+    --quote-border: #fb923c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard", "Noto Sans KR", "맑은 고딕", Roboto, sans-serif;
+    line-height: 1.7;
+    color: var(--fg);
+    background: var(--bg);
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 40px 32px 80px;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1 {
+    font-size: 2.2em;
+    margin: 0 0 0.4em;
+    padding-bottom: 0.4em;
+    border-bottom: 3px solid var(--accent);
+    letter-spacing: -0.5px;
+  }
+  h2 {
+    font-size: 1.6em;
+    margin: 2em 0 0.6em;
+    padding-bottom: 0.3em;
+    border-bottom: 1px solid var(--border);
+    letter-spacing: -0.3px;
+  }
+  h3 {
+    font-size: 1.25em;
+    margin: 1.6em 0 0.5em;
+    color: var(--accent);
+  }
+  h4 {
+    font-size: 1.05em;
+    margin: 1.2em 0 0.4em;
+  }
+  p { margin: 0.8em 0; }
+  ul, ol { margin: 0.6em 0; padding-left: 1.6em; }
+  li { margin: 0.25em 0; }
+  a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 1px dotted var(--accent);
+  }
+  a:hover { background: var(--accent-bg); }
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 2.4em 0;
+  }
+  blockquote {
+    margin: 1em 0;
+    padding: 0.8em 1.2em;
+    background: var(--quote-bg);
+    border-left: 4px solid var(--quote-border);
+    color: var(--muted);
+    border-radius: 0 6px 6px 0;
+  }
+  blockquote p { margin: 0; }
+  code {
+    font-family: "JetBrains Mono", "Fira Code", "D2Coding", Consolas, Monaco, monospace;
+    font-size: 0.9em;
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #be185d;
+  }
+  pre {
+    background: var(--code-block-bg);
+    color: var(--code-block-fg);
+    padding: 16px 20px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.88em;
+    line-height: 1.55;
+    margin: 1em 0;
+  }
+  pre code {
+    background: transparent;
+    color: inherit;
+    padding: 0;
+    font-size: 1em;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1em 0;
+    font-size: 0.94em;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  th, td {
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    background: var(--table-head);
+    font-weight: 600;
+    color: var(--fg);
+    border-bottom: 2px solid var(--border);
+  }
+  tr:nth-child(even) td { background: var(--table-row-alt); }
+  tr:hover td { background: var(--accent-bg); }
+  td code { white-space: nowrap; }
+  .toc {
+    background: var(--accent-bg);
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    padding: 18px 24px;
+    margin: 1.5em 0 2.5em;
+  }
+  .toc h2 {
+    margin-top: 0;
+    border: none;
+    font-size: 1.15em;
+    color: var(--accent);
+  }
+  .toc ol { margin: 0; padding-left: 1.4em; }
+  .toc li { margin: 0.15em 0; }
+  .toc a { border-bottom: none; }
+  .toc a:hover { text-decoration: underline; }
+  @media print {
+    body { padding: 20px; max-width: none; }
+    pre, table { page-break-inside: avoid; }
+    h2 { page-break-before: auto; }
+  }
+  @media (max-width: 720px) {
+    body { padding: 24px 16px; }
+    h1 { font-size: 1.7em; }
+    h2 { font-size: 1.35em; }
+    table { font-size: 0.85em; }
+    th, td { padding: 8px 10px; }
+  }
+</style>
+</head>
+<body>
+
+<h1>데이터 구조 / DB 덤프 (대체)</h1>
+
+<p>본 프로젝트는 <strong>RDBMS 를 사용하지 않습니다.</strong> 일반적인 DB 덤프 파일은 해당 없음. 대신 본 문서가 데이터 저장 구조와 ERD 대체 자료를 제공합니다.</p>
+
+<nav class="toc">
+  <h2>목차</h2>
+  <ol>
+    <li><a href="#sec-1">왜 RDBMS 를 안 썼나</a></li>
+    <li><a href="#sec-2">데이터 저장 위치 (전체 맵)</a></li>
+    <li><a href="#sec-3">데이터 구조 명세 (ERD 대체)</a></li>
+    <li><a href="#sec-4">통신 데이터 (메모리, 영속화 X)</a></li>
+    <li><a href="#sec-5">DB 덤프 대체 자료</a></li>
+    <li><a href="#sec-6">백업 / 마이그레이션</a></li>
+    <li><a href="#sec-7">정리 한 줄</a></li>
+  </ol>
+</nav>
+
+<hr>
+
+<h2 id="sec-1">1. 왜 RDBMS 를 안 썼나</h2>
+
+<table>
+  <thead><tr><th>항목</th><th>본 프로젝트 데이터 특성</th></tr></thead>
+  <tbody>
+    <tr><td>강의 자료 (PDF)</td><td>파일 자체가 단위 → <strong>파일시스템</strong> 이 자연</td></tr>
+    <tr><td>자막 (강의별)</td><td>강의 종료 후 텍스트 저장 → <strong>파일시스템</strong> (JSON)</td></tr>
+    <tr><td>학생 설정 (이름·자막 언어·음성)</td><td>브라우저 로컬 → <strong>LocalStorage / IndexedDB</strong></td></tr>
+    <tr><td>TTS voice (학생 측)</td><td>30MB Piper voice → <strong>IndexedDB</strong> 캐시</td></tr>
+    <tr><td>AI 모델 (~14GB)</td><td>대용량 binary → <strong>파일시스템</strong> (<code>%LOCALAPPDATA%</code>)</td></tr>
+    <tr><td>강의 세션 (실시간)</td><td>WebRTC + WebSocket 통신 → <strong>메모리</strong> (영속화 X)</td></tr>
+    <tr><td>사용자 계정</td><td><strong>없음</strong> (익명 학생 + 강사 권한 분리)</td></tr>
+  </tbody>
+</table>
+
+<p>→ 모든 데이터가 "관계 없는 단일 단위" 또는 "브라우저 영속화 대상" 이라 RDBMS 의 트랜잭션 / 조인 / 인덱스가 필요 없음. 단순한 파일/스토리지 모델이 적합.</p>
+
+<hr>
+
+<h2 id="sec-2">2. 데이터 저장 위치 (전체 맵)</h2>
+
+<h3>2.1 강사 노트북 측</h3>
+
+<pre><code>%LOCALAPPDATA%\Aunion AI\
+│
+├─ uploads\                                  ← 강의 자료 (강사 업로드 PDF)
+│   ├─ &lt;lecture-id&gt;\
+│   │   ├─ original.pdf                      ← 원본 PDF
+│   │   ├─ translated.pdf                    ← 번역된 PDF (VLM 결과)
+│   │   ├─ pages\                            ← 페이지별 이미지 (slide preview)
+│   │   │   ├─ page_001.png
+│   │   │   └─ ...
+│   │   └─ metadata.json                     ← 강의 메타 (title, page count, created_at)
+│   └─ cache\                                ← 슬라이드 번역 중간 결과 (OCR/VLM)
+│
+├─ transcripts\                              ← 강의 자막 (사후 저장)
+│   ├─ &lt;lecture-id&gt;-&lt;timestamp&gt;.json         ← {time, speaker, text_ko, text_en}[]
+│   └─ ...
+│
+├─ cache\
+│   └─ huggingface\                          ← HF 모델 캐시 (~14GB)
+│       ├─ models--Qwen--Qwen3-VL-4B-Instruct\
+│       └─ ...
+│
+├─ logs\                                     ← 백엔드 로그
+├─ error_log.txt                             ← Electron 에러 로그
+├─ window-state.json                         ← 창 위치/크기 영속화
+└─ .last-run-version                         ← 마지막 실행 버전 (마이그레이션 트리거)</code></pre>
+
+<h3>2.2 학생 노트북 측 (브라우저 IndexedDB / LocalStorage)</h3>
+
+<pre><code>%APPDATA%\Aunion AI\                         (Electron app.getPath('userData'))
+│
+├─ IndexedDB\
+│   └─ &lt;origin&gt;\                             ← Piper voice (학생 TTS)
+│       └─ en_US-lessac-medium.onnx          ← ~30MB
+│
+├─ Local Storage\                            ← 학생 설정
+│   └─ leveldb\                              ← key-value
+│       (preferences-store: studentName, audioLang, subtitleStyle, volume)
+│
+├─ Service Worker\                           ← 일부 정적 자원 캐시
+├─ Cache\
+└─ Cookies\</code></pre>
+
+<hr>
+
+<h2 id="sec-3">3. 데이터 구조 명세 (ERD 대체)</h2>
+
+<h3>3.1 강의 (Lecture)</h3>
+
+<p>파일: <code>%LOCALAPPDATA%\Aunion AI\uploads\&lt;lecture-id&gt;\metadata.json</code></p>
+
+<pre><code>{
+  "lectureId": "abc123",
+  "title": "경제학 10대 원칙",
+  "originalFilename": "lecture-econ.pdf",
+  "pageCount": 23,
+  "createdAt": "2026-05-19T10:30:00.000Z",
+  "translatedAt": "2026-05-19T10:35:00.000Z",
+  "language": { "source": "ko", "target": "en" }
+}</code></pre>
+
+<h3>3.2 자막 (Transcript)</h3>
+
+<p>파일: <code>%LOCALAPPDATA%\Aunion AI\transcripts\&lt;lecture-id&gt;-&lt;timestamp&gt;.json</code></p>
+
+<pre><code>{
+  "lectureId": "abc123",
+  "startedAt": "2026-05-19T10:40:00.000Z",
+  "endedAt": "2026-05-19T11:25:00.000Z",
+  "entries": [
+    {
+      "wallClock": 1779200000000,
+      "speechStartAt": 1779200000000,
+      "textKo": "안녕하세요, 오늘은 경제학을 시작합니다.",
+      "textEn": "Hello, today we begin economics.",
+      "asrMs": 850,
+      "nmtMs": 420,
+      "ttsMs": 1240
+    }
+  ]
+}</code></pre>
+
+<h3>3.3 학생 설정 (LocalStorage)</h3>
+
+<p>key: <code>aunion:preferences</code></p>
+
+<pre><code>{
+  "studentName": "홍길동",
+  "audioLang": "en",
+  "subtitleStyle": "light",
+  "volume": 70,
+  "isMuted": false
+}</code></pre>
+
+<h3>3.4 학생 TTS Voice (IndexedDB)</h3>
+
+<table>
+  <thead><tr><th>store</th><th>key</th><th>value</th></tr></thead>
+  <tbody>
+    <tr><td><code>piper-voices</code></td><td><code>en_US-lessac-medium.onnx</code></td><td>ArrayBuffer (~30MB)</td></tr>
+    <tr><td><code>piper-voices</code></td><td><code>en_US-lessac-medium.onnx.json</code></td><td>JSON config</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<h2 id="sec-4">4. 통신 데이터 (메모리, 영속화 X)</h2>
+
+<p>실시간 통신 데이터는 모두 메모리 + WebSocket / WebRTC 로 흐름. 영속화 안 됨.</p>
+
+<h3>4.1 WebSocket 메시지 타입 (강사 ↔ 학생)</h3>
+
+<table>
+  <thead><tr><th>타입</th><th>방향</th><th>페이로드 요약</th></tr></thead>
+  <tbody>
+    <tr><td><code>register</code></td><td>both</td><td>role (lecturer/student), name</td></tr>
+    <tr><td><code>lecture_start</code> / <code>lecture_end</code></td><td>L→S</td><td>강의 시작/종료</td></tr>
+    <tr><td><code>pause</code> / <code>resume</code></td><td>L→S</td><td>일시정지 토글</td></tr>
+    <tr><td><code>page_change</code></td><td>L→S</td><td>페이지 변경</td></tr>
+    <tr><td><code>presentation_mode</code></td><td>L→S</td><td>발표 모드 (slide / blackboard)</td></tr>
+    <tr><td><code>cursor</code></td><td>L→S</td><td>마우스 위치 (x, y, visible)</td></tr>
+    <tr><td><code>draw_begin</code> / <code>draw_point</code> / <code>draw_end</code></td><td>L→S</td><td>판서 좌표</td></tr>
+    <tr><td><code>transcription</code></td><td>L→S</td><td>한국어 텍스트 + 영어 텍스트 + 타이밍 메타</td></tr>
+    <tr><td><code>audio</code></td><td>L→S</td><td>ASR 결과 (WAV base64) — 자막 생성 후 폐기</td></tr>
+    <tr><td><code>webrtc_offer</code> / <code>webrtc_answer</code> / <code>webrtc_ice</code></td><td>both</td><td>WebRTC 시그널링</td></tr>
+    <tr><td><code>student_audio_lang</code></td><td>S→L</td><td>학생 측 audioLang 변경 (강사 패널 표시용)</td></tr>
+    <tr><td><code>chat</code></td><td>both</td><td>채팅 메시지</td></tr>
+  </tbody>
+</table>
+
+<h3>4.2 WebRTC 미디어</h3>
+
+<ul>
+  <li><strong>Audio</strong>: 강사 마이크 → 학생 (Opus 48kHz mono, ~32kbps)</li>
+  <li><strong>Video</strong>: 강사 화면 공유 → 학생 (강의 시 화면 공유 시만)</li>
+</ul>
+
+<hr>
+
+<h2 id="sec-5">5. DB 덤프 대체 자료</h2>
+
+<p>일반 RDBMS 덤프 파일이 없는 대신, "참고용 샘플 데이터" 를 다음 위치에서 확인 가능:</p>
+
+<table>
+  <thead><tr><th>자료</th><th>위치</th><th>용도</th></tr></thead>
+  <tbody>
+    <tr><td>샘플 강의 자료 (PDF)</td><td><code>발표자료/</code> (저장소)</td><td>시연용 PDF</td></tr>
+    <tr><td>도메인 용어집 (glossary)</td><td><code>glossary/*.csv</code></td><td>ASR/NMT 정확도 향상용 (한↔영 용어 매핑)</td></tr>
+    <tr><td>자막 JSON 샘플</td><td>(강의 1회 실행 후 <code>transcripts/</code> 생성)</td><td>구조 확인</td></tr>
+    <tr><td>AI 모델 다운로드 스크립트</td><td><code>scripts/setup.js</code></td><td>모델 종류·버전 정의</td></tr>
+  </tbody>
+</table>
+
+<h3>5.1 첫 실행 데이터 시드</h3>
+
+<p>설치 직후 (모든 강의 데이터가 비어있을 때) — <code>npm run setup</code> 또는 인스톨러가 자동 생성:</p>
+
+<table>
+  <thead><tr><th>항목</th><th>시드 동작</th></tr></thead>
+  <tbody>
+    <tr><td><code>models/</code></td><td>HuggingFace 에서 자동 다운로드</td></tr>
+    <tr><td><code>glossary/*.csv</code></td><td>저장소에 커밋되어 있음 → 그대로 사용</td></tr>
+    <tr><td><code>uploads/</code></td><td>빈 폴더 (사용자가 PDF 업로드 시 채워짐)</td></tr>
+    <tr><td><code>transcripts/</code></td><td>빈 폴더 (강의 1회 실행 시 채워짐)</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<h2 id="sec-6">6. 백업 / 마이그레이션</h2>
+
+<h3>6.1 사용자 데이터 백업</h3>
+
+<pre><code># 강사 노트북 (강의 자료 + 자막 + 모델)
+Copy-Item -Recurse "$env:LOCALAPPDATA\Aunion AI" -Destination "D:\backup\Aunion AI"
+
+# 학생 노트북 (학생 설정 + TTS voice)
+Copy-Item -Recurse "$env:APPDATA\Aunion AI" -Destination "D:\backup\Aunion AI-student"</code></pre>
+
+<h3>6.2 마이그레이션 (다른 PC 로 이전)</h3>
+
+<table>
+  <thead><tr><th>항목</th><th>이전 방법</th></tr></thead>
+  <tbody>
+    <tr><td>강의 자료</td><td><code>%LOCALAPPDATA%\Aunion AI\uploads\</code> 폴더 복사</td></tr>
+    <tr><td>자막</td><td><code>%LOCALAPPDATA%\Aunion AI\transcripts\</code> 폴더 복사</td></tr>
+    <tr><td>AI 모델 (~14GB)</td><td><code>%LOCALAPPDATA%\Aunion AI\cache\huggingface\</code> 복사 (재다운로드 회피)</td></tr>
+    <tr><td>학생 설정</td><td>학생이 직접 재설정 (LocalStorage 이전 어려움)</td></tr>
+  </tbody>
+</table>
+
+<h3>6.3 완전 초기화</h3>
+
+<pre><code>Remove-Item -Recurse "$env:LOCALAPPDATA\Aunion AI"
+Remove-Item -Recurse "$env:APPDATA\Aunion AI"</code></pre>
+
+<p>→ 첫 실행 상태로 복귀. 인스톨러 재실행 시 다시 모델 다운로드.</p>
+
+<hr>
+
+<h2 id="sec-7">7. 정리 한 줄</h2>
+
+<blockquote><p><strong>본 프로젝트는 RDBMS 미사용. 모든 데이터가 "파일시스템 + 브라우저 영속화" 모델이라 DB 덤프 파일이 의미 없습니다. 본 문서가 ERD 대체 자료입니다.</strong></p></blockquote>
+
+</body>
+</html>

@@ -141,9 +141,9 @@ class TextBlock:
 - `unload_vlm_model()`: 메모리 해제
 - `translate_text_vlm(prompt)`: VLM 기반 번역
 
-### 용어집 (term_corrections.csv)
+### 용어집 (glossary.csv)
 
-`config/term_corrections.csv`에서 537개 용어 매핑 로드:
+`config/glossary.csv`에서 537개 용어 매핑 로드:
 - `load_term_corrections()`: CSV 로드
 - `get_terms_in_text()`: 텍스트에서 용어 추출
 - `build_term_replacer()`: 번역 후 용어 교정기 생성

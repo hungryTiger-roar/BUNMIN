@@ -11,7 +11,7 @@
    - Surya OCR → VLM 번역 → Overlay
 
 [용어집]
-- config/term_corrections.csv에서 한국어-영어 용어 매핑 로드
+- config/glossary.csv에서 한국어-영어 용어 매핑 로드
 - VLM 번역 프롬프트에 자동 포함
 
 [파일 구조 (10개)]

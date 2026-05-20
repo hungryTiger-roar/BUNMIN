@@ -56,7 +56,7 @@ PDF Layer와 OCR이 각각 독립적으로 번역
 │  ├─ translate_blocks(all_blocks, target_lang="en")          │
 │  │   ├─ PDF Layer 블록 번역                                 │
 │  │   └─ OCR 블록 번역                                       │
-│  │   └─ 용어집 공유 (term_corrections.csv)                  │
+│  │   └─ 용어집 공유 (glossary.csv)                  │
 │  ├─ 결과 → TranslationResult {block_id: translated_text}    │
 │  └─ VLM 언로드 + GPU 캐시 클리어                            │
 └─────────────────────────────────────────────────────────────┘
@@ -251,7 +251,7 @@ def translate_blocks(
     custom_terms: dict = None     # 추가 용어 (선택)
 ) -> TranslationResult:
     """공통 번역 함수 - 문서 맥락 공유"""
-    # term_corrections.csv 자동 로드
+    # glossary.csv 자동 로드
     # 결과: {block_id: translated_text, ...}
 ```
 
@@ -313,7 +313,7 @@ def translate_blocks(
    torch.cuda.empty_cache()
    torch.cuda.synchronize()
    ```
-7. **용어집 (term_corrections.csv) 공통 적용** - translate_blocks()에서 자동 로드
+7. **용어집 (glossary.csv) 공통 적용** - translate_blocks()에서 자동 로드
 8. **OCR 보정 (ocr_corrections.csv) 적용** - extract 단계에서 자동 교정
 
 ---
@@ -328,5 +328,5 @@ def translate_blocks(
 | `pdf_pipeline.py` | PDFLayerPipeline (extract/apply) |
 | `image_pipeline.py` | OCRPipeline (extract/apply) + VLM 관리 |
 | `term_corrections.py` | 용어집 + OCR 보정 로더 |
-| `config/term_corrections.csv` | 한국어→영어 용어 매핑 |
+| `config/glossary.csv` | 한국어→영어 용어 매핑 |
 | `config/ocr_corrections.csv` | OCR 오타→교정 매핑 |

@@ -251,11 +251,11 @@ cat uploads/translated/translations.json | jq '.[0]'
 ### 7.1 용어집 위치
 
 ```
-config/term_corrections.csv    # 한국어 → 영어 번역 용어
+config/glossary.csv    # 한국어 → 영어 번역 용어
 config/ocr_corrections.csv     # OCR 오타 → 교정 (선택)
 ```
 
-### 7.2 용어 추가 (term_corrections.csv)
+### 7.2 용어 추가 (glossary.csv)
 
 ```csv
 korean,english
@@ -354,7 +354,7 @@ print(f"Translated: {result['translated_blocks']}/{result['total_blocks']}")
 **A:** Surya와 VLM이 동시에 로드되면 OOM 발생합니다. 새 아키텍처에서는 Stage별로 순차 처리하여 이 문제를 방지합니다.
 
 ### Q: 특정 용어가 잘못 번역돼요
-**A:** `config/term_corrections.csv`에 올바른 번역을 추가하세요. translate_blocks()에서 자동으로 적용됩니다.
+**A:** `config/glossary.csv`에 올바른 번역을 추가하세요. translate_blocks()에서 자동으로 적용됩니다.
 
 ### Q: OCR 인식이 틀려서 번역이 이상해요
 **A:** `config/ocr_corrections.csv`에 OCR 오타 교정을 추가하세요. 또는 [TODO_OCR_POSTPROCESS.md](./TODO_OCR_POSTPROCESS.md)의 향후 개선 방안을 참고하세요.
