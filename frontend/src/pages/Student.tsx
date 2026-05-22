@@ -251,11 +251,13 @@ function Student() {
   // 미구현 시 처리시간 > 고정 delayMs 인 발화에서 원본만 먼저 들리는 desync 발생.
   // DelayNode max 는 (delayMs/1000)+5 라 env 작을 때 그 한도까지만 따라감 (clamp).
   //
-  // 변화량 분기 (외계어/역재생 방지):
-  //   - delayTime 을 짧은 시간에 큰 폭으로 ramp 하면 DelayNode 가 소스를 거꾸로/빠르게 읽어
-  //     "삐리리" / 역재생 노이즈 발생 (output(t)=input(t-delayTime(t)) 의 미분 결과로 재생속도 = 1 - d(delay)/dt).
+  // 변화량 분기 (외계어/역재생/중복 발화 방지):
+  //   output(t) = input(t - delayTime(t)) → 재생속도 = 1 - d(delay)/dt.
   //   - 작은 변화 (< 0.2s): 2초 ramp — 변화율 < 0.1/s 라 pitch shift 거의 안 들림 (5% 이하).
-  //   - 큰 변화 (≥ 0.2s): 100ms mute → setValueAtTime snap → unmute. 외계어 대신 짧은 무음 + rewind/skip.
+  //   - 큰 변화 (≥ 0.2s) & 감소: 100ms mute → snap → unmute. skip 은 중복 아님, mute 로 클릭 차단.
+  //   - 큰 변화 (≥ 0.2s) & 증가: snap 하면 input(t-D-ΔD) 로 점프해 ΔD 초 분량 rewind = 같은 발화 중복 출력.
+  //     대신 mute 켠 채 delayTime 을 ΔD 초에 걸쳐 rate=1 (= d(delay)/dt=1, output freeze) 로 ramp →
+  //     무음 ΔD 초 후 새 delayTime 도달. 이미 들었던 구간이 다시 안 들림.
   useEffect(() => {
     const id = window.setInterval(() => {
       const ctx = audioContextRef.current
@@ -273,7 +275,21 @@ function Student() {
         node.delayTime.cancelScheduledValues(now)
         node.delayTime.setValueAtTime(current, now)
         node.delayTime.linearRampToValueAtTime(clamped, now + 2.0)
+      } else if (clamped > current) {
+        // 증가: ΔD 초 mute + rate=1 ramp — rewind 없음 (output freeze).
+        // 클릭 차단 위해 ramp 전후 30ms fade out / unmute.
+        const deltaD = clamped - current
+        mute.gain.cancelScheduledValues(now)
+        mute.gain.setValueAtTime(mute.gain.value, now)
+        mute.gain.linearRampToValueAtTime(0, now + 0.03)
+        node.delayTime.cancelScheduledValues(now + 0.03)
+        node.delayTime.setValueAtTime(current, now + 0.03)
+        // rate = ΔD/ΔD = 1 → 재생속도 0 (freeze), 절대 음수 안 됨 = rewind 없음.
+        node.delayTime.linearRampToValueAtTime(clamped, now + 0.03 + deltaD)
+        mute.gain.setValueAtTime(0, now + 0.03 + deltaD)
+        mute.gain.linearRampToValueAtTime(1, now + 0.06 + deltaD)
       } else {
+        // 감소: snap → ΔD 초 skip (mute 로 mask). 같은 발화 중복 아님.
         mute.gain.cancelScheduledValues(now)
         mute.gain.setValueAtTime(mute.gain.value, now)
         mute.gain.linearRampToValueAtTime(0, now + 0.03)
@@ -809,11 +825,19 @@ function Student() {
   //   재생성해 buffer 를 비우고 새로 15초 채우게 함 → 복귀 후 15초 무음 후 sync 그대로 복구.
   //   gainNode 는 유지 (audioLang 별 mute 상태 보존).
   useEffect(() => {
+    // in-flight 가드 — visibilitychange + focus + pageshow 가 거의 동시에 fire 할 때
+    // 두 호출 모두 ctx.state==='suspended' 게이트를 통과하면 (await ctx.resume() 전이라 가능),
+    // 양쪽이 각자 새 DelayNode + MediaStreamSource 를 만들어 같은 gainNode 에 병렬 연결됨.
+    // 폴링 effect 는 ref 의 마지막 값만 mute 하므로 leak 된 chain 은 영원히 unmute → 같은
+    // audio 가 두 path 로 합산되어 "발화 2번 들림" 또는 코러스/에코 증상 발생.
+    let isRebuilding = false
     const rebuildPipeline = async () => {
+      if (isRebuilding) return
       const ctx = audioContextRef.current
       const gain = gainNodeRef.current
       if (!ctx || !gain) return
       if (ctx.state !== 'suspended') return
+      isRebuilding = true
 
       try {
         try { sourceNodeRef.current?.disconnect() } catch { /* ignore */ }
@@ -852,6 +876,8 @@ function Student() {
         console.log('[OriginalAudio] sync 보존 — DelayNode 재생성 (15초 후 정상 출력)')
       } catch (err) {
         console.error('[OriginalAudio] resume/rebuild 실패:', err)
+      } finally {
+        isRebuilding = false
       }
     }
 
