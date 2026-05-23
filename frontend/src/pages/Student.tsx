@@ -146,6 +146,7 @@ function Student() {
   // ttsMs 는 player 가 playSentence return 에서 받아 commitSubtitle 에 전달 → 자막 commit 시점 기록.
   const {
     playSentence,
+    playSentenceChunked,
     unlockAudio: unlockTTS,
     status: ttsStatus,
     setVolume: setTTSVolume,
@@ -233,10 +234,14 @@ function Student() {
   // delayMs 는 unlockAudio 위에서 선언 — 원본 음성 DelayNode 와 동일한 값 공유.
   const playSentenceRef = useRef(playSentence)
   useEffect(() => { playSentenceRef.current = playSentence }, [playSentence])
+  const playSentenceChunkedRef = useRef(playSentenceChunked)
+  useEffect(() => { playSentenceChunkedRef.current = playSentenceChunked }, [playSentenceChunked])
 
   const unitPlayer = useDelayBufferPlayer({
     playSentence: (text: string, lang: AudioLang) =>
       playSentenceRef.current(text, lang),
+    playSentenceChunked: (text: string, lang: AudioLang) =>
+      playSentenceChunkedRef.current(text, lang),
     isAudioUnlocked: () => isAudioUnlockedRef.current,
     getAudioLang: () => audioLangRef.current,
     delayMs,

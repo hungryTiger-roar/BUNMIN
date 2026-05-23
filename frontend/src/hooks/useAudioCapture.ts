@@ -8,10 +8,16 @@ const SILENCE_FRAMES   = 1     // 연속 묵음 프레임 수 → 발화 종료 
 
 interface UseAudioCaptureOptions {
   onAudioData: (audioBlob: Blob) => void
+  /** 스트리밍 모드: 발화 중 200ms 프레임마다 호출. 제공 시 onAudioData 대신 사용. */
+  onAudioChunk?: (frame: Int16Array, speechStartAt: number) => void
+  /** 스트리밍 모드: 발화 종료 시 호출. */
+  onStreamEnd?: (sentAt: number) => void
 }
 
 export function useAudioCapture({
   onAudioData,
+  onAudioChunk,
+  onStreamEnd,
 }: UseAudioCaptureOptions) {
   const [isCapturing, setIsCapturing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -37,6 +43,12 @@ export function useAudioCapture({
 
   const onAudioDataRef = useRef(onAudioData)
   onAudioDataRef.current = onAudioData
+  const onAudioChunkRef = useRef(onAudioChunk)
+  onAudioChunkRef.current = onAudioChunk
+  const onStreamEndRef = useRef(onStreamEnd)
+  onStreamEndRef.current = onStreamEnd
+  // 스트리밍 모드: 현재 발화 시작 wall clock
+  const streamSpeechStartRef = useRef<number>(0)
 
   // AudioContext suspend 복구 — Chrome 무음 정책 / 백그라운드 탭 전환 시 자동 resume.
   const startKeepAlive = () => {
@@ -208,21 +220,26 @@ export function useAudioCapture({
       gainNode.connect(analyser)
 
       try {
+        const isStreaming = !!onAudioChunk
         await setupStreamingWorklet(
           audioContext,
           gainNode,
           () => {
-            // 발화 시작 콜백 — force-split 타이머 시작
-            scheduleForceSplit()
+            if (!isStreaming) {
+              // 배치 모드: force-split 타이머 시작
+              scheduleForceSplit()
+            }
             console.log('[EnergyVAD] 발화 시작')
           },
           () => {
-            // 발화 종료 콜백 — force-split 타이머 정리 + chunk 송출
-            if (maxDurationTimerRef.current !== null) {
-              window.clearTimeout(maxDurationTimerRef.current)
-              maxDurationTimerRef.current = null
+            if (!isStreaming) {
+              // 배치 모드: force-split 타이머 정리 + chunk 송출
+              if (maxDurationTimerRef.current !== null) {
+                window.clearTimeout(maxDurationTimerRef.current)
+                maxDurationTimerRef.current = null
+              }
+              flushChunkAccum('발화 끝')
             }
-            flushChunkAccum('발화 끝')
             console.log('[EnergyVAD] 발화 끝')
           },
         )
@@ -305,26 +322,46 @@ registerProcessor('aunion-stream-processor', StreamProcessor)
       for (let i = 0; i < pcm.length; i++) { const f = pcm[i] / 32768; sumSq += f * f }
       const rms = Math.sqrt(sumSq / pcm.length)
 
+      const isStreaming = !!onAudioChunkRef.current
+
       if (rms > ENERGY_THRESHOLD) {
         silenceCount = 0
         if (!isSpeakingRef.current) {
-          // 발화 시작 — preroll 에 이미 current frame 포함됨 (중복 push 없음)
           isSpeakingRef.current = true
-          chunkAccumRef.current = [...prerollRef.current]
-          onSpeechStart()
+          if (isStreaming) {
+            // 스트리밍 모드: preroll 포함 발화 시작 즉시 전송
+            streamSpeechStartRef.current = Date.now() - 200
+            for (const prerollFrame of prerollRef.current) {
+              onAudioChunkRef.current!(prerollFrame, streamSpeechStartRef.current)
+            }
+          } else {
+            chunkAccumRef.current = [...prerollRef.current]
+            onSpeechStart()
+          }
         } else {
-          // 발화 중 — 현재 프레임 누적
-          chunkAccumRef.current.push(pcm)
+          if (isStreaming) {
+            onAudioChunkRef.current!(pcm, streamSpeechStartRef.current)
+          } else {
+            chunkAccumRef.current.push(pcm)
+          }
         }
       } else {
         if (isSpeakingRef.current) {
           // 묵음 프레임도 끝부분 보존 (자연스러운 발화 종료 음성)
-          chunkAccumRef.current.push(pcm)
+          if (isStreaming) {
+            onAudioChunkRef.current!(pcm, streamSpeechStartRef.current)
+          } else {
+            chunkAccumRef.current.push(pcm)
+          }
           silenceCount++
           if (silenceCount >= SILENCE_FRAMES) {
             isSpeakingRef.current = false
             silenceCount = 0
-            onSpeechEnd()
+            if (isStreaming) {
+              onStreamEndRef.current?.(Date.now())
+            } else {
+              onSpeechEnd()
+            }
           }
         }
       }

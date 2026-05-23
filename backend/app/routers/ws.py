@@ -228,6 +228,36 @@ _nmt_service = None
 _ocr_service = None
 
 
+# ── 스트리밍 ASR ────────────────────────────────────────────────────────────────
+def _pcm16_to_wav(pcm16_bytes: bytes, sample_rate: int = 16000) -> bytes:
+    """raw int16 PCM → WAV bytes (ASR 입력용)."""
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm16_bytes)
+    return buf.getvalue()
+
+
+_ASR_CHUNK_FRAMES = 5  # 200ms × 5 = 1초마다 증분 ASR 실행
+
+
+class StreamingBuffer:
+    """한 발화의 200ms 프레임을 누적 — 1초 주기 증분 ASR + 발화 종료 시 최종 ASR."""
+
+    def __init__(self):
+        self.pcm16_frames: list[bytes] = []
+        self.frame_count: int = 0
+        self.last_asr_frame: int = 0
+        self.committed_sentences: list[str] = []   # NMT → broadcast 완료 문장
+        self.prev_sentences: list[str] = []        # 직전 ASR 결과 (안정성 비교용)
+        self.speech_start_wall: Optional[int] = None
+        self.sent_at: Optional[int] = None
+        self.slide_id: Optional[str] = None
+        self.page: int = 1
+
+
 def set_asr_service(service):
     global _asr_service
     _asr_service = service
@@ -448,6 +478,7 @@ _nmt_semaphore = asyncio.Semaphore(1)
 _MAX_QUEUED_AUDIO = 2   # chunk path: ASR 대기 큐 최대 발화 수 — 초과 시 신규 발화 스킵
 _queued_audio_count = 0  # 현재 ASR 세마포어 대기 중인 발화 수
 _utterance_seq = 0       # 발화 순서 번호 (프론트 순서 보장용)
+_streaming_buffers: dict[int, StreamingBuffer] = {}  # id(websocket) → StreamingBuffer
 
 # 전역 broadcast event seq — cursor / draw / transcription / page_change 등
 # 학생측이 순서 검증 / 중복·누락 감지에 사용. WebSocket 자체 순서 보장 위에 추가
@@ -710,6 +741,15 @@ async def handle_lecturer(websocket: WebSocket, pong_event: asyncio.Event | None
             elif msg_type == "audio":
                 audio_size = len(message.get("audio", "")) * 3 // 4 // 1024
                 task = asyncio.create_task(process_audio(message))
+                manager.track_task(task)
+
+            elif msg_type == "audio_chunk":
+                if not manager.is_paused:
+                    task = asyncio.create_task(process_audio_chunk(message, id(websocket)))
+                    manager.track_task(task)
+
+            elif msg_type == "audio_chunk_end":
+                task = asyncio.create_task(flush_audio_stream(message, id(websocket)))
                 manager.track_task(task)
 
             # WebRTC 시그널링 — 강의자가 특정 수강자에게 offer/ICE 전달
@@ -1249,3 +1289,153 @@ async def process_audio(message: dict):
         print(f"[WS] 오디오 처리 오류: {e}")
 
 
+async def _incremental_asr(buf: StreamingBuffer, is_final: bool = False) -> None:
+    """
+    StreamingBuffer 에 쌓인 PCM16 프레임 전체를 ASR → NMT → broadcast.
+
+    is_final=False: 직전 ASR 결과와 동일한 안정 문장(연속 2회 일치)만 commit.
+    is_final=True : 남은 모든 문장을 commit.
+    """
+    if not all([_asr_service, _nmt_service]):
+        return
+    if not buf.pcm16_frames:
+        return
+
+    all_pcm16 = b''.join(buf.pcm16_frames)
+    if len(all_pcm16) < 9600:  # 0.3s @ 16kHz × 2 bytes
+        return
+
+    wav_bytes = _pcm16_to_wav(all_pcm16)
+    ok, reason = _validate_audio(wav_bytes)
+    if not ok and not is_final:
+        return
+
+    try:
+        async with _asr_semaphore:
+            korean_text, _words = await asyncio.to_thread(
+                _asr_service.transcribe_with_words, wav_bytes, "ko",
+                manager.lecture_glossary_keys,
+            )
+    except Exception as e:
+        print(f"[StreamASR] 오류: {e}", flush=True)
+        return
+
+    korean_text = korean_text.strip()
+    if not korean_text:
+        return
+
+    ok, reason = _validate_asr_text(korean_text)
+    if not ok:
+        print(f"[StreamASR] 차단 — {reason}: {korean_text!r}", flush=True)
+        return
+
+    curr_sentences = _split_korean_sentences(korean_text)
+    if not curr_sentences:
+        return
+
+    print(f"[StreamASR] {'FINAL' if is_final else 'INC  '}: {korean_text}", flush=True)
+
+    if is_final:
+        to_commit = curr_sentences[len(buf.committed_sentences):]
+    else:
+        # 직전 ASR 결과와 공통 prefix 만 안정적 — 2회 연속 동일한 문장만 commit.
+        stable: list[str] = []
+        for p, c in zip(buf.prev_sentences, curr_sentences):
+            if p == c:
+                stable.append(p)
+            else:
+                break
+        to_commit = stable[len(buf.committed_sentences):]
+
+    buf.prev_sentences = curr_sentences
+
+    if not to_commit:
+        return
+
+    for sentence in to_commit:
+        if manager.is_paused or not manager.is_lecture_started:
+            break
+        sub_seq = len(buf.committed_sentences)
+        buf.committed_sentences.append(sentence)
+
+        try:
+            async with _nmt_semaphore:
+                english = await asyncio.to_thread(
+                    _nmt_service.translate, sentence, "ko", "en", 512
+                )
+        except Exception as e:
+            print(f"[StreamNMT] 오류 '{sentence}': {e}", flush=True)
+            continue
+
+        if not english.strip():
+            print(f"[StreamNMT] 빈 번역 — 한: {sentence!r}", flush=True)
+            continue
+
+        print(f"[StreamBROADCAST sub={sub_seq}] 한: {sentence}  →  영: {english}", flush=True)
+
+        if manager.current_session_id:
+            transcripts.append_segment(
+                manager.current_session_id, sentence, english,
+                slide_id=buf.slide_id, page=buf.page,
+            )
+
+        payload = {
+            "type": "transcription",
+            "seq": -1,
+            "sub_seq": sub_seq,
+            "total_sub": -1,
+            "original": sentence,
+            "translated": english,
+            "sentAt": buf.sent_at,
+            "speechStartAt": buf.speech_start_wall,
+            "asrMs": 0,
+            "nmtMs": 0,
+            "slide_id": buf.slide_id,
+            "page": buf.page,
+            "streaming": True,
+            "eventSeq": _next_event_seq(),
+        }
+        await manager.broadcast_to_students(payload)
+        if manager.lecturer:
+            try:
+                await manager.lecturer.send_json(payload)
+            except Exception:
+                pass
+
+
+async def process_audio_chunk(message: dict, ws_key: int) -> None:
+    """
+    스트리밍 200ms PCM16 프레임 수신 — 버퍼에 누적 후 5프레임(1s)마다 증분 ASR.
+    """
+    buf = _streaming_buffers.setdefault(ws_key, StreamingBuffer())
+
+    if not buf.pcm16_frames:
+        buf.speech_start_wall = (
+            message.get("speechStartAt") or int(time.time() * 1000) - 200
+        )
+        buf.sent_at = message.get("sentAt") or int(time.time() * 1000)
+        buf.slide_id = manager.current_slide_id
+        buf.page = manager.current_page
+
+    frame_b64 = message.get("frame", "")
+    if not frame_b64:
+        return
+    try:
+        pcm16 = base64.b64decode(frame_b64)
+    except Exception:
+        return
+
+    buf.pcm16_frames.append(pcm16)
+    buf.frame_count += 1
+
+    if buf.frame_count - buf.last_asr_frame >= _ASR_CHUNK_FRAMES:
+        buf.last_asr_frame = buf.frame_count
+        await _incremental_asr(buf, is_final=False)
+
+
+async def flush_audio_stream(message: dict, ws_key: int) -> None:
+    """발화 종료 — 남은 프레임 전체에 최종 ASR 실행 후 버퍼 삭제."""
+    buf = _streaming_buffers.pop(ws_key, None)
+    if buf is None or not buf.pcm16_frames:
+        return
+    await _incremental_asr(buf, is_final=True)

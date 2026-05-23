@@ -42,14 +42,18 @@ export interface UnitPlayer {
   getCurrentDelay: () => number
 }
 
+type PlayFn = (
+  text: string,
+  lang: AudioLang,
+) => Promise<{ audioStartedAt: number; durationMs: number; ended: Promise<void>; ttsMs: number }>
+
 interface Options {
-  playSentence: (
-    text: string,
-    lang: AudioLang,
-  ) => Promise<{ audioStartedAt: number; durationMs: number; ended: Promise<void>; ttsMs: number }>
+  playSentence: PlayFn
+  /** 청크 TTS — 첫 청크 재생 시작 즉시 resolve, 이후 청크는 백그라운드에서 체인. 제공 시 playSentence 대신 사용. */
+  playSentenceChunked?: PlayFn
   isAudioUnlocked: () => boolean
   getAudioLang: () => AudioLang
-  /** 초기 / 기준 lag (ms). 미설정 시 2000 (= DELAY_MIN_MS). 실제 currentDelay 는 처리시간 따라 가변. */
+  /** 초기 / 기준 lag (ms). 미설정 시 1000 (= DELAY_MIN_MS). 실제 currentDelay 는 처리시간 따라 가변. */
   delayMs?: number
 }
 
@@ -57,9 +61,9 @@ interface Options {
 const PROC_WINDOW_MAX       = 20    // 필요딜레이 슬라이딩 윈도우 크기
 const MIN_MARGIN_MS         = 300   // 최소 안전 마진
 const MARGIN_STDDEV_MULT    = 1.5   // 마진 = max(MIN_MARGIN, stddev × 이 값) — jitter 크면 자동 ↑
-const TTS_SYNTH_INITIAL_MS  = 1800  // 첫 발화 전 보수적 추정 — 이후 실측 ttsMs EWMA 로 수렴 (lag 타이트하게)
+const TTS_SYNTH_INITIAL_MS  = 600   // 청크 TTS 기준 초기 추정 (첫 청크 ≈300ms) — 이후 실측 ttsMs EWMA 로 수렴
 const TTS_EWMA_ALPHA        = 0.2   // ttsMs EWMA 갱신 계수
-const DELAY_MIN_MS          = 2000  // currentDelay 하한
+const DELAY_MIN_MS          = 1000  // currentDelay 하한 (스트리밍 모드로 1s까지 수렴 가능)
 const DELAY_MAX_MS          = 20000 // currentDelay 상한
 const DELAY_DECREASE_EWMA   = 0.25  // 줄일 때 수렴 계수 — silence 구간에서 lag 빨리 회수. 빨리감기는 주로 무음 구간이라 무감
 const STALE_EXTRA_MS        = 10000 // STALE 임계 = currentDelay + 이 값 (정상 발화는 절대 drop 안 됨)
@@ -249,7 +253,8 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
             try { params.commitSubtitle() } catch (e) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', e) }
             return
           }
-          const result = await opts.playSentence(params.text, 'en')
+          const playFn = opts.playSentenceChunked ?? opts.playSentence
+          const result = await playFn(params.text, 'en')
           // generate(~2~3초) 완료 직후 3차 재확인 — generate 진행 중 토글 시 stale 영어 출력 차단.
           // 이전엔 result 가 무조건 source.start 됐고 ko/off 로 토글한 사용자에게 영어 음성 1줄 새는 버그.
           // 단, generate 후 50ms 안에 토글되면 source.start(ctx.currentTime+50ms) 가 이미 schedule 됨 — 잡지 못함 (window 매우 짧음).
