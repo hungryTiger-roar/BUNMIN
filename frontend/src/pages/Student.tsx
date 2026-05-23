@@ -172,10 +172,13 @@ function Student() {
   const muteGainRef = useRef<GainNode | null>(null)
   const gainNodeRef = useRef<GainNode | null>(null)
   const pendingAudioStreamRef = useRef<MediaStream | null>(null)
+  // Fix 3: 폴링 중 mute 분기 진행 중 재진입 차단 — 100ms 폴링에서 gain 스케줄 중복 방지
+  const isDelayProcessingRef = useRef(false)
 
   // delayMs 는 useDelayBufferPlayer 와 동일한 값 사용 — 강사 박자 정합성.
-  // fallback 2000 = DELAY_MIN_MS — env 미설정 시에도 적응형 하한과 일치하게 시작.
-  const delayMs = Number(import.meta.env.VITE_SYNC_DELAY_MS) || 2000
+  // Fix 1: 6000ms 초기값 — ASR+NMT+네트워크+TTS ≈ 6~8s 파이프라인보다 높게 시작해
+  // 첫 발화에서 currentDelay 가 급증하지 않도록 함 → 초기 mute/끊김 제거.
+  const delayMs = Number(import.meta.env.VITE_SYNC_DELAY_MS) || 6000
 
   const unlockAudio = useCallback(async () => {
     const ok = await unlockTTS()
@@ -260,6 +263,8 @@ function Student() {
   //     무음 ΔD 초 후 새 delayTime 도달. 이미 들었던 구간이 다시 안 들림.
   useEffect(() => {
     const id = window.setInterval(() => {
+      // Fix 3: 진행 중인 mute 분기 완료 전 재진입 차단 — gain 스케줄 중복으로 muteGain 고착 방지
+      if (isDelayProcessingRef.current) return
       const ctx = audioContextRef.current
       const node = delayNodeRef.current
       const mute = muteGainRef.current
@@ -275,6 +280,8 @@ function Student() {
         node.delayTime.cancelScheduledValues(now)
         node.delayTime.setValueAtTime(current, now)
         node.delayTime.linearRampToValueAtTime(clamped, now + 2.0)
+        isDelayProcessingRef.current = true
+        setTimeout(() => { isDelayProcessingRef.current = false }, 2100)
       } else if (clamped > current) {
         // 증가: ΔD 초 mute + rate=1 ramp — rewind 없음 (output freeze).
         // 클릭 차단 위해 ramp 전후 30ms fade out / unmute.
@@ -288,6 +295,8 @@ function Student() {
         node.delayTime.linearRampToValueAtTime(clamped, now + 0.03 + deltaD)
         mute.gain.setValueAtTime(0, now + 0.03 + deltaD)
         mute.gain.linearRampToValueAtTime(1, now + 0.06 + deltaD)
+        isDelayProcessingRef.current = true
+        setTimeout(() => { isDelayProcessingRef.current = false }, Math.ceil((deltaD + 0.06) * 1000) + 100)
       } else {
         // 감소: snap → ΔD 초 skip (mute 로 mask). 같은 발화 중복 아님.
         mute.gain.cancelScheduledValues(now)
@@ -299,8 +308,10 @@ function Student() {
         node.delayTime.cancelScheduledValues(now + 0.05)
         node.delayTime.setValueAtTime(clamped, now + 0.05)
         mute.gain.linearRampToValueAtTime(1, now + 0.10)
+        isDelayProcessingRef.current = true
+        setTimeout(() => { isDelayProcessingRef.current = false }, 200)
       }
-    }, 250)
+    }, 100)  // Fix 3: 250ms → 100ms — 최대 sync 오차 250ms → 100ms
     return () => window.clearInterval(id)
   }, [])
 
@@ -850,8 +861,9 @@ function Student() {
         await ctx.resume()
 
         // 새 DelayNode + muteGain — 이전 buffer (suspend 시점에 freeze 된 stale 샘플) 폐기.
+        // Fix 2: hardcoded delayMs 대신 현재 적응형 값 사용 — suspend 중 currentDelay 가 변했을 때 보정.
         const newDelayNode = ctx.createDelay(ORIGINAL_AUDIO_DELAY_MAX_SEC)
-        newDelayNode.delayTime.value = delayMs / 1000
+        newDelayNode.delayTime.value = unitPlayerRef.current.getCurrentDelay() / 1000
         const newMuteGain = ctx.createGain()
         newMuteGain.gain.value = 1
         newDelayNode.connect(newMuteGain).connect(gain)
@@ -873,7 +885,7 @@ function Student() {
             console.error('[OriginalAudio] resume 후 source 재연결 실패:', err)
           }
         }
-        console.log('[OriginalAudio] sync 보존 — DelayNode 재생성 (15초 후 정상 출력)')
+        console.log(`[OriginalAudio] sync 보존 — DelayNode 재생성 (${Math.round(unitPlayerRef.current.getCurrentDelay() / 1000)}초 후 정상 출력)`)
       } catch (err) {
         console.error('[OriginalAudio] resume/rebuild 실패:', err)
       } finally {
@@ -882,7 +894,30 @@ function Student() {
     }
 
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') rebuildPipeline()
+      if (document.visibilityState !== 'visible') return
+      rebuildPipeline()
+      // Fix 6: ctx 가 running 인 경우 (virtual 데스크탑 전환 등 suspend 없는 케이스) —
+      // rebuildPipeline 은 suspended 게이트에서 return 하므로 여기서 직접 snap.
+      const ctx = audioContextRef.current
+      const node = delayNodeRef.current
+      const mute = muteGainRef.current
+      if (!ctx || !node || !mute || ctx.state !== 'running') return
+      const targetSec = unitPlayerRef.current.getCurrentDelay() / 1000
+      if (!Number.isFinite(targetSec)) return
+      const clamped = Math.min(targetSec, ORIGINAL_AUDIO_DELAY_MAX_SEC)
+      const current = node.delayTime.value
+      if (Math.abs(clamped - current) < 0.1) return
+      const now = ctx.currentTime
+      isDelayProcessingRef.current = true
+      mute.gain.cancelScheduledValues(now)
+      mute.gain.setValueAtTime(mute.gain.value, now)
+      mute.gain.linearRampToValueAtTime(0, now + 0.03)
+      mute.gain.setValueAtTime(0, now + 0.07)
+      node.delayTime.cancelScheduledValues(now + 0.05)
+      node.delayTime.setValueAtTime(clamped, now + 0.05)
+      mute.gain.linearRampToValueAtTime(1, now + 0.10)
+      setTimeout(() => { isDelayProcessingRef.current = false }, 200)
+      console.log(`[OriginalAudio] visibility snap → ${Math.round(clamped * 1000)}ms`)
     }
     document.addEventListener('visibilitychange', onVisibility)
     window.addEventListener('pageshow', rebuildPipeline)

@@ -174,11 +174,11 @@ export function useAudioCapture({
       // 한 발화의 최대 지속 시간 — 이를 넘으면 강제 분할 (chunk 송출).
       // 강사가 호흡 없이 길게 말해도 worklet 누적 프레임을 직접 chunk 로 송출
       // (VAD 는 그대로 둠 → pause/start 사이 음성 손실 차단).
-      // 8초로 짧게 — 긴 발화를 잘게 나눠 ASR/NMT/TTS 처리시간 분산을 줄이고
-      // wall-clock delay (VITE_SYNC_DELAY_MS) 를 그만큼 짧게 잡을 수 있게 함.
+      // 3초로 단축 — 청크 처리시간(ASR+NMT+TTS)을 줄여 neededDelay 를 8s 이하로 유지.
+      // 8s 시절: neededDelay ≈ 14s (8s 녹음 + 처리 6s). 3s로: ≈ 8.3s → 적응형 6s 초기값이 흡수.
       // trade-off: 문장 중간에서 끊기면 한→영 어순 차이로 약간의 오역 가능
-      // (한국어 동사/부정/시제가 문장 끝). 대부분 발화는 8초 안에 자연 종료되어 영향 작음.
-      const MAX_SPEECH_DURATION_MS = 8000
+      // (한국어 동사/부정/시제가 문장 끝). 대부분 발화는 3초 안에 자연 종료되어 영향 작음.
+      const MAX_SPEECH_DURATION_MS = 3000
       // 발동 시 chunk 송출 헬퍼. 발화 도중 호출 시 누적 프레임만 송출, VAD 는 계속 듣는 중.
       const flushChunkAccum = (label: string) => {
         const frames = chunkAccumRef.current
@@ -217,9 +217,9 @@ export function useAudioCapture({
         ortConfig: (ort: any) => {
           ort.env.wasm.numThreads = 1
         },
-        // 묵음 0.3초 지속 시 발화 종료 판정 — 600/400 모두 빠른 호흡 화자에서 번들링 발생
-        // 종결어미("~습니다.") 잘릴 위험 ↑ 하지만 빠른 분리 우선
-        redemptionMs: 300,
+        // 묵음 0.15초 지속 시 발화 종료 판정 — 300ms 대비 ~150ms 딜레이 절약.
+        // 빠른 호흡 화자에서 번들링 발생 위험 있으나 시연 환경(일반 강의 속도)에서 허용.
+        redemptionMs: 150,
         // 발화 감지 직전 프레임 2개 포함 (발화 시작 잘림 방지, 1프레임 ≈ 96ms)
         preSpeechPadFrames: 2,
         // false: 우리는 vad.pause() 안 부름. force-split 은 worklet 누적 프레임 직접 송출.
