@@ -191,7 +191,8 @@ function Student() {
       try {
         const ctx = new AudioContext()
         const delayNode = ctx.createDelay(ORIGINAL_AUDIO_DELAY_MAX_SEC)
-        delayNode.delayTime.value = delayMs / 1000
+        // 두 그룹 싱크: 한국어 모드는 0.1s 시작, 영어 모드는 delayMs 시작.
+        delayNode.delayTime.value = audioLangRef.current === 'original' ? 0.1 : delayMs / 1000
         const muteGain = ctx.createGain()
         muteGain.gain.value = 1
         const gainNode = ctx.createGain()
@@ -269,7 +270,10 @@ function Student() {
       const node = delayNodeRef.current
       const mute = muteGainRef.current
       if (!ctx || !node || !mute) return
-      const targetSec = unitPlayerRef.current.getCurrentDelay() / 1000
+      // 두 그룹 싱크: 한국어 모드는 0.1s 고정, 영어 모드는 적응형 딜레이.
+      const targetSec = audioLangRef.current === 'original'
+        ? 0.1
+        : unitPlayerRef.current.getCurrentDelay() / 1000
       if (!Number.isFinite(targetSec)) return
       const clamped = Math.min(targetSec, ORIGINAL_AUDIO_DELAY_MAX_SEC)
       const current = node.delayTime.value
@@ -863,7 +867,10 @@ function Student() {
         // 새 DelayNode + muteGain — 이전 buffer (suspend 시점에 freeze 된 stale 샘플) 폐기.
         // Fix 2: hardcoded delayMs 대신 현재 적응형 값 사용 — suspend 중 currentDelay 가 변했을 때 보정.
         const newDelayNode = ctx.createDelay(ORIGINAL_AUDIO_DELAY_MAX_SEC)
-        newDelayNode.delayTime.value = unitPlayerRef.current.getCurrentDelay() / 1000
+        // 두 그룹 싱크: 한국어 모드는 0.1s, 영어 모드는 현재 적응형 딜레이.
+        newDelayNode.delayTime.value = audioLangRef.current === 'original'
+          ? 0.1
+          : unitPlayerRef.current.getCurrentDelay() / 1000
         const newMuteGain = ctx.createGain()
         newMuteGain.gain.value = 1
         newDelayNode.connect(newMuteGain).connect(gain)
@@ -902,7 +909,9 @@ function Student() {
       const node = delayNodeRef.current
       const mute = muteGainRef.current
       if (!ctx || !node || !mute || ctx.state !== 'running') return
-      const targetSec = unitPlayerRef.current.getCurrentDelay() / 1000
+      const targetSec = audioLangRef.current === 'original'
+        ? 0.1
+        : unitPlayerRef.current.getCurrentDelay() / 1000
       if (!Number.isFinite(targetSec)) return
       const clamped = Math.min(targetSec, ORIGINAL_AUDIO_DELAY_MAX_SEC)
       const current = node.delayTime.value
