@@ -149,7 +149,7 @@ export function useAudioCapture({
 
       // 한 발화의 최대 지속 시간 — 이를 넘으면 강제 분할 (chunk 송출).
       // 3초로 단축 — 청크 처리시간(ASR+NMT+TTS)을 줄여 neededDelay 를 8s 이하로 유지.
-      const MAX_SPEECH_DURATION_MS = 3000
+      const MAX_SPEECH_DURATION_MS = 1500
 
       // 발동 시 chunk 송출 헬퍼. 발화 도중 호출 시 누적 프레임만 송출, VAD 는 계속 듣는 중.
       const flushChunkAccum = (label: string) => {
