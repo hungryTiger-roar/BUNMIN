@@ -68,8 +68,6 @@ const DELAY_MAX_MS          = 20000 // currentDelay 상한
 const DELAY_DECREASE_EWMA   = 0.25  // 줄일 때 수렴 계수 — silence 구간에서 lag 빨리 회수. 빨리감기는 주로 무음 구간이라 무감
 const STALE_EXTRA_MS        = 10000 // STALE 임계 = currentDelay + 이 값 (정상 발화는 절대 drop 안 됨)
 const VISUAL_CATCHUP_GAP_MS = 1000  // 시각 event 간격이 이보다 짧으면 같은 stroke 로 보고 강사 간격 보존, 길면 catch-up 허용
-// 한국어 모드 실시간 딜레이 — 원본 음성과 함께 거의 즉시 (0.1s) 시각 동기.
-const KOREAN_REALTIME_DELAY_MS = 100
 
 export function useDelayBufferPlayer(options: Options): UnitPlayer {
   // 강사 wall → 학생 wall offset 추정 (EWMA). null 이면 첫 event 전.
@@ -77,8 +75,6 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
   // Fix 4: 초기 5샘플은 α=0.4 로 빠르게 수렴, 이후 α=0.1 안정 추적
   const clockSampleCountRef = useRef(0)
   const baseDelayMs = options.delayMs ?? 2000
-  // 두 그룹 싱크: 직전 audioLang 추적 — 모드 전환 시 lastVisualWallRef 리셋
-  const lastAudioLangRef = useRef<AudioLang | null>(null)
 
   const optionsRef = useRef(options)
   useEffect(() => { optionsRef.current = options }, [options])
@@ -160,33 +156,20 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
   const enqueueVisual = useCallback((ts: number, apply: () => void, kind?: string) => {
     updateClockOffset(ts)
     const offset = clockOffsetRef.current ?? 0
-    const currentLang = optionsRef.current.getAudioLang()
-    // 두 그룹 싱크: audioLang 전환 시 lastVisualWallRef 리셋 — 이전 그룹의 monotonic 벽시계가
-    // 새 그룹 첫 event 를 오래 대기시키는 것 방지.
-    if (currentLang !== lastAudioLangRef.current) {
-      lastVisualWallRef.current = 0
-      lastVisualTsRef.current = 0
-      lastAudioLangRef.current = currentLang
-    }
-    // 한국어 모드: 거의 실시간 (100ms). 영어 모드: 적응형 딜레이.
-    const effectiveDelayMs = currentLang === 'original'
-      ? KOREAN_REALTIME_DELAY_MS
-      : currentDelayRef.current
+    const effectiveDelayMs = currentDelayRef.current
     // 같은 stroke 내부(직전 event 와 간격 짧음)면 "강사가 그린 간격" 만큼만 벌려서 재생 —
-    //   currentDelay 가 출렁여도 stroke 내부 속도/모양은 강사 그대로 (동그라미가 들쭉날쭉해지는
-    //   회귀 방지: 줄어들 때 점 몰림 ✕, 늘어날 때 점프 ✕).
     //   stroke 사이 긴 gap(VISUAL_CATCHUP_GAP_MS 초과) / 첫 event 에서만 effectiveDelayMs 반영 + monotonic.
     const lastTs = lastVisualTsRef.current
     const gap = lastTs > 0 ? Math.max(0, ts - lastTs) : 0
     const targetWall = (gap > 0 && gap < VISUAL_CATCHUP_GAP_MS)
-      ? lastVisualWallRef.current + gap                                       // 같은 stroke — 강사 간격 그대로
-      : Math.max(ts + offset + effectiveDelayMs, lastVisualWallRef.current)   // 다른 stroke / 첫 event — effectiveDelayMs 반영
+      ? lastVisualWallRef.current + gap
+      : Math.max(ts + offset + effectiveDelayMs, lastVisualWallRef.current)
     lastVisualWallRef.current = targetWall
     lastVisualTsRef.current = ts
     scheduleAt(targetWall, apply)
     if (kind && kind !== 'cursor' && kind !== 'draw_point') {
       const ahead = targetWall - Date.now()
-      console.log(`[DelayBuf] visual ${kind} ts=${ts} → +${Math.round(ahead)}ms (lang=${currentLang} delay=${Math.round(effectiveDelayMs)}ms)`)
+      console.log(`[DelayBuf] visual ${kind} ts=${ts} → +${Math.round(ahead)}ms (delay=${Math.round(effectiveDelayMs)}ms)`)
     }
   }, [updateClockOffset, scheduleAt])
 
@@ -247,17 +230,12 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
       }
       audioQueueRef.current.push(async () => {
         try {
-          // 큐 처리 시작 시점 audioLang 재확인 — schedule 시점 ~ 큐 진입 사이 토글된 케이스 차단.
-          // 219라인의 gate 가 schedule 직전 1차, 여기가 2차 — 큐가 길어 처리 늦어진 사이 토글 가능.
           if (optionsRef.current.getAudioLang() !== 'en') {
             try { params.commitSubtitle() } catch (e) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', e) }
             return
           }
           const playFn = opts.playSentenceChunked ?? opts.playSentence
           const result = await playFn(params.text, 'en')
-          // generate(~2~3초) 완료 직후 3차 재확인 — generate 진행 중 토글 시 stale 영어 출력 차단.
-          // 이전엔 result 가 무조건 source.start 됐고 ko/off 로 토글한 사용자에게 영어 음성 1줄 새는 버그.
-          // 단, generate 후 50ms 안에 토글되면 source.start(ctx.currentTime+50ms) 가 이미 schedule 됨 — 잡지 못함 (window 매우 짧음).
           if (optionsRef.current.getAudioLang() !== 'en') {
             try { params.commitSubtitle() } catch (e) { console.error('[DelayBufferPlayer] commitSubtitle 오류:', e) }
             return
@@ -283,9 +261,7 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
   const enqueueLifecycle = useCallback((apply: () => void | Promise<void>, label: string) => {
     // lifecycle 은 wall ts 가 명시되지 않는 경우가 있음 → 도착 시점 + effectiveDelayMs.
     // monotonic 은 시각 event 기준 (pause/resume/end 가 그림·페이지와 같은 시간선에 적용돼야 함).
-    const effectiveDelayMs = optionsRef.current.getAudioLang() === 'original'
-      ? KOREAN_REALTIME_DELAY_MS
-      : currentDelayRef.current
+    const effectiveDelayMs = currentDelayRef.current
     const targetWall = Math.max(Date.now() + effectiveDelayMs, lastVisualWallRef.current)
     lastVisualWallRef.current = targetWall
     console.log(`[DelayBuf] lifecycle ${label} → +${Math.round(targetWall - Date.now())}ms (delay=${Math.round(effectiveDelayMs)}ms)`)
@@ -302,7 +278,6 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
     lastVisualTsRef.current = 0
     clockOffsetRef.current = null
     clockSampleCountRef.current = 0
-    lastAudioLangRef.current = null
     // setTimeout 들은 cancel 하지 않음 — 이미 등록된 visual/audio 는 자기 시간에 fire,
     // 강의 boundary 에서 frontend store 가 isLectureStarted 가드로 무시.
     console.log(`[DelayBufferPlayer] reset (delay → ${baseDelayMs}ms)`)
