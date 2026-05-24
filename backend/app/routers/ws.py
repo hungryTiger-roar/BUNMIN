@@ -240,7 +240,9 @@ def _pcm16_to_wav(pcm16_bytes: bytes, sample_rate: int = 16000) -> bytes:
     return buf.getvalue()
 
 
-_ASR_CHUNK_FRAMES = 5  # 200ms × 5 = 1초마다 증분 ASR 실행
+_ASR_CHUNK_FRAMES = 3       # B: 200ms × 3 = 600ms마다 증분 ASR (기존 1,000ms)
+_ASR_SILENCE_RMS = 0.008   # A: 무음 판정 RMS 임계값 (0~1 스케일)
+_ASR_SILENCE_MIN_FRAMES = 2  # A: 즉시 flush 최소 누적 프레임 (400ms)
 
 
 class StreamingBuffer:
@@ -1428,7 +1430,22 @@ async def process_audio_chunk(message: dict, ws_key: int) -> None:
     buf.pcm16_frames.append(pcm16)
     buf.frame_count += 1
 
-    if buf.frame_count - buf.last_asr_frame >= _ASR_CHUNK_FRAMES:
+    frames_since_last = buf.frame_count - buf.last_asr_frame
+
+    # A: 무음 프레임 감지 — 발화 내 정지 구간에서 즉시 증분 ASR
+    if frames_since_last >= _ASR_SILENCE_MIN_FRAMES:
+        try:
+            samples = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32)
+            rms = float(np.sqrt(np.mean(samples ** 2))) / 32768.0
+            if rms < _ASR_SILENCE_RMS:
+                buf.last_asr_frame = buf.frame_count
+                await _incremental_asr(buf, is_final=False)
+                return
+        except Exception:
+            pass
+
+    # B: 3프레임(600ms)마다 정기 증분 ASR
+    if frames_since_last >= _ASR_CHUNK_FRAMES:
         buf.last_asr_frame = buf.frame_count
         await _incremental_asr(buf, is_final=False)
 
