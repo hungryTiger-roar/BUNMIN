@@ -236,13 +236,27 @@ function Lecturer() {
   const aspectClass = ASPECT_OPTIONS.find((a) => a.value === aspectRatio)?.className ?? 'aspect-[4/3]'
 
   const handleAudioData = useCallback(async (audioBlob: Blob) => {
-    // 일시정지 중에는 audio 전송 안 함 — 자막 생성/공유 차단 (page_change/screen과 동일한 정책)
     if (isPaused) return
     const arrayBuffer = await audioBlob.arrayBuffer()
     const base64 = btoa(
       new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
     )
     send({ type: 'audio', audio: base64, sample_rate: 16000, sentAt: Date.now() })
+  }, [send, isPaused])
+
+  // 스트리밍 모드: 200ms 프레임마다 호출 — base64 인코딩 후 audio_chunk 전송
+  const handleAudioChunk = useCallback((frame: Int16Array, speechStartAt: number) => {
+    if (isPaused) return
+    const bytes = new Uint8Array(frame.buffer, frame.byteOffset, frame.byteLength)
+    // btoa with Uint8Array — 각 byte를 char 로 변환
+    let binary = ''
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i])
+    send({ type: 'audio_chunk', frame: btoa(binary), speechStartAt, sentAt: Date.now() })
+  }, [send, isPaused])
+
+  const handleStreamEnd = useCallback((_sentAt: number) => {
+    if (isPaused) return
+    send({ type: 'audio_chunk_end', sentAt: Date.now() })
   }, [send, isPaused])
 
   const {
@@ -253,6 +267,8 @@ function Lecturer() {
     micStream,
   } = useAudioCapture({
     onAudioData: handleAudioData,
+    onAudioChunk: handleAudioChunk,
+    onStreamEnd: handleStreamEnd,
   })
 
   const micStreamRef = useRef<MediaStream | null>(null)

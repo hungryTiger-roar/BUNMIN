@@ -528,5 +528,116 @@ export function useTTS(enabled = true, audioLang: AudioLang = 'en') {
     return { audioStartedAt, durationMs: playbackDurationSec * 1000, ended, ttsMs }
   }, [])
 
-  return { status, loadingProgress, error, mode, playSentence, unlockAudio, setVolume }
+  /** 영어 문장을 3~4단어 청크로 분리 — 구두점 우선, 초과 시 단어 수로 자름. */
+  function splitTTSPhrases(text: string, maxWords = 4): string[] {
+    const parts = text.split(/(?<=[,;.!?])\s+/).filter(Boolean)
+    const result: string[] = []
+    for (const part of parts) {
+      const words = part.trim().split(/\s+/)
+      for (let i = 0; i < words.length; i += maxWords) {
+        const chunk = words.slice(i, i + maxWords).join(' ').trim()
+        if (chunk) result.push(chunk)
+      }
+    }
+    return result.length > 0 ? result : [text]
+  }
+
+  /**
+   * 청크 TTS — 문장을 3~4단어 단위로 나눠 첫 청크 즉시 재생, 이후 청크는 체인.
+   * playSentence 와 동일 인터페이스: 첫 청크 재생 시작 시점에 resolve.
+   * ended: 마지막 청크 재생 완료 시 resolve.
+   */
+  const playSentenceChunked = useCallback(async (
+    text: string,
+    _lang: AudioLang = 'en',
+  ): Promise<{ audioStartedAt: number; durationMs: number; ended: Promise<void>; ttsMs: number }> => {
+    const voice = TTS_VOICE
+    if (!engineRef.current || statusRef.current !== 'ready') {
+      throw new Error(`TTS 미준비 — status: ${statusRef.current}`)
+    }
+    const ctx = audioCtxRef.current
+    if (!ctx || ctx.state === 'closed') throw new Error('AudioContext 없음')
+    if (ctx.state === 'suspended') await ctx.resume()
+
+    if (warmupPromiseRef.current) {
+      try { await warmupPromiseRef.current } catch { /* ignore */ }
+    }
+
+    const phrases = splitTTSPhrases(text)
+    const requestedAt = performance.now()
+
+    let resolveEnded!: () => void
+    const ended = new Promise<void>((r) => { resolveEnded = r })
+    let resolveFirst!: (v: { audioStartedAt: number; durationMs: number; ended: Promise<void>; ttsMs: number }) => void
+    const firstReady = new Promise<{ audioStartedAt: number; durationMs: number; ended: Promise<void>; ttsMs: number }>(
+      (r) => { resolveFirst = r },
+    )
+
+    let firstResolved = false
+
+    const processPhrases = async () => {
+      let prevEndCtxTime: number | null = null
+      for (let i = 0; i < phrases.length; i++) {
+        if (!engineRef.current) break
+        try {
+          const response = await engineRef.current.generate(phrases[i], voice, 0)
+          const arrayBuffer = await response.file.arrayBuffer()
+          const audioBuffer = await ctx.decodeAudioData(arrayBuffer)
+
+          const now = ctx.currentTime
+          const current = currentTaskRef.current
+          const startCtxTime: number = prevEndCtxTime !== null
+            ? prevEndCtxTime
+            : ((current && current.endTime > now) ? current.endTime : now + 0.05)
+
+          const playbackDurationSec = audioBuffer.duration / TTS_PLAYBACK_RATE
+          const endCtxTime: number = startCtxTime + playbackDurationSec
+          prevEndCtxTime = endCtxTime
+
+          const source = ctx.createBufferSource()
+          const sourceGain = ctx.createGain()
+          sourceGain.gain.value = 1
+          source.buffer = audioBuffer
+          source.playbackRate.value = TTS_PLAYBACK_RATE
+          source.connect(sourceGain)
+          sourceGain.connect(gainRef.current ?? ctx.destination)
+          source.start(startCtxTime)
+
+          const newTask: CurrentTask = { source, gain: sourceGain, endTime: endCtxTime }
+          currentTaskRef.current = newTask
+
+          const isLast = i === phrases.length - 1
+          source.onended = () => {
+            try { source.disconnect() } catch { /* */ }
+            try { sourceGain.disconnect() } catch { /* */ }
+            if (currentTaskRef.current === newTask) currentTaskRef.current = null
+            if (isLast) {
+              if (recreationPendingRef.current && currentTaskRef.current === null) {
+                recreationPendingRef.current = false
+                lastRecoveryAtRef.current = Date.now()
+                setRecoveryGen((g) => g + 1)
+              }
+              resolveEnded()
+            }
+          }
+
+          if (!firstResolved) {
+            firstResolved = true
+            const ttsMs = Math.max(0, Math.round(performance.now() - requestedAt))
+            const audioStartedAt = Date.now() + (startCtxTime - now) * 1000
+            resolveFirst({ audioStartedAt, durationMs: playbackDurationSec * 1000, ended, ttsMs })
+          }
+        } catch (err) {
+          console.error(`[TTS] chunked phrase ${i} error:`, err)
+          if (i === phrases.length - 1) resolveEnded()
+        }
+      }
+      if (!firstResolved) resolveEnded()
+    }
+
+    processPhrases()  // fire-and-forget — phrase chain runs concurrently with caller
+    return firstReady
+  }, [])
+
+  return { status, loadingProgress, error, mode, playSentence, playSentenceChunked, unlockAudio, setVolume }
 }
