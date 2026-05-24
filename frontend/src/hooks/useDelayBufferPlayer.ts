@@ -55,6 +55,9 @@ interface Options {
   getAudioLang: () => AudioLang
   /** 초기 / 기준 lag (ms). 미설정 시 1000 (= DELAY_MIN_MS). 실제 currentDelay 는 처리시간 따라 가변. */
   delayMs?: number
+  /** 원본 음성 고정 딜레이 (ms). audioLang==='original' 일 때 visual/lifecycle event 스케줄에 사용.
+   *  TTS 적응형 딜레이와 독립 — 원본 음성 DelayNode 는 이 값으로 고정되어 절대 변경 없음. */
+  originalVoiceDelayMs?: number
 }
 
 // ── 적응형 딜레이 파라미터 ──────────────────────────────────────────────────────
@@ -78,6 +81,9 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
 
   const optionsRef = useRef(options)
   useEffect(() => { optionsRef.current = options }, [options])
+
+  const originalVoiceDelayMsRef = useRef(options.originalVoiceDelayMs ?? DELAY_MIN_MS)
+  useEffect(() => { originalVoiceDelayMsRef.current = options.originalVoiceDelayMs ?? DELAY_MIN_MS }, [options.originalVoiceDelayMs])
 
   // 적응형 딜레이 상태
   const currentDelayRef = useRef(baseDelayMs)
@@ -156,7 +162,11 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
   const enqueueVisual = useCallback((ts: number, apply: () => void, kind?: string) => {
     updateClockOffset(ts)
     const offset = clockOffsetRef.current ?? 0
-    const effectiveDelayMs = currentDelayRef.current
+    // audioLang=original: 고정 딜레이(원본 음성 DelayNode 와 동일) → 음성↔슬라이드 항상 정확히 동기
+    // audioLang=en: 적응형 딜레이 → TTS 처리시간에 따라 가변
+    const effectiveDelayMs = optionsRef.current.getAudioLang() === 'original'
+      ? originalVoiceDelayMsRef.current
+      : currentDelayRef.current
     // 같은 stroke 내부(직전 event 와 간격 짧음)면 "강사가 그린 간격" 만큼만 벌려서 재생 —
     //   stroke 사이 긴 gap(VISUAL_CATCHUP_GAP_MS 초과) / 첫 event 에서만 effectiveDelayMs 반영 + monotonic.
     const lastTs = lastVisualTsRef.current
@@ -196,7 +206,12 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
       recomputeDelay()
     }
 
-    const targetWall = Math.max(speechWall + currentDelayRef.current, lastSentenceWallRef.current)
+    // audioLang=original: 자막도 원본 음성(고정 딜레이)과 같은 타이밍으로 commit.
+    // audioLang=en: 적응형 딜레이 — TTS 재생 시점에 자막 표시.
+    const sentenceDelayMs = optionsRef.current.getAudioLang() === 'original'
+      ? originalVoiceDelayMsRef.current
+      : currentDelayRef.current
+    const targetWall = Math.max(speechWall + sentenceDelayMs, lastSentenceWallRef.current)
     const ahead = targetWall - now
 
     // STALE drop — currentDelay + STALE_EXTRA 보다 늦으면 진짜 stale (pause 후 옛 frame).
@@ -261,7 +276,9 @@ export function useDelayBufferPlayer(options: Options): UnitPlayer {
   const enqueueLifecycle = useCallback((apply: () => void | Promise<void>, label: string) => {
     // lifecycle 은 wall ts 가 명시되지 않는 경우가 있음 → 도착 시점 + effectiveDelayMs.
     // monotonic 은 시각 event 기준 (pause/resume/end 가 그림·페이지와 같은 시간선에 적용돼야 함).
-    const effectiveDelayMs = currentDelayRef.current
+    const effectiveDelayMs = optionsRef.current.getAudioLang() === 'original'
+      ? originalVoiceDelayMsRef.current
+      : currentDelayRef.current
     const targetWall = Math.max(Date.now() + effectiveDelayMs, lastVisualWallRef.current)
     lastVisualWallRef.current = targetWall
     console.log(`[DelayBuf] lifecycle ${label} → +${Math.round(targetWall - Date.now())}ms (delay=${Math.round(effectiveDelayMs)}ms)`)
