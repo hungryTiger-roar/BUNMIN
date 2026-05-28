@@ -139,8 +139,8 @@ def pdf_log_warning(msg: str):
 
 
 def _get_min_font_size(role: str) -> float:
-    """최소 폰트 크기 반환 (모든 role에 대해 6pt)"""
-    return 6.0
+    """최소 폰트 크기 반환 (한글→영어 번역 시 텍스트 길이 증가 대응)"""
+    return 5.0
 
 
 # =============================================================================
@@ -436,15 +436,16 @@ class ReplaceResult:
 
 
 # Role별 최소 폰트 크기 (env에서 읽기)
+# 한글→영어 번역 시 텍스트가 길어지므로 최소 크기를 낮춤 (주소, 연락처 등)
 MIN_FONT_SIZE = {
-    "title": float(os.getenv("MIN_FONT_SIZE_TITLE", "14.0")),
-    "heading": float(os.getenv("MIN_FONT_SIZE_HEADING", "12.0")),
-    "body": float(os.getenv("MIN_FONT_SIZE_BODY", "10.0")),
-    "bullet": float(os.getenv("MIN_FONT_SIZE_BODY", "10.0")),
-    "caption": float(os.getenv("MIN_FONT_SIZE_CAPTION", "6.0")),
-    "footer": float(os.getenv("MIN_FONT_SIZE_CAPTION", "6.0")),
-    "source": float(os.getenv("MIN_FONT_SIZE_CAPTION", "6.0")),
-    "default": float(os.getenv("MIN_FONT_SIZE_DEFAULT", "8.0")),
+    "title": float(os.getenv("MIN_FONT_SIZE_TITLE", "10.0")),
+    "heading": float(os.getenv("MIN_FONT_SIZE_HEADING", "8.0")),
+    "body": float(os.getenv("MIN_FONT_SIZE_BODY", "6.0")),
+    "bullet": float(os.getenv("MIN_FONT_SIZE_BODY", "6.0")),
+    "caption": float(os.getenv("MIN_FONT_SIZE_CAPTION", "5.0")),
+    "footer": float(os.getenv("MIN_FONT_SIZE_CAPTION", "5.0")),
+    "source": float(os.getenv("MIN_FONT_SIZE_CAPTION", "5.0")),
+    "default": float(os.getenv("MIN_FONT_SIZE_DEFAULT", "5.0")),
 }
 
 # Role별 bbox 확장 허용 비율 (더 넓게 설정)

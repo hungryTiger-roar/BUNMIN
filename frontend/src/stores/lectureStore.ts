@@ -90,13 +90,13 @@ interface LectureState {
 
   // 슬라이드 상태
   slideId: string | null
-  slideStatus: 'none' | 'uploading' | 'processing' | 'ready'
+  slideStatus: 'none' | 'uploading' | 'processing' | 'ready' | 'cancelling' | 'cleaning'
   currentPage: number
   totalPages: number
   slidePages: SlidePage[]
 
   setSlideId: (id: string | null) => void
-  setSlideStatus: (status: 'none' | 'uploading' | 'processing' | 'ready') => void
+  setSlideStatus: (status: 'none' | 'uploading' | 'processing' | 'ready' | 'cancelling' | 'cleaning') => void
   setCurrentPage: (page: number) => void
   setTotalPages: (total: number) => void
   setSlidePages: (pages: SlidePage[]) => void
