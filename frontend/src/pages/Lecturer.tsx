@@ -1548,13 +1548,23 @@ function Lecturer() {
                         강의자료 변경
                       </button>
                     )}
-                    <button
-                      onClick={startLecture}
-                      disabled={!canStartLecture || pendingStart}
-                      className="px-6 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold shadow-sm"
-                    >
-                      {pendingStart ? '준비 중...' : '강의 시작'}
-                    </button>
+                    <div className="flex flex-col items-end gap-1">
+                      <button
+                        onClick={startLecture}
+                        disabled={!canStartLecture || pendingStart}
+                        className="px-6 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-semibold shadow-sm"
+                      >
+                        {pendingStart ? '준비 중...' : '강의 시작'}
+                      </button>
+                      {/* 모델 상태 안내 */}
+                      {!canStartLecture && slideStatus === 'ready' && (
+                        <span className="text-xs text-onSurface/60">
+                          {modelMode === 'switching' && '음성 모델 전환 중...'}
+                          {modelMode === 'slide' && '슬라이드 처리 중...'}
+                          {modelMode !== 'switching' && modelMode !== 'slide' && !modelsReady && '음성 모델 준비 중...'}
+                        </span>
+                      )}
+                    </div>
                   </>
                 ) : (
                   <>
