@@ -102,3 +102,62 @@ export async function renameSlide(slideId: string, filename: string): Promise<Sl
   }
   return res.json()
 }
+
+// ============================================================
+// Glossary (용어집) API
+// ============================================================
+export interface GlossaryEntry {
+  id: number
+  korean: string
+  english: string
+  category: string
+}
+
+export interface GlossaryResponse {
+  entries: GlossaryEntry[]
+  categories: string[]
+  total: number
+}
+
+export async function getGlossary(): Promise<GlossaryResponse> {
+  const res = await fetch(`${API_BASE}/api/glossary`)
+  if (!res.ok) throw new Error('용어집 조회 실패')
+  return res.json()
+}
+
+export async function addGlossaryEntry(entry: { korean: string; english: string; category?: string }): Promise<{ success: boolean; entry: GlossaryEntry }> {
+  const res = await fetch(`${API_BASE}/api/glossary`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(entry),
+  })
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}))
+    throw new Error(detail.detail || '용어 추가 실패')
+  }
+  return res.json()
+}
+
+export async function updateGlossaryEntry(korean: string, update: { korean: string; english: string; category?: string }): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_BASE}/api/glossary/${encodeURIComponent(korean)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(update),
+  })
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}))
+    throw new Error(detail.detail || '용어 수정 실패')
+  }
+  return res.json()
+}
+
+export async function deleteGlossaryEntry(korean: string): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_BASE}/api/glossary/${encodeURIComponent(korean)}`, {
+    method: 'DELETE',
+  })
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}))
+    throw new Error(detail.detail || '용어 삭제 실패')
+  }
+  return res.json()
+}

@@ -21,6 +21,7 @@ import ScreenPickerModal from '@/components/lecturer/ScreenPickerModal'
 import { WS_PIPELINE_URL, API_BASE, getSlideLibrary, getCurrentMode } from '@/lib/api'
 import { getLanIp } from '@/lib/network'
 import SlideLibrarySearchModal from '@/components/lecturer/SlideLibrarySearchModal'
+import GlossaryModal from '@/components/lecturer/GlossaryModal'
 import type { SlideLibraryItem } from '@/types/slide'
 
 const ASPECT_OPTIONS: { value: AspectRatio; label: string; className: string }[] = [
@@ -125,6 +126,7 @@ function Lecturer() {
   const [secondaryLang, setSecondaryLang] = useState<LecturerLang>('ko')
   const [showTranscriptModal, setShowTranscriptModal] = useState(false)
   const [showMaterialChangeModal, setShowMaterialChangeModal] = useState(false)
+  const [showGlossaryModal, setShowGlossaryModal] = useState(false)
   const [libraryItems, setLibraryItems] = useState<SlideLibraryItem[]>([])
   const [showEndConfirm, setShowEndConfirm] = useState(false)
   const [spotlightEnabled, setSpotlightEnabled] = useState(false)
@@ -1316,6 +1318,17 @@ function Lecturer() {
             <span>{displayParticipantCount}</span>
           </button>
 
+          {/* 용어집 관리 */}
+          <button
+            onClick={() => setShowGlossaryModal(true)}
+            className="p-1.5 text-onSurface/70 hover:text-onSurface hover:bg-primaryContainer/50 rounded-lg transition-colors"
+            title="번역 용어집 관리"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+            </svg>
+          </button>
+
           <button
             onClick={handleExit}
             className="px-3 py-1.5 bg-primaryContainer/60 hover:bg-primaryContainer text-onSurface rounded-lg text-sm"
@@ -1929,6 +1942,11 @@ function Lecturer() {
           onSelect={selectScreenSource}
           onCancel={cancelScreenPicker}
         />
+      )}
+
+      {/* 용어집 관리 모달 */}
+      {showGlossaryModal && (
+        <GlossaryModal onClose={() => setShowGlossaryModal(false)} />
       )}
     </div>
   )
