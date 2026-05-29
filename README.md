@@ -212,9 +212,9 @@
 ### Cooperation
 
 <div>
-  <img src="https://img.shields.io/badge/GitLab-FC6D26?style=for-the-badge&logo=gitlab&logoColor=white"/>
-  <img src="https://img.shields.io/badge/Jira-0052CC?style=for-the-badge&logo=jira&logoColor=white"/>
-  <img src="https://img.shields.io/badge/Notion-000000?style=for-the-badge&logo=notion&logoColor=white"/>
+  <a href="https://lab.ssafy.com/s14-final/S14P31S205.git"><img src="https://img.shields.io/badge/GitLab-FC6D26?style=for-the-badge&logo=gitlab&logoColor=white"/></a>
+  <a href="https://ssafy.atlassian.net/jira/software/c/projects/S14P31S205/boards/13217"><img src="https://img.shields.io/badge/Jira-0052CC?style=for-the-badge&logo=jira&logoColor=white"/></a>
+  <a href="https://app.notion.com/p/33ab3290c140808e824ef4654709e538?source=copy_link"><img src="https://img.shields.io/badge/Notion-000000?style=for-the-badge&logo=notion&logoColor=white"/></a>
 </div>
 
 <br>
