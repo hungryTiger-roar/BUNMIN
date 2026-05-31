@@ -70,6 +70,52 @@ from dotenv import load_dotenv
 from .term_corrections import get_terms_in_text, correct_ocr_text, build_ocr_corrector, validate_korean_currency
 from .models import TextBlock
 
+# VLM 취소 기능용 StoppingCriteria
+try:
+    from transformers import StoppingCriteria, StoppingCriteriaList
+except ImportError:
+    StoppingCriteria = None
+    StoppingCriteriaList = None
+
+
+class CancelCheckCriteria:
+    """VLM generate() 중 토큰마다 취소 여부 체크.
+
+    should_cancel()이 True 반환하면 생성 즉시 중단.
+    체크 주기를 줄이려면 check_every_n_tokens로 조절 (기본값 5).
+
+    Args:
+        should_cancel_fn: 취소 여부를 반환하는 콜백 함수
+        check_every_n_tokens: N 토큰마다 체크 (성능 최적화)
+    """
+    def __init__(self, should_cancel_fn, check_every_n_tokens: int = 5):
+        self.should_cancel = should_cancel_fn
+        self.check_every = check_every_n_tokens
+        self._call_count = 0
+
+    def __call__(self, input_ids, scores, **kwargs) -> bool:
+        self._call_count += 1
+        if self._call_count % self.check_every != 0:
+            return False
+        return self.should_cancel() if self.should_cancel else False
+
+
+# StoppingCriteria 상속 버전 (transformers 로드 시)
+if StoppingCriteria is not None:
+    class CancelCheckCriteria(StoppingCriteria):
+        """VLM generate() 중 토큰마다 취소 여부 체크."""
+        def __init__(self, should_cancel_fn, check_every_n_tokens: int = 5):
+            super().__init__()
+            self.should_cancel = should_cancel_fn
+            self.check_every = check_every_n_tokens
+            self._call_count = 0
+
+        def __call__(self, input_ids, scores, **kwargs) -> bool:
+            self._call_count += 1
+            if self._call_count % self.check_every != 0:
+                return False
+            return self.should_cancel() if self.should_cancel else False
+
 import sys as _sys_init
 # _BASE_DIR: 설치본 루트 (frozen: <install>/resources/backend/, dev: <repo>/).
 # 동봉된 .env, config.yaml, models/ 위치 해석에 사용. 사용자 데이터는 DATA_ROOT 사용.
@@ -446,16 +492,22 @@ def unload_vlm_model():
     print("[VLM] VRAM 해제 완료")
 
 
-def translate_text_vlm(prompt: str, max_new_tokens: int = 2048) -> str:
+def translate_text_vlm(prompt: str, max_new_tokens: int = 2048, should_cancel=None) -> str:
     """VLM으로 텍스트 번역 (pdf_pipeline에서 사용)
 
     Args:
         prompt: 번역 프롬프트 (전체 텍스트)
         max_new_tokens: 최대 생성 토큰 수
+        should_cancel: 취소 여부 체크 콜백 (optional) - True 반환 시 즉시 중단
 
     Returns:
-        VLM 응답 텍스트
+        VLM 응답 텍스트. 취소 시 빈 문자열 반환.
     """
+    # 시작 전 취소 체크
+    if should_cancel and should_cancel():
+        log_info("[translate_text_vlm] 시작 전 취소됨")
+        return ""
+
     model, processor = get_vlm_model()
 
     # 추론 전 VRAM 로그
@@ -474,6 +526,13 @@ def translate_text_vlm(prompt: str, max_new_tokens: int = 2048) -> str:
             messages, tokenize=False, add_generation_prompt=True
         )
 
+    # StoppingCriteria 설정 (취소 콜백이 있을 때만)
+    stopping_criteria = None
+    if should_cancel and StoppingCriteriaList is not None:
+        stopping_criteria = StoppingCriteriaList([
+            CancelCheckCriteria(should_cancel, check_every_n_tokens=5)
+        ])
+
     inputs = None
     outputs = None
     try:
@@ -484,8 +543,14 @@ def translate_text_vlm(prompt: str, max_new_tokens: int = 2048) -> str:
                 **inputs,
                 max_new_tokens=max_new_tokens,
                 temperature=0.3,
-                do_sample=True
+                do_sample=True,
+                stopping_criteria=stopping_criteria
             )
+
+        # 취소된 경우 빈 문자열 반환
+        if should_cancel and should_cancel():
+            log_info("[translate_text_vlm] 생성 중 취소됨")
+            return ""
 
         input_len = inputs["input_ids"].shape[1]
         response = processor.decode(outputs[0][input_len:], skip_special_tokens=True).strip()
@@ -970,13 +1035,27 @@ def stage_ocr_surya(image_path: str) -> list:
 # ============================================================
 # 2단계: 번역 (VLM)
 # ============================================================
-def stage_translate(image_path: str, regions: list) -> list:
-    """VLM으로 번역"""
+def stage_translate(image_path: str, regions: list, should_cancel=None) -> list:
+    """VLM으로 번역
+
+    Args:
+        image_path: 이미지 경로
+        regions: OCR 결과 리전 리스트
+        should_cancel: 취소 여부 체크 콜백 (optional) - True 반환 시 즉시 중단
+
+    Returns:
+        번역된 regions 리스트. 취소 시 빈 리스트 반환.
+    """
     log_info("\n" + "=" * 60)
     log_info("[2/3] 번역: VLM")
     log_info("=" * 60)
     log_debug(f"[stage_translate] 시작: {image_path}")
     log_debug(f"  입력 regions: {len(regions)}개")
+
+    # 시작 전 취소 체크
+    if should_cancel and should_cancel():
+        log_info("[stage_translate] 시작 전 취소됨")
+        return []
 
     original_image = Image.open(image_path).convert("RGB")
     image_size = original_image.size
@@ -1079,8 +1158,26 @@ Translate:"""
         text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     inputs = processor(text=[text], return_tensors="pt").to(model.device)
 
+    # StoppingCriteria 설정 (취소 콜백이 있을 때만)
+    stopping_criteria = None
+    if should_cancel and StoppingCriteriaList is not None:
+        stopping_criteria = StoppingCriteriaList([
+            CancelCheckCriteria(should_cancel, check_every_n_tokens=5)
+        ])
+
     with torch.no_grad():
-        outputs = model.generate(**inputs, max_new_tokens=2048, temperature=0.3, do_sample=True)
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=2048,
+            temperature=0.3,
+            do_sample=True,
+            stopping_criteria=stopping_criteria
+        )
+
+    # 취소된 경우 빈 리스트 반환
+    if should_cancel and should_cancel():
+        log_info("[stage_translate] 생성 중 취소됨")
+        return []
 
     input_len = inputs["input_ids"].shape[1]
     output_len = outputs[0].shape[0] - input_len

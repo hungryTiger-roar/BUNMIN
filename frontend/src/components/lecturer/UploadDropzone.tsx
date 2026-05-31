@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLectureStore } from '@/stores/lectureStore'
 import { API_BASE } from '@/lib/api'
+import FileQueueModal from './FileQueueModal'
 
-type Stage = 'pending' | 'ocr' | 'translate' | 'bundling' | 'completed' | 'failed'
+type Stage = 'pending' | 'ocr' | 'translate' | 'bundling' | 'completed' | 'failed' | 'cancelling' | 'cleaning'
 
 const STAGE_LABELS: Record<Stage, string> = {
   pending: '준비 중',
@@ -11,6 +12,8 @@ const STAGE_LABELS: Record<Stage, string> = {
   bundling: 'PDF 생성',
   completed: '완료',
   failed: '실패',
+  cancelling: '취소 중...',
+  cleaning: '정리 중...',
 }
 
 interface Props {
@@ -31,6 +34,10 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
   const [queueProcessed, setQueueProcessed] = useState(0)
   const [currentFileName, setCurrentFileName] = useState('')
 
+  // 다중 파일 순서 관리 모달
+  const [pendingFiles, setPendingFiles] = useState<File[]>([])
+  const [showQueueModal, setShowQueueModal] = useState(false)
+
   const [stage, setStage] = useState<Stage>('pending')
   const [stageCurrent, setStageCurrent] = useState(0)
   const [stageTotal, setStageTotal] = useState(0)
@@ -46,6 +53,7 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
   const slideStatus = useLectureStore((s) => s.slideStatus)
   const setSlideId = useLectureStore((s) => s.setSlideId)
   const setSlideStatus = useLectureStore((s) => s.setSlideStatus)
+  const setSlidePages = useLectureStore((s) => s.setSlidePages)
 
   useEffect(() => {
     if (slideStatus === 'none') {
@@ -204,11 +212,37 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
     }
 
     setError(skipped.length > 0 ? `일부 제외: ${skipped.join(', ')}` : null)
-    fileQueueRef.current = validFiles.slice(1)
-    setQueueTotal(validFiles.length)
-    setQueueProcessed(0)
-    processOneFile(validFiles[0])
+
+    // 단일 파일은 바로 처리, 다중 파일은 순서 설정 모달 표시
+    if (validFiles.length === 1) {
+      fileQueueRef.current = []
+      setQueueTotal(1)
+      setQueueProcessed(0)
+      processOneFile(validFiles[0])
+    } else {
+      setPendingFiles(validFiles)
+      setShowQueueModal(true)
+    }
   }, [processOneFile])
+
+  // 모달에서 확인 버튼 클릭 시
+  const handleQueueConfirm = useCallback((orderedFiles: File[]) => {
+    setShowQueueModal(false)
+    setPendingFiles([])
+
+    if (orderedFiles.length === 0) return
+
+    fileQueueRef.current = orderedFiles.slice(1)
+    setQueueTotal(orderedFiles.length)
+    setQueueProcessed(0)
+    processOneFile(orderedFiles[0])
+  }, [processOneFile])
+
+  // 모달에서 취소 버튼 클릭 시
+  const handleQueueCancel = useCallback(() => {
+    setShowQueueModal(false)
+    setPendingFiles([])
+  }, [])
 
   const handleCancel = useCallback(() => {
     cancelledRef.current = true
@@ -240,8 +274,12 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
     clientTokenRef.current = null
     processStartedAtRef.current = 0
     pageCountRef.current = 0
+
+    // store 상태 완전 초기화 — 취소 후 강의 시작 시 유효하지 않은 slideId 참조 방지
+    setSlideId(null)
+    setSlidePages([])
     setSlideStatus('none')
-  }, [setSlideStatus])
+  }, [setSlideId, setSlidePages, setSlideStatus])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -353,7 +391,7 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
         className="hidden"
       />
 
-      {slideStatus === 'uploading' || slideStatus === 'processing' ? (
+      {slideStatus === 'uploading' || slideStatus === 'processing' || slideStatus === 'cancelling' || slideStatus === 'cleaning' ? (
         <div className="py-4 px-2">
           <div className="flex items-center gap-2 mb-1">
             <svg className="animate-spin w-5 h-5 text-primary flex-shrink-0" fill="none" viewBox="0 0 24 24">
@@ -361,37 +399,52 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
             </svg>
             <p className="text-base font-medium text-onSurface">
-              {slideStatus === 'uploading'
-                ? '업로드 중...'
-                : `${STAGE_LABELS[stage]} ${unifiedPercent}%${unifiedEtaText ? ` · ${unifiedEtaText}` : ''}`}
+              {slideStatus === 'cancelling' && '취소 중...'}
+              {slideStatus === 'cleaning' && 'VLM 모델 정리 중...'}
+              {slideStatus === 'uploading' && '업로드 중...'}
+              {slideStatus === 'processing' &&
+                `${STAGE_LABELS[stage]} ${unifiedPercent}%${unifiedEtaText ? ` · ${unifiedEtaText}` : ''}`}
             </p>
-            {isMultiple && (
+            {isMultiple && slideStatus === 'processing' && (
               <span className="ml-auto text-xs text-onSurface/50 flex-shrink-0">
                 {queueProcessed + 1}/{queueTotal}
               </span>
             )}
           </div>
 
-          {currentFileName && (
+          {currentFileName && slideStatus === 'processing' && (
             <p className="text-xs text-onSurface/50 mb-2 truncate" title={currentFileName}>
               {currentFileName}
             </p>
           )}
 
-          <div className="w-full h-2 bg-primaryContainer/40 rounded-full overflow-hidden">
-            <div
-              className="h-full bg-primary transition-all duration-300"
-              style={{ width: `${unifiedPercent}%` }}
-            />
-          </div>
+          {/* 진행률 바 (processing일 때만) */}
+          {slideStatus === 'processing' && (
+            <div className="w-full h-2 bg-primaryContainer/40 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-primary transition-all duration-300"
+                style={{ width: `${unifiedPercent}%` }}
+              />
+            </div>
+          )}
 
-          <button
-            type="button"
-            onClick={handleCancel}
-            className="mt-4 w-full py-2 text-sm text-error border border-error/30 rounded-lg hover:bg-error/10 transition-colors"
-          >
-            업로드 중단
-          </button>
+          {/* 취소 버튼 (uploading/processing일 때만) */}
+          {(slideStatus === 'uploading' || slideStatus === 'processing') && (
+            <button
+              type="button"
+              onClick={handleCancel}
+              className="mt-4 w-full py-2 text-sm text-error border border-error/30 rounded-lg hover:bg-error/10 transition-colors"
+            >
+              업로드 중단
+            </button>
+          )}
+
+          {/* 취소/정리 중 안내 메시지 */}
+          {(slideStatus === 'cancelling' || slideStatus === 'cleaning') && (
+            <p className="mt-4 text-sm text-onSurface/50 text-center">
+              잠시만 기다려주세요...
+            </p>
+          )}
         </div>
       ) : (
         // uploading/processing 외의 모든 상태(none/ready/failed)에서 드롭존 노출.
@@ -412,6 +465,15 @@ export default function UploadDropzone({ onUploadComplete }: Props) {
 
       {error && (
         <p className="text-sm text-error mt-2 text-center">{error}</p>
+      )}
+
+      {/* 다중 파일 순서 설정 모달 */}
+      {showQueueModal && (
+        <FileQueueModal
+          files={pendingFiles}
+          onConfirm={handleQueueConfirm}
+          onCancel={handleQueueCancel}
+        />
       )}
     </div>
   )

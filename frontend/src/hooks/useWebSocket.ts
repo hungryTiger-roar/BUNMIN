@@ -343,11 +343,17 @@ export function useWebSocket(url: string, role: Role = 'student', options: UseWe
           const sid = data.slide_id as string | undefined
           const newStatus = data.status as string | undefined
           if (sid && newStatus) {
-            const currentSlideId = useLectureStore.getState().slideId
+            const storeState = useLectureStore.getState()
+            const currentSlideId = storeState.slideId
+            const currentStatus = storeState.slideStatus
             if (currentSlideId === sid) {
-              if (newStatus === 'completed') setSlideStatus('ready')
+              // 업로드/처리 중일 때는 UploadDropzone polling 이 상태 전환 담당.
+              // 여기서 auto-ready 하면 slide_select 이벤트가 발생해 강의준비 화면으로
+              // 자동 전환되는 버그 발생 — polling 이 완료를 감지하고 slideId/Status 를 정리할 때까지 대기.
+              const inUploadFlow = currentStatus === 'uploading' || currentStatus === 'processing'
+              if (newStatus === 'completed' && !inUploadFlow) setSlideStatus('ready')
               // failed 는 slideStatus enum 에 없어 — 'none' 으로 reset 해서 dropzone 다시 보이게
-              else if (newStatus === 'failed') setSlideStatus('none')
+              else if (newStatus === 'failed' && !inUploadFlow) setSlideStatus('none')
             }
             bumpSlideLibraryRefreshKey()
           }

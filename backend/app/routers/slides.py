@@ -1242,10 +1242,16 @@ async def process_slide(
             if vlm_available and regions is not None:
                 try:
                     print(f"[Slides] {slide_id} 페이지 {i + 1}/{total_pages} VLM 번역 중...")
-                    regions = await asyncio.to_thread(stage_translate, str(image_path), regions)
+                    regions = await asyncio.to_thread(
+                        stage_translate,
+                        str(image_path),
+                        regions,
+                        should_cancel=lambda sid=slide_id: _is_cancelled(sid)
+                    )
 
-                    # 체크포인트 ⑥: stage_translate(~50s) 끝난 직후 — overlay/save/다음 페이지 진입을 건너뜀
-                    if _is_cancelled(slide_id):
+                    # 체크포인트 ⑥: stage_translate 중 취소됨 (빈 리스트 반환) 또는 완료 후 취소 플래그
+                    if not regions or _is_cancelled(slide_id):
+                        print(f"[Slides] {slide_id} VLM 번역 중 취소됨")
                         await _cleanup_cancelled(slide_id)
                         return
 
